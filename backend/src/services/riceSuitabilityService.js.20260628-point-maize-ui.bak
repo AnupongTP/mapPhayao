@@ -19,7 +19,6 @@ SELECT
   row_to_json(basin_row) AS basin,
   row_to_json(soil_row) AS soil,
   row_to_json(rice_potential_row) AS rice_potential,
-  row_to_json(maize_potential_row) AS maize_potential,
   row_to_json(stream_row) AS nearest_stream,
   row_to_json(canal_row) AS nearest_irrigation_canal
 FROM clicked_point p
@@ -111,27 +110,6 @@ LEFT JOIN LATERAL (
 ) rice_potential_row ON true
 LEFT JOIN LATERAL (
   SELECT
-    mp.id,
-    mp.suitability_class,
-    mp.suitability_label_th,
-    mp.source_name,
-    mp.source_dataset,
-    mp.source_year,
-    mp.source_area_sqm,
-    mp.source_area_rai,
-    mp.tambon_name,
-    mp.amphoe_name,
-    mp.province_name
-  FROM gis.maize_potential mp
-  WHERE ST_Covers(mp.geom, p.geom)
-  ORDER BY
-    ST_Contains(mp.geom, p.geom) DESC,
-    ST_Area(mp.geom) ASC,
-    mp.id ASC
-  LIMIT 1
-) maize_potential_row ON true
-LEFT JOIN LATERAL (
-  SELECT
     s.id,
     s.stream_id,
     s.str_class,
@@ -174,7 +152,6 @@ async function getPointSummary({ latitude, longitude }) {
   if (!isInsideUtm47NorthDomain({ latitude, longitude })) {
     const soilSuitability = await evaluateSoilSuitability(null);
     const riceLandSuitability = buildRiceLandSuitability(null);
-    const maizeLandSuitability = buildMaizeLandSuitability(null);
 
     return buildPointResponse({
       latitude,
@@ -182,7 +159,6 @@ async function getPointSummary({ latitude, longitude }) {
       row: buildEmptyQueryRow(),
       soilSuitability,
       riceLandSuitability,
-      maizeLandSuitability,
     });
   }
 
@@ -190,7 +166,6 @@ async function getPointSummary({ latitude, longitude }) {
   const row = result.rows[0] || buildEmptyQueryRow();
   const soilSuitability = await evaluateSoilSuitability(row.soil || null);
   const riceLandSuitability = buildRiceLandSuitability(row.rice_potential || null);
-  const maizeLandSuitability = buildMaizeLandSuitability(row.maize_potential || null);
 
   return buildPointResponse({
     latitude,
@@ -198,7 +173,6 @@ async function getPointSummary({ latitude, longitude }) {
     row,
     soilSuitability,
     riceLandSuitability,
-    maizeLandSuitability,
   });
 }
 
@@ -208,7 +182,6 @@ function buildPointResponse({
   row,
   soilSuitability,
   riceLandSuitability,
-  maizeLandSuitability,
 }) {
   // soil กับ riceLandSuitability คนละเรื่อง: soil คือคุณสมบัติดิน, Potential คือชั้นความเหมาะสมที่ดิน
   const amphoe = row.amphoe;
@@ -216,12 +189,10 @@ function buildPointResponse({
   const basin = row.basin;
   const soil = row.soil;
   const ricePotential = row.rice_potential;
-  const maizePotential = row.maize_potential;
   const nearestStream = row.nearest_stream;
   const nearestIrrigationCanal = row.nearest_irrigation_canal;
-  const found = Boolean(amphoe || tambon || basin || soil || ricePotential || maizePotential);
+  const found = Boolean(amphoe || tambon || basin || soil || ricePotential);
   const suitabilityStatus = riceLandSuitability.class
-    || maizeLandSuitability.class
     ? "PARTIALLY_EVALUATED"
     : "NOT_EVALUATED";
 
@@ -241,7 +212,6 @@ function buildPointResponse({
     },
     soil: buildSoilResponse({ soil, soilSuitability }),
     riceLandSuitability,
-    maizeLandSuitability,
     water: {
       nearestStream: nearestStream
         ? {
@@ -340,31 +310,6 @@ function buildRiceLandSuitability(ricePotential) {
   };
 }
 
-function buildMaizeLandSuitability(maizePotential) {
-  if (!maizePotential) {
-    return {
-      class: null,
-      label: null,
-      evaluationMethod: "LDD_MAIZE_POTENTIAL_OVERLAY",
-      sourceName: "กรมพัฒนาที่ดิน",
-      sourceDataset: "ความเหมาะสมของที่ดินสำหรับปลูกข้าวโพด",
-      sourceYear: null,
-      status: "NO_COVERAGE",
-    };
-  }
-
-  return {
-    class: maizePotential.suitability_class ?? null,
-    label: maizePotential.suitability_label_th ?? null,
-    evaluationMethod: "LDD_MAIZE_POTENTIAL_OVERLAY",
-    sourceName: maizePotential.source_name ?? "กรมพัฒนาที่ดิน",
-    sourceDataset:
-      maizePotential.source_dataset ?? "ความเหมาะสมของที่ดินสำหรับปลูกข้าวโพด",
-    sourceYear: toNumberOrNull(maizePotential.source_year),
-    status: maizePotential.suitability_class ? "AVAILABLE" : "NO_COVERAGE",
-  };
-}
-
 function isInsideUtm47NorthDomain({ latitude, longitude }) {
   return latitude >= 0 && latitude <= 84 && longitude >= 96 && longitude <= 102;
 }
@@ -375,8 +320,6 @@ function buildEmptyQueryRow() {
     tambon: null,
     basin: null,
     soil: null,
-    rice_potential: null,
-    maize_potential: null,
     nearest_stream: null,
     nearest_irrigation_canal: null,
   };

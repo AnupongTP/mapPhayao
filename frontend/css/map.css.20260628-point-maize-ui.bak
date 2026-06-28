@@ -521,29 +521,6 @@ body {
   font-weight: 700;
 }
 
-.parcel-popup-details-button {
-  cursor: pointer;
-  min-height: 38px;
-  padding: 8px 12px;
-  border: 1px solid #0f766e;
-  border-radius: 6px;
-  background: #0f766e;
-  color: #ffffff;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.parcel-popup-details-button:hover {
-  border-color: #115e59;
-  background: #115e59;
-}
-
-.parcel-popup-details-button:focus-visible {
-  outline: 3px solid #99f6e4;
-  outline-offset: 2px;
-}
-
 @media (max-width: 700px) {
   /* มือถือ: ย้าย panel ลงล่างเป็น bottom sheet เพื่อไม่บังแผนที่ทั้งหน้า */
   .location-panel,
@@ -602,59 +579,5 @@ body {
   .suitability-card-footer {
     align-items: flex-start;
     flex-direction: column;
-  }
-}
-
-/* Desktop/mobile sidebar override */
-.app-sidebar {
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  bottom: 16px;
-  z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: min(390px, calc(100vw - 32px));
-  pointer-events: none;
-}
-
-.app-sidebar .location-panel,
-.app-sidebar .result-panel {
-  position: static;
-  right: auto;
-  left: auto;
-  top: auto;
-  bottom: auto;
-  width: 100%;
-  pointer-events: auto;
-}
-
-.app-sidebar .location-panel {
-  flex: 0 0 auto;
-}
-
-.app-sidebar .result-panel {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-.app-sidebar .panel-content {
-  min-height: 0;
-}
-
-@media (max-width: 700px) {
-  .app-sidebar {
-    top: auto;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    width: auto;
-    gap: 0;
-  }
-
-  .app-sidebar .location-panel,
-  .app-sidebar .result-panel {
-    width: auto;
   }
 }

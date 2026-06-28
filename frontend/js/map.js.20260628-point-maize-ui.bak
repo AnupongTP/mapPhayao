@@ -163,14 +163,10 @@
           riceLandSuitability: {},
           maizeLandSuitability: {},
         },
-      }, {
-        onOpenDetails: openTemporaryParcelDetails,
       });
     }
 
-    return window.MapUi.createParcelPopupContent(parcel, {
-      onOpenDetails: openTemporaryParcelDetails,
-    });
+    return window.MapUi.createParcelPopupContent(parcel);
   }
 
   function updateTemporaryParcelPopup(parcel, openPopup) {
@@ -203,21 +199,6 @@
     refreshTemporaryParcelList();
     openParcelPopup(parcel);
     renderSelectedTemporaryParcel();
-  }
-
-  function openTemporaryParcelDetails(parcelId) {
-    const parcel = temporaryParcels.get(parcelId);
-    if (!parcel) {
-      return;
-    }
-
-    selectedTemporaryParcelId = parcelId;
-    refreshParcelStyles();
-    refreshTemporaryParcelList();
-    window.MapUi.renderParcelResult(parcel);
-    if (parcel.layer && parcel.layer.closePopup) {
-      parcel.layer.closePopup();
-    }
   }
 
   function focusTemporaryParcel(parcelId) {
