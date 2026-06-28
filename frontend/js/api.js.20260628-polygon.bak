@@ -51,9 +51,6 @@
   window.MapApi = {
     getJson,
     getRiceSuitabilityAtPoint,
-    analyzePolygonArea: function (payload, options) {
-      return sendJson("/area-analysis/polygon", payload, "POST", options);
-    },
     getProvinces: function () {
       return getJson("/pgconnect/provinces");
     },

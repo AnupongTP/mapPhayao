@@ -1,4 +1,3 @@
-// ไฟล์ควบคุม flow ของแผนที่: เลือกตำแหน่ง, GPS, confirm, และ point analysis
 (function (window) {
   let selectedLocation = null;
   let locationMarker = null;
@@ -6,6 +5,14 @@
   let pointRequestController = null;
   let resultPopup = null;
   let appMap = null;
+  let parcelDrawHandler = null;
+  let isParcelDrawingActive = false;
+  let editingTemporaryParcelId = null;
+  let selectedTemporaryParcelId = null;
+  let editingOriginalGeometry = null;
+
+  const temporaryParcelLayers = new L.FeatureGroup();
+  const temporaryParcels = new Map();
 
   const GEOLOCATION_OPTIONS = {
     enableHighAccuracy: true,
@@ -13,8 +20,496 @@
     maximumAge: 0,
   };
 
+  const TEMPORARY_PARCEL_STYLE = {
+    color: "#0f766e",
+    weight: 3,
+    fillColor: "#2dd4bf",
+    fillOpacity: 0.12,
+  };
+
+  const TEMPORARY_PARCEL_SELECTED_STYLE = {
+    color: "#0f172a",
+    weight: 4,
+    fillColor: "#67e8f9",
+    fillOpacity: 0.18,
+    dashArray: "8 6",
+  };
+
+  function createFrontendId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return window.crypto.randomUUID();
+    }
+
+    return `tmp-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  }
+
+  function cloneGeometry(geometry) {
+    return JSON.parse(JSON.stringify(geometry));
+  }
+
+  function isValidSelectedLocation() {
+    return (
+      selectedLocation &&
+      Number.isFinite(selectedLocation.lat) &&
+      Number.isFinite(selectedLocation.lng) &&
+      selectedLocation.lat >= -90 &&
+      selectedLocation.lat <= 90 &&
+      selectedLocation.lng >= -180 &&
+      selectedLocation.lng <= 180
+    );
+  }
+
+  function isParcelInteractionLocked() {
+    return isParcelDrawingActive || Boolean(editingTemporaryParcelId);
+  }
+
+  function syncLocationActionState() {
+    if (isParcelInteractionLocked()) {
+      window.MapUi.setLocationActionsEnabled(false);
+      return;
+    }
+
+    window.MapUi.setLocationActionsEnabled(true);
+    window.MapUi.setConfirmEnabled(isValidSelectedLocation());
+  }
+
+  function getNextAvailableParcelName() {
+    const usedNames = new Set(
+      [...temporaryParcels.values()].map((parcel) => parcel.name.trim()),
+    );
+    let index = 1;
+    while (usedNames.has(`แปลงที่ ${index}`)) {
+      index += 1;
+    }
+    return `แปลงที่ ${index}`;
+  }
+
+  function getParcelStatusText(parcel) {
+    if (parcel.analysisStatus === "loading") {
+      return window.MapUi.text.parcelLoading;
+    }
+    if (parcel.analysisStatus === "error") {
+      return window.MapUi.text.parcelAnalyzeError;
+    }
+    if (parcel.analysis && parcel.analysis.parcel) {
+      return `${window.MapFormatters.formatAreaRai(parcel.analysis.parcel.areaRai)}`;
+    }
+    return window.MapUi.text.notEvaluated;
+  }
+
+  function getParcelListData() {
+    return [...temporaryParcels.values()]
+      .sort((left, right) => left.createdAt - right.createdAt)
+      .map((parcel) => ({
+        id: parcel.id,
+        name: parcel.name,
+        statusText: getParcelStatusText(parcel),
+        isSelected: parcel.id === selectedTemporaryParcelId,
+      }));
+  }
+
+  function refreshTemporaryParcelList() {
+    window.MapUi.renderTemporaryParcelList(getParcelListData(), {
+      onSelect: selectTemporaryParcel,
+      onFocus: focusTemporaryParcel,
+      onRename: renameTemporaryParcel,
+      onEdit: startTemporaryParcelEdit,
+      onRetry: retryTemporaryParcelAnalysis,
+      onDelete: deleteTemporaryParcel,
+    });
+  }
+
+  function applyParcelStyle(parcel) {
+    if (!parcel || !parcel.layer) {
+      return;
+    }
+
+    parcel.layer.setStyle(
+      parcel.id === selectedTemporaryParcelId
+        ? TEMPORARY_PARCEL_SELECTED_STYLE
+        : TEMPORARY_PARCEL_STYLE,
+    );
+  }
+
+  function refreshParcelStyles() {
+    temporaryParcels.forEach((parcel) => applyParcelStyle(parcel));
+  }
+
+  function geometryToLayerGeometry(geometry) {
+    const geoJsonLayer = L.geoJSON({
+      type: "Feature",
+      geometry,
+      properties: {},
+    });
+    const layer = geoJsonLayer.getLayers()[0];
+    return layer ? layer.getLatLngs() : [];
+  }
+
+  function bindTemporaryParcelEvents(parcel) {
+    parcel.layer.on("click", () => {
+      selectTemporaryParcel(parcel.id);
+    });
+  }
+
+  function buildTemporaryParcelPopup(parcel) {
+    if (parcel.analysisStatus !== "success" || !parcel.analysis) {
+      return window.MapUi.createParcelPopupContent({
+        ...parcel,
+        analysis: {
+          name: parcel.name,
+          parcel: {
+            areaRai: null,
+          },
+          riceLandSuitability: {},
+          maizeLandSuitability: {},
+        },
+      });
+    }
+
+    return window.MapUi.createParcelPopupContent(parcel);
+  }
+
+  function updateTemporaryParcelPopup(parcel, openPopup) {
+    parcel.layer.bindPopup(buildTemporaryParcelPopup(parcel));
+    if (openPopup) {
+      parcel.layer.openPopup();
+    }
+  }
+
+  function openParcelPopup(parcel) {
+    closeResultPopup();
+    updateTemporaryParcelPopup(parcel, true);
+  }
+
+  function renderSelectedTemporaryParcel() {
+    const parcel = selectedTemporaryParcelId
+      ? temporaryParcels.get(selectedTemporaryParcelId)
+      : null;
+    window.MapUi.renderParcelResult(parcel || null);
+  }
+
+  function selectTemporaryParcel(parcelId) {
+    const parcel = temporaryParcels.get(parcelId);
+    if (!parcel) {
+      return;
+    }
+
+    selectedTemporaryParcelId = parcelId;
+    refreshParcelStyles();
+    refreshTemporaryParcelList();
+    openParcelPopup(parcel);
+    renderSelectedTemporaryParcel();
+  }
+
+  function focusTemporaryParcel(parcelId) {
+    const parcel = temporaryParcels.get(parcelId);
+    if (!parcel) {
+      return;
+    }
+
+    appMap.fitBounds(parcel.layer.getBounds(), {
+      padding: [24, 24],
+      maxZoom: 18,
+    });
+    selectTemporaryParcel(parcelId);
+  }
+
+  async function renameTemporaryParcel(parcelId) {
+    const parcel = temporaryParcels.get(parcelId);
+    if (!parcel) {
+      return;
+    }
+
+    const nextName = await window.MapUi.promptParcelName({
+      title: "เปลี่ยนชื่อพื้นที่แปลง",
+      initialValue: parcel.name,
+      confirmText: "บันทึกชื่อ",
+    });
+
+    if (!nextName) {
+      return;
+    }
+
+    parcel.name = nextName.trim();
+    if (parcel.analysis && parcel.analysis.name) {
+      parcel.analysis.name = parcel.name;
+    }
+    updateTemporaryParcelPopup(parcel, false);
+    refreshTemporaryParcelList();
+    if (selectedTemporaryParcelId === parcelId) {
+      renderSelectedTemporaryParcel();
+    }
+  }
+
+  async function requestParcelName(defaultName) {
+    return window.MapUi.promptParcelName({
+      title: "ตั้งชื่อพื้นที่แปลง",
+      initialValue: defaultName,
+      confirmText: "เริ่มวิเคราะห์",
+    });
+  }
+
+  async function analyzeTemporaryParcel(parcelId) {
+    const parcel = temporaryParcels.get(parcelId);
+    if (!parcel) {
+      return;
+    }
+
+    if (parcel.requestController) {
+      parcel.requestController.abort();
+    }
+
+    parcel.geometry = parcel.layer.toGeoJSON().geometry;
+    parcel.analysis = null;
+    parcel.analysisError = null;
+    parcel.analysisStatus = "loading";
+    parcel.requestController = new AbortController();
+    refreshTemporaryParcelList();
+
+    if (selectedTemporaryParcelId === parcelId) {
+      renderSelectedTemporaryParcel();
+    }
+
+    try {
+      const analysis = await window.MapApi.analyzePolygonArea(
+        {
+          name: parcel.name,
+          geometry: parcel.geometry,
+        },
+        { signal: parcel.requestController.signal },
+      );
+
+      parcel.analysis = analysis;
+      parcel.analysisStatus = "success";
+      parcel.analysisError = null;
+    } catch (error) {
+      if (error.name === "AbortError") {
+        return;
+      }
+
+      parcel.analysisStatus = "error";
+      parcel.analysisError = error.message || window.MapUi.text.parcelAnalyzeError;
+    } finally {
+      parcel.requestController = null;
+      updateTemporaryParcelPopup(parcel, selectedTemporaryParcelId === parcelId);
+      refreshTemporaryParcelList();
+      if (selectedTemporaryParcelId === parcelId) {
+        renderSelectedTemporaryParcel();
+      }
+    }
+  }
+
+  async function registerTemporaryParcel(layer, requestedName) {
+    const parcelId = createFrontendId();
+    const parcel = {
+      id: parcelId,
+      name: requestedName,
+      layer,
+      geometry: layer.toGeoJSON().geometry,
+      analysis: null,
+      analysisStatus: "idle",
+      analysisError: null,
+      requestController: null,
+      createdAt: Date.now(),
+    };
+
+    temporaryParcels.set(parcelId, parcel);
+    temporaryParcelLayers.addLayer(layer);
+    bindTemporaryParcelEvents(parcel);
+    updateTemporaryParcelPopup(parcel, false);
+    refreshTemporaryParcelList();
+    selectTemporaryParcel(parcelId);
+    await analyzeTemporaryParcel(parcelId);
+  }
+
+  async function handleDrawCreated(event) {
+    isParcelDrawingActive = false;
+    syncLocationActionState();
+    window.MapUi.setParcelControlState({
+      isEditing: false,
+      drawDisabled: false,
+    });
+
+    const layer = event.layer;
+    layer.setStyle(TEMPORARY_PARCEL_STYLE);
+
+    const defaultName = getNextAvailableParcelName();
+    const parcelName = await requestParcelName(defaultName);
+
+    if (!parcelName) {
+      return;
+    }
+
+    await registerTemporaryParcel(layer, parcelName.trim());
+  }
+
+  function startParcelDrawing() {
+    if (isParcelInteractionLocked()) {
+      return;
+    }
+
+    if (!parcelDrawHandler) {
+      return;
+    }
+
+    isParcelDrawingActive = true;
+    syncLocationActionState();
+    window.MapUi.setParcelControlState({
+      isEditing: false,
+      drawDisabled: true,
+    });
+    parcelDrawHandler.enable();
+  }
+
+  function startTemporaryParcelEdit(parcelId) {
+    const parcel = temporaryParcels.get(parcelId);
+    if (!parcel || isParcelInteractionLocked()) {
+      return;
+    }
+
+    editingTemporaryParcelId = parcelId;
+    editingOriginalGeometry = cloneGeometry(parcel.layer.toGeoJSON().geometry);
+    parcel.layer.editing.enable();
+    selectedTemporaryParcelId = parcelId;
+    refreshParcelStyles();
+    refreshTemporaryParcelList();
+    window.MapUi.setParcelControlState({
+      isEditing: true,
+      drawDisabled: true,
+    });
+    syncLocationActionState();
+    renderSelectedTemporaryParcel();
+  }
+
+  async function saveTemporaryParcelEdit() {
+    if (!editingTemporaryParcelId) {
+      return;
+    }
+
+    const parcel = temporaryParcels.get(editingTemporaryParcelId);
+    if (!parcel) {
+      editingTemporaryParcelId = null;
+      editingOriginalGeometry = null;
+      syncLocationActionState();
+      return;
+    }
+
+    parcel.layer.editing.disable();
+    editingTemporaryParcelId = null;
+    editingOriginalGeometry = null;
+    window.MapUi.setParcelControlState({
+      isEditing: false,
+      drawDisabled: false,
+    });
+    syncLocationActionState();
+    await analyzeTemporaryParcel(parcel.id);
+  }
+
+  function cancelTemporaryParcelEdit() {
+    if (!editingTemporaryParcelId) {
+      return;
+    }
+
+    const parcel = temporaryParcels.get(editingTemporaryParcelId);
+    if (parcel) {
+      parcel.layer.editing.disable();
+      if (editingOriginalGeometry) {
+        parcel.layer.setLatLngs(geometryToLayerGeometry(editingOriginalGeometry));
+      }
+    }
+
+    editingTemporaryParcelId = null;
+    editingOriginalGeometry = null;
+    window.MapUi.setParcelControlState({
+      isEditing: false,
+      drawDisabled: false,
+    });
+    syncLocationActionState();
+    refreshParcelStyles();
+    refreshTemporaryParcelList();
+  }
+
+  async function retryTemporaryParcelAnalysis(parcelId) {
+    const parcel = temporaryParcels.get(parcelId);
+    if (!parcel) {
+      return;
+    }
+
+    selectedTemporaryParcelId = parcelId;
+    refreshParcelStyles();
+    refreshTemporaryParcelList();
+    renderSelectedTemporaryParcel();
+    await analyzeTemporaryParcel(parcelId);
+  }
+
+  function deleteTemporaryParcel(parcelId) {
+    const parcel = temporaryParcels.get(parcelId);
+    if (!parcel) {
+      return;
+    }
+
+    const shouldDelete = window.confirm(`ลบ ${parcel.name} ใช่หรือไม่`);
+    if (!shouldDelete) {
+      return;
+    }
+
+    if (parcel.requestController) {
+      parcel.requestController.abort();
+    }
+
+    if (editingTemporaryParcelId === parcelId) {
+      editingTemporaryParcelId = null;
+      editingOriginalGeometry = null;
+      window.MapUi.setParcelControlState({
+        isEditing: false,
+        drawDisabled: false,
+      });
+    }
+
+    temporaryParcelLayers.removeLayer(parcel.layer);
+    temporaryParcels.delete(parcelId);
+
+    if (selectedTemporaryParcelId === parcelId) {
+      selectedTemporaryParcelId = null;
+      window.MapUi.renderParcelResult(null);
+    }
+
+    refreshTemporaryParcelList();
+    refreshParcelStyles();
+    syncLocationActionState();
+  }
+
+  function initTemporaryParcels(map) {
+    temporaryParcelLayers.addTo(map);
+    parcelDrawHandler = new L.Draw.Polygon(map, {
+      allowIntersection: false,
+      repeatMode: false,
+      shapeOptions: TEMPORARY_PARCEL_STYLE,
+    });
+
+    map.on(L.Draw.Event.CREATED, handleDrawCreated);
+    map.on(L.Draw.Event.DRAWSTOP, () => {
+      isParcelDrawingActive = false;
+      syncLocationActionState();
+      window.MapUi.setParcelControlState({
+        isEditing: Boolean(editingTemporaryParcelId),
+        drawDisabled: Boolean(editingTemporaryParcelId),
+      });
+    });
+
+    window.MapUi.addParcelDrawControl(map, {
+      onDraw: startParcelDrawing,
+      onSaveEdit: saveTemporaryParcelEdit,
+      onCancelEdit: cancelTemporaryParcelEdit,
+    });
+    window.MapUi.setParcelControlState({
+      isEditing: false,
+      drawDisabled: false,
+    });
+    refreshTemporaryParcelList();
+  }
+
   function initMap() {
-    // สร้าง Leaflet map เพียงครั้งเดียว แล้วผูก layers กับ panels เข้าด้วยกัน
     const mapConfig = window.AppConfig.map;
     const map = L.map("map").setView(mapConfig.center, mapConfig.zoom);
     const baseLayers = window.MapLayers.createBaseLayers();
@@ -27,6 +522,7 @@
       onLocate: requestCurrentLocation,
       onConfirm: confirmSelectedLocation,
     });
+    initTemporaryParcels(map);
 
     map.on("click", handleMapClick);
 
@@ -34,7 +530,10 @@
   }
 
   function handleMapClick(event) {
-    // คลิกแผนที่เปลี่ยนตำแหน่งที่เลือก แต่ยังไม่เรียก API จนกว่าผู้ใช้จะยืนยัน
+    if (isParcelInteractionLocked()) {
+      return;
+    }
+
     selectedLocation = {
       lat: event.latlng.lat,
       lng: event.latlng.lng,
@@ -48,7 +547,10 @@
   }
 
   function handleMarkerDragEnd(event) {
-    // ลาก marker จบแล้วค่อยอัปเดตพิกัด เพื่อไม่ยิง request ระหว่างลาก
+    if (isParcelInteractionLocked()) {
+      return;
+    }
+
     const position = event.target.getLatLng();
 
     selectedLocation = {
@@ -63,7 +565,11 @@
   }
 
   function requestCurrentLocation() {
-    // ขอพิกัดจากอุปกรณ์เมื่อผู้ใช้กดปุ่มตำแหน่งปัจจุบัน
+    if (isParcelInteractionLocked()) {
+      window.MapUi.showLocationMessage(window.MapUi.text.parcelEditLocked);
+      return;
+    }
+
     if (!window.isSecureContext) {
       window.MapUi.showLocationMessage(window.MapUi.text.secureContext);
       return;
@@ -84,7 +590,11 @@
   }
 
   function handleLocationSuccess(position) {
-    // GPS สำเร็จ: ย้าย marker เดิม และอัปเดต accuracy circle แต่ยังไม่เรียก point API
+    if (isParcelInteractionLocked()) {
+      window.MapUi.showLocationMessage(window.MapUi.text.parcelEditLocked);
+      return;
+    }
+
     selectedLocation = {
       lat: position.coords.latitude,
       lng: position.coords.longitude,
@@ -142,20 +652,12 @@
     accuracyCircle = null;
   }
 
-  function isValidSelectedLocation() {
-    return (
-      selectedLocation &&
-      Number.isFinite(selectedLocation.lat) &&
-      Number.isFinite(selectedLocation.lng) &&
-      selectedLocation.lat >= -90 &&
-      selectedLocation.lat <= 90 &&
-      selectedLocation.lng >= -180 &&
-      selectedLocation.lng <= 180
-    );
-  }
-
   async function confirmSelectedLocation() {
-    // เรียก point-analysis API เฉพาะตอนผู้ใช้กด confirm เท่านั้น
+    if (isParcelInteractionLocked()) {
+      window.MapUi.showLocationMessage(window.MapUi.text.parcelEditLocked);
+      return;
+    }
+
     if (!isValidSelectedLocation()) {
       window.MapUi.showLocationMessage(window.MapUi.text.positionUnavailable);
       return;
@@ -202,7 +704,6 @@
   }
 
   function openResultPopup(data) {
-    // Popup ใช้แค่สรุปสั้น ส่วนรายละเอียดจริงอยู่ใน result panel
     if (!locationMarker) {
       return;
     }

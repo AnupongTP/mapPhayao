@@ -1,3 +1,4 @@
+// ไฟล์สร้าง panel, card, popup, และข้อความที่ผู้ใช้เห็นบนหน้าแผนที่
 (function (window) {
   const formatters = window.MapFormatters;
   const TEXT = {
@@ -27,19 +28,6 @@
     riceSuitabilityTitle: "ความเหมาะสมของที่ดินสำหรับปลูกข้าว",
     riceSuitabilitySource: "ผลจากชั้นข้อมูล Potential ของกรมพัฒนาที่ดิน",
     incompleteEvaluation: "ยังไม่ได้ประเมินครบทุกปัจจัย",
-    temporaryParcelTitle: "พื้นที่แปลงชั่วคราว",
-    drawParcel: "วาดพื้นที่แปลง",
-    saveEdit: "บันทึกแก้ไข",
-    cancelEdit: "ยกเลิกแก้ไข",
-    parcelLoading: "กำลังวิเคราะห์พื้นที่แปลง...",
-    parcelAnalyzeError: "ไม่สามารถวิเคราะห์พื้นที่แปลงได้ กรุณาลองใหม่",
-    parcelNameRequired: "ชื่อพื้นที่แปลงต้องไม่เป็นค่าว่าง",
-    parcelNameField: "ชื่อพื้นที่แปลง",
-    parcelNoRiceCoverage: "ไม่พบข้อมูล Potential สำหรับข้าวในพื้นที่แปลงนี้",
-    parcelNoMaizeCoverage: "ไม่พบข้อมูล Potential สำหรับข้าวโพดในพื้นที่แปลงนี้",
-    parcelEditLocked: "กำลังวาดหรือแก้ไขพื้นที่แปลง กรุณาดำเนินการให้เสร็จก่อน",
-    parcelSummaryNote:
-      "ผลข้าวและข้าวโพดเป็นการซ้อนทับกับชั้นข้อมูล Potential ของกรมพัฒนาที่ดิน ยังไม่ใช่คำแนะนำพืชขั้นสุดท้าย",
   };
 
   const suitabilityLabels = {
@@ -57,13 +45,8 @@
     NO_COVERAGE: "status-no-coverage",
   };
 
-  const parcelControlState = {
-    drawButton: null,
-    saveButton: null,
-    cancelButton: null,
-  };
-
   function addLayerControl(map, baseLayers, overlayLayers) {
+    // รวม base layer กับ overlay layer เข้า control เดียว เพื่อให้ผู้ใช้เปิดปิดทีละชั้น
     const layerControlBaseLayers = {
       OpenStreetMap: baseLayers.openStreetMap,
       GoogleSatellite: baseLayers.googleSatellite,
@@ -85,7 +68,10 @@
     addOverlay("แม่น้ำและลำห้วย", overlayLayers.streamWms);
     addOverlay("คลองชลประทาน", overlayLayers.irrigationCanalWms);
     addOverlay("ความเหมาะสมปลูกข้าว — ทุกระดับ", overlayLayers.ricePotentialAllLayer);
-    addOverlay("ความเหมาะสมปลูกข้าวโพด — ทุกระดับ", overlayLayers.maizePotentialAllLayer);
+    // addOverlay("S1 — เหมาะสมมาก", overlayLayers.ricePotentialS1Layer);
+    // addOverlay("S2 — เหมาะสมปานกลาง", overlayLayers.ricePotentialS2Layer);
+    // addOverlay("S3 — เหมาะสมน้อย", overlayLayers.ricePotentialS3Layer);
+    // addOverlay("N — ไม่เหมาะสม", overlayLayers.ricePotentialNLayer);
 
     return L.control
       .layers(layerControlBaseLayers, layerControlOverlayLayers, {
@@ -110,11 +96,7 @@
     const row = createElement("div", "result-field");
     row.append(
       createElement("dt", "result-label", label),
-      createElement(
-        "dd",
-        "result-value",
-        formatter ? formatter(value) : formatters.formatValue(value),
-      ),
+      createElement("dd", "result-value", formatter ? formatter(value) : formatters.formatValue(value)),
     );
     parent.appendChild(row);
   }
@@ -132,11 +114,7 @@
     const row = createElement("div", "summary-card-row");
     row.append(
       createElement("dt", "summary-card-label", label),
-      createElement(
-        "dd",
-        "summary-card-value",
-        formatter ? formatter(value) : formatters.formatValue(value),
-      ),
+      createElement("dd", "summary-card-value", formatter ? formatter(value) : formatters.formatValue(value)),
     );
     return row;
   }
@@ -163,6 +141,26 @@
     return TEXT.empty;
   }
 
+  function formatAdministrativeLocation(location) {
+    // รวมตำบล อำเภอ จังหวัด ให้สั้นและอ่านง่ายบน card
+    const tambon = formatters.formatValue(location?.tambon);
+    const amphoe = formatters.formatValue(location?.amphoe);
+    const province = formatters.formatValue(location?.province);
+    const parts = [];
+
+    if (tambon !== TEXT.empty) {
+      parts.push(tambon);
+    }
+    if (amphoe !== TEXT.empty) {
+      parts.push(amphoe);
+    }
+    if (province !== TEXT.empty) {
+      parts.push(province);
+    }
+
+    return parts.length ? parts.join(" ") : TEXT.empty;
+  }
+
   function createPanel(id, className, titleText) {
     const panel = createElement("aside", className);
     panel.id = id;
@@ -180,6 +178,7 @@
   }
 
   function ensureLocationPanel() {
+    // สร้างแผงตำแหน่งครั้งเดียว แล้วอัปเดตค่าเดิมเมื่อผู้ใช้เปลี่ยนพิกัด
     let panel = document.getElementById("location-panel");
     if (panel) {
       return panel;
@@ -194,7 +193,6 @@
     const list = createElement("dl", "location-list");
     list.id = "location-values";
     updateLocationList(list, null);
-
     const actions = createElement("div", "location-actions");
     const locateButton = createElement("button", "panel-button secondary", TEXT.locate);
     locateButton.type = "button";
@@ -205,24 +203,12 @@
     confirmButton.disabled = true;
 
     actions.append(locateButton, confirmButton);
-
-    const parcelSection = createElement("section", "parcel-section");
-    parcelSection.append(createElement("h3", null, TEXT.temporaryParcelTitle));
-    const parcelList = createElement("div", "parcel-list");
-    parcelList.id = "temporary-parcel-list";
-    parcelList.appendChild(createElement("p", "parcel-empty", TEXT.empty));
-    const parcelNote = createElement(
-      "p",
-      "parcel-note",
-      "รีเฟรชหรือปิดหน้าเว็บ พื้นที่แปลงชั่วคราวจะหายทั้งหมด",
-    );
-    parcelSection.append(parcelList, parcelNote);
-
-    content.append(status, instruction, list, actions, parcelSection);
+    content.append(status, instruction, list, actions);
     return panel;
   }
 
   function updateLocationList(list, location) {
+    // แสดงพิกัดและแหล่งที่มาของตำแหน่งที่เลือก
     list.replaceChildren();
     appendField(list, "Latitude", location?.lat, formatters.formatCoordinate);
     appendField(list, "Longitude", location?.lng, formatters.formatCoordinate);
@@ -246,14 +232,6 @@
   function setConfirmEnabled(isEnabled) {
     ensureLocationPanel();
     document.getElementById("confirm-location-button").disabled = !isEnabled;
-  }
-
-  function setLocationActionsEnabled(isEnabled) {
-    ensureLocationPanel();
-    const locateButton = document.getElementById("locate-button");
-    const confirmButton = document.getElementById("confirm-location-button");
-    locateButton.disabled = !isEnabled;
-    confirmButton.disabled = !isEnabled;
   }
 
   function setupLocationPanel({ onLocate, onConfirm }) {
@@ -349,14 +327,12 @@
   function getRiceLandSuitabilityDisplay(data) {
     const riceLandSuitability = data.riceLandSuitability || {};
     const landClass = riceLandSuitability.class;
-    const label =
-      landClass && suitabilityLabels[landClass]
-        ? suitabilityLabels[landClass]
-        : formatters.formatValue(riceLandSuitability.label);
-    const className =
-      landClass && suitabilityClasses[landClass]
-        ? suitabilityClasses[landClass]
-        : suitabilityClasses.NO_COVERAGE;
+    const label = landClass && suitabilityLabels[landClass]
+      ? suitabilityLabels[landClass]
+      : formatters.formatValue(riceLandSuitability.label);
+    const className = landClass && suitabilityClasses[landClass]
+      ? suitabilityClasses[landClass]
+      : suitabilityClasses.NO_COVERAGE;
 
     return {
       grade: landClass || "ไม่มีข้อมูล",
@@ -365,34 +341,8 @@
     };
   }
 
-  function renderSuitabilitySummaryCard(data) {
-    const card = createElement("article", "suitability-summary-card");
-    const display = getRiceLandSuitabilityDisplay(data);
-    const header = createElement("header", `suitability-card-header ${display.className}`);
-    const body = createElement("section", "suitability-card-body");
-    const footer = createElement("footer", "suitability-card-footer");
-    const riceLandSuitability = data.riceLandSuitability || {};
-
-    header.append(
-      createElement("div", "suitability-grade", display.grade),
-      createElement("div", "suitability-label", display.label),
-    );
-
-    appendSummaryGroup(body, TEXT.riceSuitabilityTitle, [
-      { label: "ความเหมาะสมปลูกข้าว", value: display.label },
-      { label: "วิธีประเมิน", value: riceLandSuitability.evaluationMethod },
-      { label: "แหล่งข้อมูล", value: riceLandSuitability.sourceName },
-      { label: "ชุดข้อมูล", value: riceLandSuitability.sourceDataset },
-      { label: "สถานะรวม", value: TEXT.incompleteEvaluation },
-    ]);
-
-    footer.append(createElement("span", "suitability-status-pill", TEXT.incompleteEvaluation));
-
-    card.append(header, body, footer);
-    return card;
-  }
-
   function renderResultPanel(data) {
+    // ฝั่งสรุปผล: card ความเหมาะสมปลูกข้าว, ข้อมูลตำแหน่ง, ชุดดิน, และข้อมูลน้ำ
     const panel = ensureResultPanel();
     const content = panel.querySelector("#result-panel-content");
     const payload = data || {};
@@ -449,7 +399,36 @@
     panel.classList.add("is-open");
   }
 
+  function renderSuitabilitySummaryCard(data) {
+    // Card บนสุดใช้สรุป class จากชั้นข้อมูล Potential ของกรมพัฒนาที่ดิน
+    const card = createElement("article", "suitability-summary-card");
+    const display = getRiceLandSuitabilityDisplay(data);
+    const header = createElement("header", `suitability-card-header ${display.className}`);
+    const body = createElement("section", "suitability-card-body");
+    const footer = createElement("footer", "suitability-card-footer");
+    const riceLandSuitability = data.riceLandSuitability || {};
+
+    header.append(
+      createElement("div", "suitability-grade", display.grade),
+      createElement("div", "suitability-label", display.label),
+    );
+
+    appendSummaryGroup(body, TEXT.riceSuitabilityTitle, [
+      { label: "ความเหมาะสมปลูกข้าว", value: display.label },
+      { label: "วิธีประเมิน", value: riceLandSuitability.evaluationMethod },
+      { label: "แหล่งข้อมูล", value: riceLandSuitability.sourceName },
+      { label: "ชุดข้อมูล", value: riceLandSuitability.sourceDataset },
+      { label: "สถานะรวม", value: TEXT.incompleteEvaluation },
+    ]);
+
+    footer.append(createElement("span", "suitability-status-pill", TEXT.incompleteEvaluation));
+
+    card.append(header, body, footer);
+    return card;
+  }
+
   function createPopupContent(data) {
+    // Popup บนแผนที่สรุปผลสั้น ๆ ส่วนรายละเอียดเต็มอยู่ใน result panel
     const container = createElement("div", "map-popup");
     const title = createElement("h3", null, "ข้อมูลตำแหน่ง");
     const location = data.location || {};
@@ -472,305 +451,10 @@
     return container;
   }
 
-  function addParcelDrawControl(map, handlers) {
-    const ParcelDrawControl = L.Control.extend({
-      options: {
-        position: "topleft",
-      },
-      onAdd() {
-        const container = createElement("div", "parcel-draw-control leaflet-bar");
-        const drawButton = createElement("button", "panel-button", TEXT.drawParcel);
-        drawButton.type = "button";
-        const saveButton = createElement("button", "panel-button", TEXT.saveEdit);
-        saveButton.type = "button";
-        saveButton.hidden = true;
-        const cancelButton = createElement("button", "panel-button secondary", TEXT.cancelEdit);
-        cancelButton.type = "button";
-        cancelButton.hidden = true;
-
-        L.DomEvent.disableClickPropagation(container);
-        L.DomEvent.disableScrollPropagation(container);
-
-        drawButton.addEventListener("click", handlers.onDraw);
-        saveButton.addEventListener("click", handlers.onSaveEdit);
-        cancelButton.addEventListener("click", handlers.onCancelEdit);
-
-        container.append(drawButton, saveButton, cancelButton);
-
-        parcelControlState.drawButton = drawButton;
-        parcelControlState.saveButton = saveButton;
-        parcelControlState.cancelButton = cancelButton;
-
-        return container;
-      },
-    });
-
-    return new ParcelDrawControl().addTo(map);
-  }
-
-  function setParcelControlState(options) {
-    const isEditing = Boolean(options?.isEditing);
-    const drawDisabled = Boolean(options?.drawDisabled);
-
-    if (parcelControlState.drawButton) {
-      parcelControlState.drawButton.disabled = drawDisabled;
-    }
-    if (parcelControlState.saveButton) {
-      parcelControlState.saveButton.hidden = !isEditing;
-      parcelControlState.saveButton.disabled = !isEditing;
-    }
-    if (parcelControlState.cancelButton) {
-      parcelControlState.cancelButton.hidden = !isEditing;
-      parcelControlState.cancelButton.disabled = !isEditing;
-    }
-  }
-
-  function renderTemporaryParcelList(parcels, handlers) {
-    ensureLocationPanel();
-    const container = document.getElementById("temporary-parcel-list");
-    container.replaceChildren();
-
-    if (!Array.isArray(parcels) || parcels.length === 0) {
-      container.appendChild(createElement("p", "parcel-empty", "ยังไม่มีพื้นที่แปลงชั่วคราว"));
-      return;
-    }
-
-    parcels.forEach((parcel) => {
-      const item = createElement("article", `parcel-item${parcel.isSelected ? " is-selected" : ""}`);
-      const header = createElement("div", "parcel-item-header");
-      const titleWrap = createElement("div", null);
-      titleWrap.append(
-        createElement("p", "parcel-item-name", parcel.name),
-        createElement("p", "parcel-item-status", parcel.statusText),
-      );
-      header.appendChild(titleWrap);
-
-      const actions = createElement("div", "parcel-item-actions");
-      const makeButton = (label, onClick) => {
-        const button = createElement("button", "parcel-action", label);
-        button.type = "button";
-        button.addEventListener("click", onClick);
-        return button;
-      };
-
-      actions.append(
-        makeButton("เลือก", () => handlers.onSelect(parcel.id)),
-        makeButton("ซูม", () => handlers.onFocus(parcel.id)),
-        makeButton("เปลี่ยนชื่อ", () => handlers.onRename(parcel.id)),
-        makeButton("แก้ไขขอบเขต", () => handlers.onEdit(parcel.id)),
-        makeButton("วิเคราะห์ใหม่", () => handlers.onRetry(parcel.id)),
-        makeButton("ลบ", () => handlers.onDelete(parcel.id)),
-      );
-
-      item.append(header, actions);
-      container.appendChild(item);
-    });
-  }
-
-  function promptParcelName(options) {
-    return new Promise((resolve) => {
-      const backdrop = createElement("div", "parcel-modal-backdrop");
-      const modal = createElement("div", "parcel-modal");
-      const title = createElement("h3", null, options?.title || TEXT.parcelNameField);
-      const label = createElement("label");
-      label.appendChild(createElement("span", null, TEXT.parcelNameField));
-      const input = document.createElement("input");
-      input.type = "text";
-      input.value = options?.initialValue || "";
-      input.maxLength = 120;
-      label.appendChild(input);
-      const error = createElement("p", "parcel-modal-error", "");
-      const actions = createElement("div", "parcel-modal-actions");
-      const cancelButton = createElement("button", "panel-button secondary", "ยกเลิก");
-      cancelButton.type = "button";
-      const confirmButton = createElement("button", "panel-button", options?.confirmText || "บันทึก");
-      confirmButton.type = "button";
-
-      const close = (result) => {
-        backdrop.remove();
-        resolve(result);
-      };
-
-      const submit = () => {
-        const value = input.value.trim();
-        if (!value) {
-          error.textContent = TEXT.parcelNameRequired;
-          input.focus();
-          return;
-        }
-        close(value);
-      };
-
-      cancelButton.addEventListener("click", () => close(null));
-      confirmButton.addEventListener("click", submit);
-      input.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          submit();
-        }
-        if (event.key === "Escape") {
-          event.preventDefault();
-          close(null);
-        }
-      });
-
-      actions.append(cancelButton, confirmButton);
-      modal.append(title, label, error, actions);
-      backdrop.appendChild(modal);
-      document.body.appendChild(backdrop);
-      input.focus();
-      input.select();
-    });
-  }
-
-  function appendSuitabilityAreaSection(parent, title, data, noCoverageText) {
-    const section = createElement("section", "result-section");
-    section.appendChild(createElement("h3", null, title));
-
-    if (!data || !Array.isArray(data.classes) || data.classes.length === 0) {
-      section.appendChild(createElement("p", "result-message", noCoverageText));
-      parent.appendChild(section);
-      return;
-    }
-
-    const list = createElement("dl", "result-list");
-    appendField(list, "ครอบคลุมพื้นที่", data.coveragePercent, formatters.formatPercent);
-    appendField(
-      list,
-      "ชั้นเด่น",
-      data.dominantClass ? `${data.dominantClass.class} — ${data.dominantClass.label}` : null,
-    );
-    data.classes.forEach((item) => {
-      appendField(
-        list,
-        `${item.class}`,
-        `${formatters.formatAreaRai(item.areaRai)} (${formatters.formatPercent(item.percentOfParcel)})`,
-      );
-    });
-    appendField(list, "แหล่งข้อมูล", data.sourceName);
-    section.appendChild(list);
-    parent.appendChild(section);
-  }
-
-  function renderParcelResult(parcelState) {
-    const panel = ensureResultPanel();
-    const content = panel.querySelector("#result-panel-content");
-    content.replaceChildren();
-
-    if (!parcelState) {
-      content.appendChild(createElement("p", "result-message", TEXT.notEvaluated));
-      panel.classList.add("is-open");
-      return;
-    }
-
-    if (parcelState.analysisStatus === "loading") {
-      content.appendChild(createElement("p", "result-message", TEXT.parcelLoading));
-      panel.classList.add("is-open");
-      return;
-    }
-
-    if (parcelState.analysisStatus === "error") {
-      content.appendChild(createElement("p", "result-message", TEXT.parcelAnalyzeError));
-      if (parcelState.analysisError) {
-        content.appendChild(createElement("p", "result-message", parcelState.analysisError));
-      }
-      panel.classList.add("is-open");
-      return;
-    }
-
-    const analysis = parcelState.analysis || {};
-    const parcel = analysis.parcel || {};
-    const location = analysis.location || {};
-    const soilSummary = analysis.soilSummary || {};
-    const water = analysis.water || {};
-
-    appendSection(content, "ข้อมูลพื้นที่แปลง", [
-      { label: "ชื่อแปลง", value: analysis.name || parcelState.name },
-      { label: "พื้นที่ตารางเมตร", value: parcel.areaSquareMeters, formatter: formatters.formatAreaSqm },
-      { label: "พื้นที่ไร่", value: parcel.areaRai, formatter: formatters.formatAreaRai },
-      { label: "ตำบล", value: location.tambons, formatter: formatters.formatList },
-      { label: "อำเภอ", value: location.amphoes, formatter: formatters.formatList },
-      { label: "ลุ่มน้ำหลัก", value: location.mainBasins, formatter: formatters.formatList },
-      { label: "ลุ่มน้ำย่อย", value: location.subBasins, formatter: formatters.formatList },
-    ]);
-
-    appendSuitabilityAreaSection(
-      content,
-      "ความเหมาะสมสำหรับปลูกข้าว",
-      analysis.riceLandSuitability,
-      TEXT.parcelNoRiceCoverage,
-    );
-    appendSuitabilityAreaSection(
-      content,
-      "ความเหมาะสมสำหรับปลูกข้าวโพด",
-      analysis.maizeLandSuitability,
-      TEXT.parcelNoMaizeCoverage,
-    );
-
-    appendSection(content, "ข้อมูลดิน", (soilSummary.items || []).map((item, index) => ({
-      label: `ชุดดิน ${index + 1}`,
-      value: `${formatters.formatValue(item.soilNameThai)} / ${formatters.formatAreaRai(item.areaRai)} / ${formatters.formatPercent(item.percentOfParcel)}`,
-    })));
-
-    appendSection(content, "ข้อมูลน้ำ", [
-      { label: "ลำน้ำใกล้ที่สุด", value: water.nearestStream?.streamName },
-      { label: "ประเภทลำน้ำ", value: water.nearestStream?.streamType },
-      { label: "ระยะห่างลำน้ำ", value: water.nearestStream?.distanceM, formatter: formatters.formatDistance },
-      { label: "คลองชลประทานใกล้ที่สุด", value: water.nearestIrrigationCanal?.canalName },
-      { label: "ระยะห่างคลอง", value: water.nearestIrrigationCanal?.distanceM, formatter: formatters.formatDistance },
-    ]);
-
-    appendSection(content, "สถานะรวม", [
-      { label: "ผลรวม", value: analysis.overallStatus?.label || TEXT.incompleteEvaluation },
-      { label: "หมายเหตุ", value: TEXT.parcelSummaryNote },
-    ]);
-
-    panel.classList.add("is-open");
-  }
-
-  function createParcelPopupContent(parcelState) {
-    const analysis = parcelState.analysis || {};
-    const parcel = analysis.parcel || {};
-    const rice = analysis.riceLandSuitability || {};
-    const maize = analysis.maizeLandSuitability || {};
-    const container = createElement("div", "map-popup");
-    const title = createElement("p", "parcel-popup-title", parcelState.name);
-    const list = createElement("dl", "popup-list");
-
-    appendField(list, "พื้นที่", parcel.areaRai, formatters.formatAreaRai);
-    appendField(
-      list,
-      "ข้าว",
-      rice.dominantClass
-        ? `${rice.dominantClass.class} เด่น ${formatters.formatPercent(
-            rice.classes?.find((item) => item.class === rice.dominantClass.class)?.percentOfParcel,
-          )}`
-        : TEXT.parcelNoRiceCoverage,
-    );
-    appendField(
-      list,
-      "ข้าวโพด",
-      maize.dominantClass
-        ? `${maize.dominantClass.class} เด่น ${formatters.formatPercent(
-            maize.classes?.find((item) => item.class === maize.dominantClass.class)?.percentOfParcel,
-          )}`
-        : TEXT.parcelNoMaizeCoverage,
-    );
-    appendField(list, "รายละเอียด", "คลิกเพื่อดูรายละเอียด");
-
-    container.append(title, list);
-    return container;
-  }
-
   window.MapUi = {
     addLayerControl,
-    addParcelDrawControl,
-    setParcelControlState,
     setupLocationPanel,
     setConfirmEnabled,
-    setLocationActionsEnabled,
-    renderTemporaryParcelList,
-    promptParcelName,
     showGpsLoading,
     showGpsReady,
     showMapSelectionReady,
@@ -781,9 +465,7 @@
     showApiError,
     showNoDataResult,
     renderResultPanel,
-    renderParcelResult,
     createPopupContent,
-    createParcelPopupContent,
     text: TEXT,
   };
 })(window);

@@ -1,8 +1,5 @@
 // ไฟล์สร้าง basemap, WMS overlay, และ pane สำหรับจัดลำดับชั้นบนแผนที่
 (function (window) {
-  const GEOSERVER_WMS_URL = "http://localhost:8080/geoserver/rice_gis/wms";
-  const MAIZE_POTENTIAL_STYLE = "maize_potential676767";
-
   function createBaseLayers() {
     // Base layer คือแผนที่พื้นหลังที่ผู้ใช้เลือกได้จาก control
     const maxZoom = window.AppConfig.map.maxZoom;
@@ -40,6 +37,7 @@
 
   function createOverlayLayers(map) {
     // GeoServer WMS ใช้แสดงข้อมูลเชิงพื้นที่ ฝั่งคำนวณจริงอยู่ที่ Backend/PostGIS
+    const geoserverWmsUrl = "http://localhost:8080/geoserver/rice_gis/wms";
     // แยก pane ตามกลุ่มข้อมูล เพื่อคุมลำดับการวาดของ basin, water, และ potential
     ensurePane(map, "subBasinPane", 320);
     ensurePane(map, "mainBasinPane", 330);
@@ -50,7 +48,7 @@
       window.AppConfig.data.thailandProvinceGeoJson,
     ]);
     const amphoeWms = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
+      geoserverWmsUrl,
       {
         layers: "rice_gis:amphoe",
         format: "image/png",
@@ -60,7 +58,7 @@
       },
     );
     const tambonWms = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
+      geoserverWmsUrl,
       {
         layers: "rice_gis:tambon",
         format: "image/png",
@@ -70,7 +68,7 @@
     );
 
     const mainBasinLayer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
+      geoserverWmsUrl,
       {
         layers: "rice_gis:basin_main",
         format: "image/png",
@@ -81,7 +79,7 @@
     );
 
     const subBasinLayer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
+      geoserverWmsUrl,
       {
         layers: "rice_gis:sub_basin_display",
         format: "image/png",
@@ -92,7 +90,7 @@
     );
 
     const streamWms = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
+      geoserverWmsUrl,
       {
         layers: "rice_gis:stream",
         format: "image/png",
@@ -103,7 +101,7 @@
     );
 
     const irrigationCanalWms = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
+      geoserverWmsUrl,
       {
         layers: "rice_gis:irrigation_canal",
         format: "image/png",
@@ -124,7 +122,7 @@
     };
 
     const ricePotentialAllLayer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
+      geoserverWmsUrl,
       {
         ...ricePotentialLayerOptions,
         layers: "rice_gis:rice_potential",
@@ -132,7 +130,7 @@
     );
 
     const ricePotentialS1Layer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
+      geoserverWmsUrl,
       {
         ...ricePotentialLayerOptions,
         layers: "rice_gis:rice_potential",
@@ -141,7 +139,7 @@
     );
 
     const ricePotentialS2Layer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
+      geoserverWmsUrl,
       {
         ...ricePotentialLayerOptions,
         layers: "rice_gis:rice_potential",
@@ -150,7 +148,7 @@
     );
 
     const ricePotentialS3Layer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
+      geoserverWmsUrl,
       {
         ...ricePotentialLayerOptions,
         layers: "rice_gis:rice_potential",
@@ -159,20 +157,11 @@
     );
 
     const ricePotentialNLayer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
+      geoserverWmsUrl,
       {
         ...ricePotentialLayerOptions,
         layers: "rice_gis:rice_potential",
         CQL_FILTER: "suitability_class='N'",
-      },
-    );
-
-    const maizePotentialAllLayer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
-      {
-        ...ricePotentialLayerOptions,
-        layers: "rice_gis:maize_potential",
-        styles: MAIZE_POTENTIAL_STYLE,
       },
     );
 
@@ -189,14 +178,11 @@
       ricePotentialS2Layer,
       ricePotentialS3Layer,
       ricePotentialNLayer,
-      maizePotentialAllLayer,
     };
   }
 
   window.MapLayers = {
     createBaseLayers,
     createOverlayLayers,
-    GEOSERVER_WMS_URL,
-    MAIZE_POTENTIAL_STYLE,
   };
 })(window);

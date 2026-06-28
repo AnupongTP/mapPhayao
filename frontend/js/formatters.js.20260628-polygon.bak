@@ -73,31 +73,6 @@
     return `${distance.toFixed(2)} เมตร`;
   }
 
-  function formatPercent(value) {
-    const number = Number(value);
-
-    if (!Number.isFinite(number)) {
-      return EMPTY_TEXT;
-    }
-
-    return `${number.toLocaleString("th-TH", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2,
-    })}%`;
-  }
-
-  function formatList(value) {
-    if (!Array.isArray(value) || value.length === 0) {
-      return EMPTY_TEXT;
-    }
-
-    const items = value
-      .map((item) => formatValue(item))
-      .filter((item) => item !== EMPTY_TEXT);
-
-    return items.length ? items.join(", ") : EMPTY_TEXT;
-  }
-
   function formatCentimeters(value) {
     const number = Number(value);
 
@@ -275,8 +250,6 @@
     formatValue,
     formatCoordinate,
     formatDistance,
-    formatPercent,
-    formatList,
     formatCentimeters,
     formatAccuracy,
     formatDrainage,
