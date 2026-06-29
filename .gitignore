@@ -1,5 +1,17 @@
 node_modules/
-.env
 backend/node_modules/
 archive/**/node_modules/
 *.log
+
+# Local backups
+backups/
+.codex-backup-*/
+*.bak
+*.backup
+*.broken
+
+# Local environment
+.env
+.env.*
+!.env.example
+backend/.env

@@ -1,13 +1,30 @@
-<<<<<<< HEAD
-# mapPhayao
-=======
 # Map Phayao
 
-Project structure for a Leaflet frontend and Express/PostgreSQL backend.
+Web GIS สำหรับตรวจสอบข้อมูลพื้นที่และความเหมาะสมของที่ดิน
+สำหรับปลูกข้าวและข้าวโพดในจังหวัดพะเยา
+
+## Features
+
+- เลือกจุดจากแผนที่ ลากหมุด หรือใช้ GPS
+- วิเคราะห์ข้อมูลด้วย PostgreSQL/PostGIS
+- แสดงความเหมาะสมสำหรับข้าวและข้าวโพด
+- วาดพื้นที่แปลงชั่วคราวและวิเคราะห์แบบ Polygon
+- แสดงชั้นข้อมูลผ่าน Leaflet และ GeoServer WMS
+- GoogleSatellite เป็นแผนที่พื้นหลังเริ่มต้น
+
+## Project structure
+
+- `frontend/` — Leaflet user interface
+- `backend/` — Express API
+- `database/` — migrations and SQL queries
+- `data/` — GIS source datasets
+- `geoserver/` — GeoServer styles
 
 ## Frontend
 
-Open `frontend/index.html` through Apache or another local web server.
+เปิดผ่าน Apache:
+
+`http://localhost/mapphayao1/frontend/index.html`
 
 ## Backend
 
@@ -17,12 +34,24 @@ npm install
 npm run dev
 ```
 
-Copy `.env.example` to `.env` and update the database connection values before running the backend.
+Backend default:
 
-For production CORS, set explicit origins:
+`http://localhost:3000`
 
-```env
-NODE_ENV=production
-CORS_ORIGINS=https://example.com,https://www.example.com
+## Environment
+
+คัดลอก:
+
+```text
+backend/.env.example
 ```
->>>>>>> 2b49873 (first commit)
+
+เป็น:
+
+```text
+backend/.env
+```
+
+แล้วกำหนดค่าการเชื่อม PostgreSQL/PostGIS
+
+ห้าม Commit `.env`, password, token หรือ credential ขึ้น GitHub

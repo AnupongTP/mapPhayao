@@ -1,26 +1,38 @@
 # AGENTS.md
 
-ระบบนี้เป็น Web GIS แบบเลือกจุดสำหรับตรวจสอบข้อมูลพื้นที่และความเหมาะสมของที่ดินสำหรับปลูกข้าวในจังหวัดพะเยา อ่านไฟล์นี้ก่อนแก้โค้ดทุกครั้ง และให้สถานะจริงของโปรเจกต์เป็นแหล่งอ้างอิงหลัก
+ระบบนี้เป็น Web GIS สำหรับตรวจสอบข้อมูลพื้นที่และความเหมาะสมของที่ดิน
+สำหรับปลูกข้าวและข้าวโพดในจังหวัดพะเยา ให้อ่านไฟล์นี้ก่อนแก้โค้ดทุกครั้ง
+และใช้สถานะจริงของ repository เป็นแหล่งอ้างอิงหลัก
 
 ## 1. เป้าหมายและขอบเขต
 
-- Frontend: HTML, CSS, JavaScript, Leaflet
+- Frontend: HTML, CSS, JavaScript, Leaflet, Leaflet Draw
 - Backend: Node.js, Express
 - Database: PostgreSQL/PostGIS ชื่อ `map1`
 - Map service: GeoServer WMS
-- วิเคราะห์จากจุดที่ผู้ใช้ยืนยันเท่านั้น
-- ห้ามเปลี่ยน framework หรือสร้าง frontend, backend, map, route หรือ layer control ซ้ำโดยไม่ได้รับคำสั่ง
+- Leaflet/GPS CRS: EPSG:4326
+- Analysis CRS: EPSG:32647
+- ห้ามเปลี่ยน framework หรือสร้าง frontend, backend, map, route, handler, renderer หรือ Layer Control ซ้ำโดยไม่ได้รับคำสั่ง
 
-## 2. โหมดใช้งานปัจจุบัน: Point-based only
+## 2. Workflow ปัจจุบันของระบบ
+
+ระบบปัจจุบันรองรับ 2 workflow ที่ทำงานคู่กัน:
+
+1. Point analysis จากตำแหน่งที่ผู้ใช้ยืนยัน
+2. Temporary polygon analysis จากพื้นที่แปลงชั่วคราวใน frontend
+
+หากคำสั่งใหม่ขัดกับไฟล์นี้ ให้ยึดสถานะจริงของโค้ดปัจจุบันร่วมกับคำสั่งผู้ใช้รอบนั้นเป็นหลัก
+
+## 3. Point Workflow
 
 ลำดับการใช้งานต้องเป็น:
 
-1. ผู้ใช้คลิกแผนที่ ลากหมุดเดิม หรือกด `หาตำแหน่งปัจจุบัน`
+1. ผู้ใช้คลิกแผนที่ ลาก marker เดิม หรือกด `หาตำแหน่งปัจจุบัน`
 2. อัปเดต Latitude และ Longitude
 3. ยังไม่เรียก API
 4. ผู้ใช้กด `ยืนยันตำแหน่ง`
-5. เรียก `GET /api/rice-suitability/point?lat={lat}&lng={lng}` เพียงครั้งเดียว
-6. แสดงผลข้อมูล GIS ของจุดนั้น
+5. Frontend เรียก `GET /api/rice-suitability/point?lat={lat}&lng={lng}`
+6. แสดงผล suitability ของข้าวและข้าวโพดแยกกัน
 
 กฎสำคัญ:
 
@@ -28,24 +40,40 @@
 - GPS ต้องย้าย marker เดิม ไม่สร้าง marker ใหม่
 - ใช้ `dragend` เท่านั้น ไม่เรียก API ระหว่างลาก
 - ใช้ `AbortController` ยกเลิกคำขอเดิมเมื่อยืนยันซ้ำ
-- ห้ามเรียก point API ตอนเปิดหน้า คลิกแผนที่ ลากหมุด ใช้ GPS หรือเปิด/ปิด layer
+- ห้ามเรียก point API ตอนเปิดหน้า คลิกแผนที่ ลาก marker ใช้ GPS หรือเปิด/ปิด layer
 
-## 3. ห้ามเปิดระบบวาดแปลง
+## 4. Temporary Parcel Workflow
 
-ระบบปัจจุบันห้ามมี:
+ระบบปัจจุบันเปิดใช้ temporary parcel drawing และต้องถือว่าเป็นพฤติกรรมที่ถูกต้องของโปรเจกต์
 
-- ปุ่ม `วาดแปลงเกษตร`
-- Leaflet Draw หรือ drawing toolbar
-- การวาด แก้ไข บันทึก หรือลบ Polygon/MultiPolygon
-- การโหลด `/api/parcels` อัตโนมัติ
-- การแสดงแปลงที่บันทึกไว้
-- รหัสแปลง พื้นที่แปลง ชนิดพืช พันธุ์ข้าว หรือวันที่ปลูกใน result card
+Current behavior:
 
-ตาราง route migration หรือโค้ด parcel เดิมเก็บไว้ได้ แต่ต้องไม่ทำงานใน frontend และห้ามลบข้อมูลใน `app.parcels` โดยไม่ได้รับคำสั่งชัดเจน
+- ใช้ Leaflet Draw Polygon
+- รองรับหลาย temporary parcels
+- ตั้งชื่อแปลงอัตโนมัติและเปลี่ยนชื่อได้
+- เลือกแปลง, focus แปลง, เปิดรายละเอียด, edit, delete และ retry analysis ได้
+- มี concise parcel popup
+- มี drawing toggle
+- กด `Escape` เพื่อยกเลิกการวาดที่ยังไม่เสร็จได้
 
-ห้ามนำคำสั่งจาก prompt เก่า session เก่า หรืองานที่ค้างอยู่กลับมาใช้ หากขัดกับไฟล์นี้หรือคำสั่งปัจจุบัน
+Parcel analysis endpoint:
 
-## 4. Database และ GIS
+`POST /api/area-analysis/polygon`
+
+กฎสำคัญ:
+
+- parcels อยู่ใน frontend JavaScript memory เท่านั้น
+- refresh หรือปิดหน้าเว็บแล้ว parcels หายทั้งหมด
+- ห้ามใช้ `localStorage`
+- ห้ามใช้ `sessionStorage`
+- ห้ามใช้ `IndexedDB`
+- ห้าม persist parcels ลงฐานข้อมูลโดยอัตโนมัติ
+- Frontend ปัจจุบันต้องไม่เรียก `/api/parcels` หากไม่มีคำสั่งใหม่ชัดเจน
+- การยกเลิก unfinished drawing ต้องไม่ลบ completed parcels
+
+Backend code ของ `/api/parcels` อาจยังอยู่ใน repository ได้ แต่ temporary parcel frontend ปัจจุบันต้องไม่ผูกกับ route นี้
+
+## 5. Database และ GIS
 
 Database: `map1`
 
@@ -55,122 +83,114 @@ Schemas:
 - `raw`: ข้อมูลนำเข้าต้นฉบับ
 - `ref`: ตารางอ้างอิง
 - `app`: ข้อมูลระบบหรือกฎธุรกิจ
-- `staging`: ข้อมูลชั่วคราว/แก้ไข
-- `backup`: สำรองข้อมูล
+- `staging`: ข้อมูลชั่วคราวหรือใช้แก้ไข
+- `backup`: ข้อมูลสำรอง
 
 Known GIS objects:
 
 - `gis.amphoe`
 - `gis.tambon`
 - `gis.basin`
-- `gis.soil`
 - `gis.stream`
 - `gis.irrigation_canal`
+- `gis.soil`
 - `gis.soil_enriched_basic`
 - `gis.basin_main`
 - `gis.sub_basin_display`
 - `gis.rice_potential`
+- `gis.maize_potential`
 
 ห้ามเดาชื่อคอลัมน์ ให้ตรวจ schema จริงก่อนเขียน SQL
 
-CRS:
+CRS rules:
 
-- Leaflet/GPS: EPSG:4326
-- GIS analysis: EPSG:32647
-- `ST_MakePoint(longitude, latitude)` แล้ว `ST_Transform(..., 32647)`
+- รับพิกัดจาก Leaflet/GPS เป็น EPSG:4326
+- สร้างจุดด้วย `ST_MakePoint(longitude, latitude)`
+- transform ไป EPSG:32647 ก่อนใช้วิเคราะห์ GIS
 - ห้ามใช้ `ST_SetSRID` แทนการ transform พิกัด
 
-SQL:
+SQL rules:
 
 - ใช้ parameterized SQL เท่านั้น
 - Polygon lookup ใช้ `ST_Covers`
-- Nearest feature ใช้ `<->` และคำนวณระยะจริงด้วย `ST_Distance`
+- nearest candidate ordering ใช้ `<->`
+- ระยะจริงใช้ `ST_Distance`
 - ไม่ส่ง geometry กลับ API หากไม่จำเป็น
 - ห้าม `SELECT *`
-- ตรวจ SRID, geometry type, row count, null และ invalid geometry ก่อนแก้ table/view
+- ตรวจ schema จริง, SRID, geometry type, row count, null และ invalid geometry ก่อนแก้ SQL สำคัญ
 
-## 5. ผลความเหมาะสมของข้าว
+## 6. Suitability Results
 
-`gis.rice_potential` คือชั้นข้อมูล Potential ข้าวของกรมพัฒนาที่ดิน ใช้ overlay จุดที่ยืนยันแล้วเพื่อคืนค่า:
+Point และ polygon result ต้องรองรับทั้ง:
+
+- `riceLandSuitability`
+- `maizeLandSuitability`
+
+Classes:
 
 - `S1` = เหมาะสมมาก
 - `S2` = เหมาะสมปานกลาง
 - `S3` = เหมาะสมน้อย
 - `N` = ไม่เหมาะสม
 
-แสดงชื่อหัวข้อว่า:
-
-`ความเหมาะสมของที่ดินสำหรับปลูกข้าว`
-
-ต้องแยกข้อมูลออกเป็น:
-
-- `soil`: รายละเอียดชุดดินและสถานะความครบถ้วน
-- `riceLandSuitability`: ผล Potential จากกรมพัฒนาที่ดิน
-- `suitability.finalClass`: ผลรวมทุกปัจจัยในอนาคต
-
-กฎ:
+กฎสำคัญ:
 
 - `NO_DATA` ไม่ใช่ `N`
-- `PARTIAL_DATA` ไม่ใช่ `N`
-- soil เป็น `PARTIAL_DATA` ได้ แม้ Potential จะมี S1/S2/S3/N
-- ห้ามคัดลอก Potential ไปเป็น `finalClass`
-- จนกว่าน้ำ ชลประทาน และภูมิประเทศจะครบ ให้ `finalClass: null` และสถานะรวมเป็น `PARTIALLY_EVALUATED` หรือ `NOT_EVALUATED` ตามโค้ดจริง
-- ห้ามสร้าง class, ปีข้อมูล, คุณสมบัติดิน หรือคำแนะนำพันธุ์ข้าวขึ้นเอง
+- `NO_COVERAGE` ไม่ใช่ `N`
+- ต้องแสดง rice และ maize แยกกัน
+- ห้ามสร้าง combined crop score
+- ห้ามแนะนำว่าควรปลูกพืชชนิดใด
+- ห้ามสร้างค่าข้อมูล GIS ที่ไม่มีจริง
+- ต้องคง source attribution ให้มองเห็นได้
 
-สถานะข้อมูลดิน:
+## 7. API และการแสดงผล
 
-- `AVAILABLE` = มีข้อมูลพร้อมใช้งาน
-- `PARTIAL_DATA` = มีข้อมูลดินบางส่วน
-- `NO_DATA` = ข้อมูลไม่เพียงพอ
-- `NOT_EVALUATED` = ยังไม่ได้ประเมิน
+Current endpoints:
 
-## 6. API และการแสดงผล
+- `GET /api/health`
+- `GET /api/health/database`
+- `GET /api/rice-suitability/point`
+- `POST /api/area-analysis/polygon`
 
-Point endpoint:
+Validation สำหรับ point endpoint:
 
-`GET /api/rice-suitability/point?lat={latitude}&lng={longitude}`
-
-Validation:
-
-- lat/lng ต้องมีและเป็นตัวเลข
-- latitude อยู่ระหว่าง -90 ถึง 90
-- longitude อยู่ระหว่าง -180 ถึง 180
+- `lat` และ `lng` ต้องมีและเป็นตัวเลข
+- `latitude` อยู่ระหว่าง -90 ถึง 90
+- `longitude` อยู่ระหว่าง -180 ถึง 180
 - ค่าไม่ถูกต้องตอบ HTTP 400
 - database error ตอบ HTTP 500 ผ่าน error handler เดิม
 - จุดนอกพื้นที่ตอบ HTTP 200 พร้อม `success: true, found: false`
 
-ผลลัพธ์ควรมี:
+Frontend rules:
 
-- clicked point
-- จังหวัด อำเภอ ตำบล ลุ่มน้ำหลัก/ย่อย
-- ข้อมูลชุดดิน
-- ลำน้ำและคลองชลประทานที่ใกล้ที่สุด
-- `riceLandSuitability`
-- `suitability` โดย `finalClass` ยังเป็น null
+- แสดงรายละเอียดหลังผู้ใช้กดยืนยันตำแหน่งหรือเลือก parcel ที่มีผลวิเคราะห์แล้วเท่านั้น
+- แสดง suitability ของข้าวและข้าวโพดแยกกัน
+- Popup ของจุดและ parcel ต้องเป็นข้อมูลสรุปเท่านั้น
+- ค่า `null`, `undefined`, `NaN` หรือค่าว่าง ให้แสดง `ไม่มีข้อมูล`
+- ระยะ < 1,000 เมตรใช้เมตร
+- ระยะ >= 1,000 เมตรใช้กิโลเมตร ไม่เกิน 2 ตำแหน่ง
+- ห้ามใช้ raw API content กับ `innerHTML` โดยไม่ sanitize
+- ใช้ `textContent` หรือ safe DOM เป็นหลัก
 
-Frontend:
+## 8. Leaflet และ GeoServer
 
-- แสดงรายละเอียดหลังผู้ใช้กดยืนยันเท่านั้น
-- แสดง S1/S2/S3/N พร้อมคำภาษาไทยและแหล่งข้อมูลกรมพัฒนาที่ดิน
-- แสดงผลรวมแยกเป็น `ยังไม่ได้ประเมินครบทุกปัจจัย`
-- Popup แสดงเฉพาะข้อมูลสรุป
-- ค่า null/undefined/NaN/ว่าง ให้แสดง `ไม่มีข้อมูล`
-- ระยะ < 1,000 เมตรใช้เมตร; ตั้งแต่ 1,000 เมตรใช้กิโลเมตร ไม่เกิน 2 ตำแหน่ง
-- ห้ามใช้ raw API content กับ `innerHTML` โดยไม่ sanitize; ใช้ `textContent` หรือ safe DOM
+Basemap ปัจจุบัน:
 
-## 7. Leaflet และ GeoServer
+- `GoogleSatellite` เป็น basemap ที่ active ตอนเริ่ม
+- `GoogleSatellite` อยู่ลำดับแรกใน Layer Control
+- `OpenStreetMap` อยู่ลำดับที่สอง
+- ตอนเริ่มต้องมี active basemap เพียงหนึ่งตัว
 
-- OpenStreetMap เป็น basemap เริ่มต้น
-- เปิด basemap เริ่มต้นเพียงหนึ่งตัว
-- Optional overlays ต้องปิดไว้ก่อน แต่ยังอยู่ใน Layer Control
-- Layer Control อยู่ `topleft` ใต้ zoom control
+Overlay rules:
+
+- Optional WMS overlays ควรปิดไว้ก่อน ยกเว้นโค้ดปัจจุบันเปิดใช้อย่างชัดเจน
+- Layer Control อยู่ `topleft`
 - ห้ามสร้าง Layer Control ซ้ำ
 - WMS style แก้ใน GeoServer SLD ไม่ใช่ Leaflet CSS
 - ตรวจ workspace, layer name, CRS, bounding box, style และ Layer Preview ก่อนเพิ่ม WMS
-- `rice_gis:basin_main` และ `rice_gis:sub_basin_display` เป็น optional overlay
 - marker, popup และ UI ต้องอยู่เหนือ WMS polygons
 
-## 8. CORS, security และ middleware
+## 9. CORS, Security และ Middleware
 
 Development origins:
 
@@ -184,10 +204,10 @@ Production origins มาจาก `CORS_ORIGINS`
 ห้าม:
 
 - ใช้ `mode: "no-cors"`
-- hardcode password หรือ credential
+- hardcode password, token หรือ credential
 - เปิด PostgreSQL ให้ frontend ติดต่อโดยตรง
-- ต่อ SQL จาก input ของผู้ใช้
-- แสดง stack trace, connection string หรือ path ภายใน
+- ต่อ SQL จาก input ผู้ใช้
+- แสดง stack trace, connection string หรือ path ภายในใน response
 
 Middleware order:
 
@@ -197,69 +217,75 @@ Middleware order:
 4. 404 middleware
 5. error handler
 
-ต้องรักษา endpoints:
-
-- `GET /api/health`
-- `GET /api/health/database`
-
-## 9. วิธีทำงานของ Codex
+## 10. วิธีทำงานของ Codex
 
 ก่อนแก้:
 
 1. ตรวจ project tree และไฟล์จริง
-2. ตรวจโค้ด frontend/backend/SQL ที่เกี่ยวข้อง
-3. ตรวจ schema, route และ layer จริง ห้ามเดา
+2. ตรวจโค้ด frontend, backend, SQL, route และ layer ที่เกี่ยวข้อง
+3. ใช้สถานะจริงของ repository เป็น source of truth
 4. รายงานสั้น ๆ ว่าจะเปลี่ยนไฟล์ใดและเพราะอะไร
-5. สำรองไฟล์ก่อนแก้ หาก workspace ไม่มี Git
 
 ระหว่างแก้:
 
 - ทำการเปลี่ยนแปลงให้น้อยและตรงจุดที่สุด
 - รักษาโครงสร้างและ coding style เดิม
 - ห้ามสร้าง implementation ซ้ำ
+- ห้าม duplicate map, Layer Control, event handler, route หรือ renderer
 - ห้ามแก้ไฟล์หรือฐานข้อมูลที่ไม่เกี่ยวข้อง
-- ห้ามใช้ destructive Git/database commands
-- Current user request + ไฟล์นี้ มีลำดับสูงกว่า prompt หรือ task เก่า
+- ห้ามทำ whole-file encoding conversion
+- ต้องรักษา UTF-8 ภาษาไทยให้ถูกต้อง
+- ใช้ Git diff เป็น backup หลักสำหรับ source change ปกติ
+- ห้ามสร้าง tracked backup files
+- หากมีคำสั่งให้ทำ manual backup โดยชัดเจน ให้เก็บไว้ใต้ path ที่ถูก ignore เท่านั้น
+- ห้ามใช้ destructive Git/database commands โดยไม่มีคำสั่งชัดเจน
 
 หลังแก้:
 
-- รายงานไฟล์ที่แก้/สร้าง
-- รายงาน database หรือ GeoServer changes
-- ระบุสิ่งที่ทดสอบจริงและสิ่งที่ไม่ได้ทดสอบ
+- รายงานไฟล์ที่แก้
+- รายงาน database หรือ GeoServer changes ถ้ามี
+- ระบุสิ่งที่ทดสอบจริง
+- ระบุสิ่งที่ไม่ได้ทดสอบและเหตุผล
 - ห้ามอ้างว่าทดสอบผ่านหากไม่ได้รันจริง
 
-## 10. การทดสอบขั้นต่ำ
+## 11. การทดสอบขั้นต่ำ
 
 Frontend:
 
-- หน้าเว็บและ OSM โหลดได้
-- optional overlays ปิดตอนเริ่ม
-- คลิกแผนที่/ลาก marker/GPS อัปเดต marker เดิมและพิกัด
-- ไม่มีการเรียก API ก่อนยืนยัน
-- ยืนยันหนึ่งครั้งเรียก point API หนึ่งครั้ง
-- ไม่มีปุ่มวาดแปลง ไม่มี Leaflet Draw และไม่มี request `/api/parcels`
-- ผล S1/S2/S3/N แสดงตาม API จริง
-- `found: false` แสดงข้อความพื้นที่ไม่ครอบคลุม
+- หน้าเว็บโหลดได้ และ GoogleSatellite active ตอนเริ่ม
+- Layer Control เรียง `GoogleSatellite` ก่อน `OpenStreetMap`
+- optional overlays มีสถานะตรงกับโค้ดจริง
+- คลิกแผนที่, ลาก marker และ GPS อัปเดต marker เดิมและพิกัด
+- ไม่มี point API call ก่อนกดยืนยัน
+- กดยืนยันหนึ่งครั้งเรียก point API หนึ่งครั้ง
+- ผล point แสดงข้าวและข้าวโพดแยกกัน
+- วาด temporary polygon ได้
+- draw toggle ทำงาน และกด `Escape` เพื่อยกเลิก unfinished drawing ได้
+- completed temporary parcels ต้องไม่หายเมื่อยกเลิก unfinished drawing
+- polygon analysis ผ่าน `POST /api/area-analysis/polygon`
+- refresh clears temporary parcels
+- frontend ต้องไม่เรียก `/api/parcels`
+- ไม่มี duplicate handlers หรือ duplicate Layer Control
 - ไม่มี console error ใหม่
+- ภาษาไทยยังเป็น UTF-8 ถูกต้อง
 
 Backend:
 
 - `/api/health` = 200
 - `/api/health/database` = 200
-- ทดสอบ point API ทั้งพิกัดถูกต้อง นอกพื้นที่ ค่าหาย ค่าผิดชนิด และเกินช่วง
-- response ไม่มี geometry/credential ที่ไม่จำเป็น
-- ภาษาไทยไม่เสีย
-- `finalClass` ยังเป็น null
+- ทดสอบ point API ทั้งพิกัดถูกต้อง, นอกพื้นที่, ค่าหาย, ค่าผิดชนิด และเกินช่วง
+- ทดสอบ polygon API ด้วย payload ที่ถูกต้องและ payload ที่ผิดรูปแบบ
+- response ไม่มี geometry หรือ credential ที่ไม่จำเป็น
 
-## 11. หลักการสุดท้าย
+## 12. หลักการสุดท้าย
 
 ให้ความสำคัญตามลำดับ:
 
 1. ความถูกต้องของ GIS และข้อมูลจริง
 2. ไม่สร้างผลหรือข้อสรุปที่ไม่มีแหล่งรองรับ
-3. Point-based workflow ที่เรียบง่าย
-4. ภาษาไทยที่เข้าใจง่าย
+3. ความแยกชัดเจนระหว่าง point workflow กับ temporary parcel workflow
+4. ภาษาไทยที่เข้าใจง่ายและ UTF-8 ไม่เสีย
 5. ความปลอดภัยและโค้ดที่ดูแลต่อได้
 6. การแก้ไขให้น้อยและทดสอบตามขอบเขต
 
-สถานะจริงของ repository, database และ GeoServer คือแหล่งอ้างอิงหลัก แต่ห้ามขัดกับกฎถาวรในไฟล์นี้
+สถานะจริงของ repository, database และ GeoServer คือแหล่งอ้างอิงหลัก
