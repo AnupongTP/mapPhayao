@@ -657,7 +657,7 @@
     const overlayLayers = window.MapLayers.createOverlayLayers(map);
 
     appMap = map;
-    baseLayers.googleSatellite.addTo(map);
+    baseLayers.openStreetMap.addTo(map);
     window.MapUi.addLayerControl(map, baseLayers, overlayLayers);
     window.MapUi.setupLocationPanel({
       onLocate: requestCurrentLocation,

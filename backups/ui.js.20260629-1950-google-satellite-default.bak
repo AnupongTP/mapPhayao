@@ -1305,8 +1305,8 @@
   return (window.MapUi = {
     addLayerControl: function (map, baseLayers, overlayLayers) {
       const layerControlBaseLayers = {
-        GoogleSatellite: baseLayers.googleSatellite,
         OpenStreetMap: baseLayers.openStreetMap,
+        GoogleSatellite: baseLayers.googleSatellite,
       };
 
       const layerControlOverlayLayers = {};
