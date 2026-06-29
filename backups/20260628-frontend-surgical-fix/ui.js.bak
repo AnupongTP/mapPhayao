@@ -1,4 +1,4 @@
-﻿(function (window) {
+(function (window) {
   const formatters = window.MapFormatters;
   const TEXT = {
     empty: formatters.EMPTY_TEXT,
@@ -905,19 +905,19 @@
     );
 
     appendSummaryGroup(body, TEXT.riceSuitabilityTitle, [
-      { label: "ผลที่จุดนี้", value: riceDisplay.label },
-      { label: "วิธีประเมิน", value: data.riceLandSuitability?.evaluationMethod },
-      { label: "แหล่งข้อมูล", value: data.riceLandSuitability?.sourceName },
+      { label: "เธเธฅเธ—เธตเนเธเธธเธ”เธเธตเน", value: riceDisplay.label },
+      { label: "เธงเธดเธเธตเธเธฃเธฐเน€เธกเธดเธ", value: data.riceLandSuitability?.evaluationMethod },
+      { label: "เนเธซเธฅเนเธเธเนเธญเธกเธนเธฅ", value: data.riceLandSuitability?.sourceName },
     ]);
 
     appendSummaryGroup(body, TEXT.maizeSuitabilityTitle, [
-      { label: "ผลที่จุดนี้", value: maizeDisplay.label },
-      { label: "วิธีประเมิน", value: data.maizeLandSuitability?.evaluationMethod },
-      { label: "แหล่งข้อมูล", value: data.maizeLandSuitability?.sourceName },
+      { label: "เธเธฅเธ—เธตเนเธเธธเธ”เธเธตเน", value: maizeDisplay.label },
+      { label: "เธงเธดเธเธตเธเธฃเธฐเน€เธกเธดเธ", value: data.maizeLandSuitability?.evaluationMethod },
+      { label: "เนเธซเธฅเนเธเธเนเธญเธกเธนเธฅ", value: data.maizeLandSuitability?.sourceName },
     ]);
 
-    appendSummaryGroup(body, "หมายเหตุ", [
-      { label: "คำอธิบาย", value: TEXT.riceSuitabilitySource },
+    appendSummaryGroup(body, "เธซเธกเธฒเธขเน€เธซเธ•เธธ", [
+      { label: "เธเธณเธญเธเธดเธเธฒเธข", value: TEXT.riceSuitabilitySource },
     ]);
 
     footer.append(createElement("span", "suitability-status-pill", TEXT.incompleteEvaluation));

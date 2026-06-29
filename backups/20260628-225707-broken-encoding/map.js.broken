@@ -39,7 +39,6 @@
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
       return window.crypto.randomUUID();
     }
-
     return `tmp-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
   }
 
@@ -77,6 +76,7 @@
     const usedNames = new Set(
       [...temporaryParcels.values()].map((parcel) => parcel.name.trim()),
     );
+
     let index = 1;
     while (usedNames.has(`แปลงที่ ${index}`)) {
       index += 1;
@@ -91,8 +91,8 @@
     if (parcel.analysisStatus === "error") {
       return window.MapUi.text.parcelAnalyzeError;
     }
-    if (parcel.analysis && parcel.analysis.parcel) {
-      return `${window.MapFormatters.formatAreaRai(parcel.analysis.parcel.areaRai)}`;
+    if (parcel.analysis?.parcel) {
+      return window.MapFormatters.formatAreaRai(parcel.analysis.parcel.areaRai);
     }
     return window.MapUi.text.notEvaluated;
   }
@@ -120,7 +120,7 @@
   }
 
   function applyParcelStyle(parcel) {
-    if (!parcel || !parcel.layer) {
+    if (!parcel?.layer) {
       return;
     }
 
@@ -153,19 +153,18 @@
 
   function buildTemporaryParcelPopup(parcel) {
     if (parcel.analysisStatus !== "success" || !parcel.analysis) {
-      return window.MapUi.createParcelPopupContent({
-        ...parcel,
-        analysis: {
-          name: parcel.name,
-          parcel: {
-            areaRai: null,
+      return window.MapUi.createParcelPopupContent(
+        {
+          ...parcel,
+          analysis: {
+            name: parcel.name,
+            parcel: { areaRai: null },
+            riceLandSuitability: {},
+            maizeLandSuitability: {},
           },
-          riceLandSuitability: {},
-          maizeLandSuitability: {},
         },
-      }, {
-        onOpenDetails: openTemporaryParcelDetails,
-      });
+        { onOpenDetails: openTemporaryParcelDetails },
+      );
     }
 
     return window.MapUi.createParcelPopupContent(parcel, {
@@ -178,6 +177,14 @@
     if (openPopup) {
       parcel.layer.openPopup();
     }
+  }
+
+  function closeResultPopup() {
+    if (!resultPopup) {
+      return;
+    }
+    resultPopup.remove();
+    resultPopup = null;
   }
 
   function openParcelPopup(parcel) {
@@ -215,9 +222,7 @@
     refreshParcelStyles();
     refreshTemporaryParcelList();
     window.MapUi.renderParcelResult(parcel);
-    if (parcel.layer && parcel.layer.closePopup) {
-      parcel.layer.closePopup();
-    }
+    parcel.layer?.closePopup?.();
   }
 
   function focusTemporaryParcel(parcelId) {
@@ -250,7 +255,7 @@
     }
 
     parcel.name = nextName.trim();
-    if (parcel.analysis && parcel.analysis.name) {
+    if (parcel.analysis?.name) {
       parcel.analysis.name = parcel.name;
     }
     updateTemporaryParcelPopup(parcel, false);
@@ -274,9 +279,7 @@
       return;
     }
 
-    if (parcel.requestController) {
-      parcel.requestController.abort();
-    }
+    parcel.requestController?.abort();
 
     parcel.geometry = parcel.layer.toGeoJSON().geometry;
     parcel.analysis = null;
@@ -341,20 +344,41 @@
     await analyzeTemporaryParcel(parcelId);
   }
 
-  async function handleDrawCreated(event) {
+  function resetParcelDrawingState() {
     isParcelDrawingActive = false;
     syncLocationActionState();
     window.MapUi.setParcelControlState({
-      isEditing: false,
-      drawDisabled: false,
+      isEditing: Boolean(editingTemporaryParcelId),
+      drawDisabled: Boolean(editingTemporaryParcelId),
+      isDrawing: false,
     });
+  }
+
+  function cancelParcelDrawing() {
+    if (!parcelDrawHandler || !isParcelDrawingActive) {
+      return;
+    }
+
+    parcelDrawHandler.disable();
+    resetParcelDrawingState();
+  }
+
+  function handleParcelDrawKeydown(event) {
+    if (event.key !== "Escape" || !isParcelDrawingActive) {
+      return;
+    }
+    event.preventDefault();
+    cancelParcelDrawing();
+  }
+
+  async function handleDrawCreated(event) {
+    resetParcelDrawingState();
 
     const layer = event.layer;
     layer.setStyle(TEMPORARY_PARCEL_STYLE);
 
     const defaultName = getNextAvailableParcelName();
     const parcelName = await requestParcelName(defaultName);
-
     if (!parcelName) {
       return;
     }
@@ -363,11 +387,12 @@
   }
 
   function startParcelDrawing() {
-    if (isParcelInteractionLocked()) {
+    if (editingTemporaryParcelId || !parcelDrawHandler) {
       return;
     }
 
-    if (!parcelDrawHandler) {
+    if (isParcelDrawingActive) {
+      cancelParcelDrawing();
       return;
     }
 
@@ -375,7 +400,8 @@
     syncLocationActionState();
     window.MapUi.setParcelControlState({
       isEditing: false,
-      drawDisabled: true,
+      drawDisabled: false,
+      isDrawing: true,
     });
     parcelDrawHandler.enable();
   }
@@ -395,6 +421,7 @@
     window.MapUi.setParcelControlState({
       isEditing: true,
       drawDisabled: true,
+      isDrawing: false,
     });
     syncLocationActionState();
     renderSelectedTemporaryParcel();
@@ -419,6 +446,7 @@
     window.MapUi.setParcelControlState({
       isEditing: false,
       drawDisabled: false,
+      isDrawing: false,
     });
     syncLocationActionState();
     await analyzeTemporaryParcel(parcel.id);
@@ -442,6 +470,7 @@
     window.MapUi.setParcelControlState({
       isEditing: false,
       drawDisabled: false,
+      isDrawing: false,
     });
     syncLocationActionState();
     refreshParcelStyles();
@@ -472,9 +501,7 @@
       return;
     }
 
-    if (parcel.requestController) {
-      parcel.requestController.abort();
-    }
+    parcel.requestController?.abort();
 
     if (editingTemporaryParcelId === parcelId) {
       editingTemporaryParcelId = null;
@@ -482,6 +509,7 @@
       window.MapUi.setParcelControlState({
         isEditing: false,
         drawDisabled: false,
+        isDrawing: false,
       });
     }
 
@@ -498,38 +526,8 @@
     syncLocationActionState();
   }
 
-  function initTemporaryParcels(map) {
-    temporaryParcelLayers.addTo(map);
-    parcelDrawHandler = new L.Draw.Polygon(map, {
-      allowIntersection: false,
-      repeatMode: false,
-      shapeOptions: TEMPORARY_PARCEL_STYLE,
-    });
-
-    map.on(L.Draw.Event.CREATED, handleDrawCreated);
-    map.on(L.Draw.Event.DRAWSTOP, () => {
-      isParcelDrawingActive = false;
-      syncLocationActionState();
-      window.MapUi.setParcelControlState({
-        isEditing: Boolean(editingTemporaryParcelId),
-        drawDisabled: Boolean(editingTemporaryParcelId),
-      });
-    });
-
-    window.MapUi.addParcelDrawControl(map, {
-      onDraw: startParcelDrawing,
-      onSaveEdit: saveTemporaryParcelEdit,
-      onCancelEdit: cancelTemporaryParcelEdit,
-    });
-    window.MapUi.setParcelControlState({
-      isEditing: false,
-      drawDisabled: false,
-    });
-    refreshTemporaryParcelList();
-  }
-
   function applyLeafletDrawThaiText() {
-    if (!L.drawLocal || !L.drawLocal.draw) {
+    if (!L.drawLocal?.draw) {
       return;
     }
 
@@ -554,73 +552,10 @@
     };
   }
 
-  function resetParcelDrawingState() {
-    isParcelDrawingActive = false;
-    syncLocationActionState();
-    window.MapUi.setParcelControlState({
-      isEditing: Boolean(editingTemporaryParcelId),
-      drawDisabled: Boolean(editingTemporaryParcelId),
-      isDrawing: false,
-    });
-  }
-
-  function cancelParcelDrawing() {
-    if (!parcelDrawHandler || !isParcelDrawingActive) {
-      return;
-    }
-
-    parcelDrawHandler.disable();
-    resetParcelDrawingState();
-  }
-
-  function handleParcelDrawKeydown(event) {
-    if (event.key !== "Escape" || !isParcelDrawingActive) {
-      return;
-    }
-
-    event.preventDefault();
-    cancelParcelDrawing();
-  }
-
-  async function handleDrawCreated(event) {
-    resetParcelDrawingState();
-
-    const layer = event.layer;
-    layer.setStyle(TEMPORARY_PARCEL_STYLE);
-
-    const defaultName = getNextAvailableParcelName();
-    const parcelName = await requestParcelName(defaultName);
-
-    if (!parcelName) {
-      return;
-    }
-
-    await registerTemporaryParcel(layer, parcelName.trim());
-  }
-
-  function startParcelDrawing() {
-    if (editingTemporaryParcelId || !parcelDrawHandler) {
-      return;
-    }
-
-    if (isParcelDrawingActive) {
-      cancelParcelDrawing();
-      return;
-    }
-
-    isParcelDrawingActive = true;
-    syncLocationActionState();
-    window.MapUi.setParcelControlState({
-      isEditing: false,
-      drawDisabled: false,
-      isDrawing: true,
-    });
-    parcelDrawHandler.enable();
-  }
-
   function initTemporaryParcels(map) {
     temporaryParcelLayers.addTo(map);
     applyLeafletDrawThaiText();
+
     parcelDrawHandler = new L.Draw.Polygon(map, {
       allowIntersection: false,
       repeatMode: false,
@@ -642,32 +577,13 @@
       onSaveEdit: saveTemporaryParcelEdit,
       onCancelEdit: cancelTemporaryParcelEdit,
     });
+
     window.MapUi.setParcelControlState({
       isEditing: false,
       drawDisabled: false,
       isDrawing: false,
     });
     refreshTemporaryParcelList();
-  }
-
-  function initMap() {
-    const mapConfig = window.AppConfig.map;
-    const map = L.map("map").setView(mapConfig.center, mapConfig.zoom);
-    const baseLayers = window.MapLayers.createBaseLayers();
-    const overlayLayers = window.MapLayers.createOverlayLayers(map);
-
-    appMap = map;
-    baseLayers.openStreetMap.addTo(map);
-    window.MapUi.addLayerControl(map, baseLayers, overlayLayers);
-    window.MapUi.setupLocationPanel({
-      onLocate: requestCurrentLocation,
-      onConfirm: confirmSelectedLocation,
-    });
-    initTemporaryParcels(map);
-
-    map.on("click", handleMapClick);
-
-    window.appMap = map;
   }
 
   function handleMapClick(event) {
@@ -693,7 +609,6 @@
     }
 
     const position = event.target.getLatLng();
-
     selectedLocation = {
       lat: position.lat,
       lng: position.lng,
@@ -710,19 +625,16 @@
       window.MapUi.showLocationMessage(window.MapUi.text.parcelEditLocked);
       return;
     }
-
     if (!window.isSecureContext) {
       window.MapUi.showLocationMessage(window.MapUi.text.secureContext);
       return;
     }
-
-    window.MapUi.showGpsLoading();
-
     if (!navigator.geolocation) {
       window.MapUi.showLocationMessage(window.MapUi.text.unsupported);
       return;
     }
 
+    window.MapUi.showGpsLoading();
     navigator.geolocation.getCurrentPosition(
       handleLocationSuccess,
       handleLocationError,
@@ -754,11 +666,8 @@
 
   function updateLocationMarker(location) {
     const latLng = [location.lat, location.lng];
-
     if (!locationMarker) {
-      locationMarker = L.marker(latLng, {
-        draggable: true,
-      }).addTo(appMap);
+      locationMarker = L.marker(latLng, { draggable: true }).addTo(appMap);
       locationMarker.on("dragend", handleMarkerDragEnd);
     } else {
       locationMarker.setLatLng(latLng);
@@ -767,7 +676,6 @@
 
   function updateAccuracyCircle(location) {
     const latLng = [location.lat, location.lng];
-
     if (!accuracyCircle) {
       accuracyCircle = L.circle(latLng, {
         radius: location.accuracy || 0,
@@ -788,7 +696,6 @@
     if (!accuracyCircle) {
       return;
     }
-
     appMap.removeLayer(accuracyCircle);
     accuracyCircle = null;
   }
@@ -798,16 +705,12 @@
       window.MapUi.showLocationMessage(window.MapUi.text.parcelEditLocked);
       return;
     }
-
     if (!isValidSelectedLocation()) {
       window.MapUi.showLocationMessage(window.MapUi.text.positionUnavailable);
       return;
     }
 
-    if (pointRequestController) {
-      pointRequestController.abort();
-    }
-
+    pointRequestController?.abort();
     pointRequestController = new AbortController();
     const requestController = pointRequestController;
 
@@ -835,7 +738,6 @@
       if (error.name === "AbortError") {
         return;
       }
-
       window.MapUi.showApiError();
     } finally {
       if (pointRequestController === requestController) {
@@ -850,20 +752,29 @@
     }
 
     closeResultPopup();
-
     resultPopup = L.popup()
       .setLatLng(locationMarker.getLatLng())
       .setContent(window.MapUi.createPopupContent(data))
       .openOn(appMap);
   }
 
-  function closeResultPopup() {
-    if (!resultPopup) {
-      return;
-    }
+  function initMap() {
+    const mapConfig = window.AppConfig.map;
+    const map = L.map("map").setView(mapConfig.center, mapConfig.zoom);
+    const baseLayers = window.MapLayers.createBaseLayers();
+    const overlayLayers = window.MapLayers.createOverlayLayers(map);
 
-    resultPopup.remove();
-    resultPopup = null;
+    appMap = map;
+    baseLayers.openStreetMap.addTo(map);
+    window.MapUi.addLayerControl(map, baseLayers, overlayLayers);
+    window.MapUi.setupLocationPanel({
+      onLocate: requestCurrentLocation,
+      onConfirm: confirmSelectedLocation,
+    });
+    initTemporaryParcels(map);
+
+    map.on("click", handleMapClick);
+    window.appMap = map;
   }
 
   window.addEventListener("DOMContentLoaded", initMap);

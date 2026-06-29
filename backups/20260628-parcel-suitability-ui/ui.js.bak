@@ -1,4 +1,4 @@
-﻿(function (window) {
+(function (window) {
   const formatters = window.MapFormatters;
   const TEXT = {
     empty: formatters.EMPTY_TEXT,
@@ -415,7 +415,7 @@
     };
   }
 
-  function legacyRenderPointSuitabilitySummaryCard(data) {
+  function renderPointSuitabilitySummaryCard(data) {
     const card = createElement("article", "suitability-summary-card");
     const header = createElement(
       "header",
@@ -462,7 +462,7 @@
     return card;
   }
 
-  function legacyRenderResultPanel(data) {
+  function renderResultPanel(data) {
     const panel = ensureResultPanel();
     const content = panel.querySelector("#result-panel-content");
     const payload = data || {};
@@ -718,7 +718,7 @@
     parent.appendChild(section);
   }
 
-  function legacyRenderParcelResult(parcelState) {
+  function renderParcelResult(parcelState) {
     const panel = ensureResultPanel();
     const content = panel.querySelector("#result-panel-content");
     content.replaceChildren();
@@ -822,6 +822,14 @@
   function createParcelPopupContent(parcelState, options = {}) {
     const analysis = parcelState.analysis || {};
     const parcel = analysis.parcel || {};
+    const riceSummary = describeSuitabilityCoverage(
+      analysis.riceLandSuitability,
+      TEXT.parcelNoRiceCoverage,
+    );
+    const maizeSummary = describeSuitabilityCoverage(
+      analysis.maizeLandSuitability,
+      TEXT.parcelNoMaizeCoverage,
+    );
     const container = createElement("div", "map-popup");
     const title = createElement("p", "parcel-popup-title", parcelState.name);
     const list = createElement("dl", "popup-list");
@@ -834,22 +842,8 @@
     detailsButton.type = "button";
 
     appendField(list, "พื้นที่", parcel.areaRai, formatters.formatAreaRai);
-    appendField(
-      list,
-      "ข้าว",
-      getParcelPopupSuitabilityText(
-        analysis.riceLandSuitability,
-        TEXT.parcelNoRiceCoverage,
-      ),
-    );
-    appendField(
-      list,
-      "ข้าวโพด",
-      getParcelPopupSuitabilityText(
-        analysis.maizeLandSuitability,
-        TEXT.parcelNoMaizeCoverage,
-      ),
-    );
+    appendField(list, "ข้าว", riceSummary.headline.replace(/^พื้นที่ส่วนใหญ่อยู่ในระดับ\s*/u, "พื้นที่ส่วนใหญ่อยู่ในระดับ ").replace(/^พื้นที่ทั้งหมดอยู่ในระดับ\s*/u, "พื้นที่ทั้งหมดอยู่ในระดับ "));
+    appendField(list, "ข้าวโพด", maizeSummary.headline.replace(/^พื้นที่ส่วนใหญ่อยู่ในระดับ\s*/u, "พื้นที่ส่วนใหญ่อยู่ในระดับ ").replace(/^พื้นที่ทั้งหมดอยู่ในระดับ\s*/u, "พื้นที่ทั้งหมดอยู่ในระดับ "));
 
     if (typeof options.onOpenDetails === "function") {
       detailsButton.addEventListener("click", (event) => {
@@ -905,19 +899,19 @@
     );
 
     appendSummaryGroup(body, TEXT.riceSuitabilityTitle, [
-      { label: "ผลที่จุดนี้", value: riceDisplay.label },
-      { label: "วิธีประเมิน", value: data.riceLandSuitability?.evaluationMethod },
-      { label: "แหล่งข้อมูล", value: data.riceLandSuitability?.sourceName },
+      { label: "เธเธฅเธ—เธตเนเธเธธเธ”เธเธตเน", value: riceDisplay.label },
+      { label: "เธงเธดเธเธตเธเธฃเธฐเน€เธกเธดเธ", value: data.riceLandSuitability?.evaluationMethod },
+      { label: "เนเธซเธฅเนเธเธเนเธญเธกเธนเธฅ", value: data.riceLandSuitability?.sourceName },
     ]);
 
     appendSummaryGroup(body, TEXT.maizeSuitabilityTitle, [
-      { label: "ผลที่จุดนี้", value: maizeDisplay.label },
-      { label: "วิธีประเมิน", value: data.maizeLandSuitability?.evaluationMethod },
-      { label: "แหล่งข้อมูล", value: data.maizeLandSuitability?.sourceName },
+      { label: "เธเธฅเธ—เธตเนเธเธธเธ”เธเธตเน", value: maizeDisplay.label },
+      { label: "เธงเธดเธเธตเธเธฃเธฐเน€เธกเธดเธ", value: data.maizeLandSuitability?.evaluationMethod },
+      { label: "เนเธซเธฅเนเธเธเนเธญเธกเธนเธฅ", value: data.maizeLandSuitability?.sourceName },
     ]);
 
-    appendSummaryGroup(body, "หมายเหตุ", [
-      { label: "คำอธิบาย", value: TEXT.riceSuitabilitySource },
+    appendSummaryGroup(body, "เธซเธกเธฒเธขเน€เธซเธ•เธธ", [
+      { label: "เธเธณเธญเธเธดเธเธฒเธข", value: TEXT.riceSuitabilitySource },
     ]);
 
     footer.append(createElement("span", "suitability-status-pill", TEXT.incompleteEvaluation));
@@ -999,161 +993,6 @@
     syncSidebarLayoutState();
   }
 
-  function getSortedSuitabilityItems(data) {
-    if (!data || !Array.isArray(data.classes) || data.classes.length === 0) {
-      return [];
-    }
-
-    return data.classes
-      .slice()
-      .sort((left, right) => {
-        const percentDiff = (right.percentOfParcel || 0) - (left.percentOfParcel || 0);
-        if (percentDiff !== 0) {
-          return percentDiff;
-        }
-        return (right.areaRai || 0) - (left.areaRai || 0);
-      });
-  }
-
-  function isFullParcelClass(item, items) {
-    return items.length === 1 && Number(item?.percentOfParcel) >= 99.995;
-  }
-
-  function createSuitabilityBadge(classValue) {
-    return createElement(
-      "span",
-      `parcel-suitability-badge ${suitabilityClasses[classValue] || suitabilityClasses.NO_COVERAGE}`,
-      classValue || formatters.EMPTY_TEXT,
-    );
-  }
-
-  function createParcelCropPrimaryLine(item, percentText) {
-    const line = createElement("div", "parcel-crop-result__primary-line");
-    line.append(
-      createSuitabilityBadge(item.class),
-      createElement("span", "parcel-crop-result__primary-label", item.label || item.class),
-    );
-
-    if (percentText) {
-      line.appendChild(createElement("span", "parcel-crop-result__primary-percent", `· ${percentText}`));
-    }
-
-    return line;
-  }
-
-  function createParcelCropSection(title, data, noCoverageText) {
-    const section = createElement("section", "parcel-crop-result");
-    const items = getSortedSuitabilityItems(data);
-    section.appendChild(createElement("h3", "parcel-crop-result__title", title));
-
-    if (!items.length) {
-      section.appendChild(createElement("p", "result-message", noCoverageText));
-      return section;
-    }
-
-    const primary = items[0];
-    const fullParcel = isFullParcelClass(primary, items);
-    const primaryWrap = createElement("div", "parcel-crop-result__primary");
-
-    if (items.length > 1) {
-      primaryWrap.appendChild(
-        createElement("p", "parcel-crop-result__summary-label", "พื้นที่ส่วนใหญ่อยู่ในระดับ"),
-      );
-      primaryWrap.appendChild(
-        createParcelCropPrimaryLine(primary, formatters.formatPercent(primary.percentOfParcel)),
-      );
-    } else {
-      primaryWrap.appendChild(createParcelCropPrimaryLine(primary, null));
-      primaryWrap.appendChild(
-        createElement(
-          "p",
-          "parcel-crop-result__primary-metrics",
-          formatters.formatAreaPercentLine(primary.areaRai, primary.percentOfParcel, {
-            includeParcelSuffix: fullParcel,
-          }),
-        ),
-      );
-    }
-
-    section.appendChild(primaryWrap);
-
-    if (items.length > 1) {
-      const distribution = createElement("div", "parcel-crop-result__distribution");
-      distribution.appendChild(
-        createElement("p", "parcel-crop-result__distribution-title", "สัดส่วนพื้นที่"),
-      );
-      const list = createElement("div", "parcel-crop-result__distribution-list");
-      items.forEach((item) => {
-        const row = createElement("div", "parcel-crop-result__distribution-item");
-        row.append(
-          createElement(
-            "span",
-            "parcel-crop-result__distribution-class",
-            `${item.class} — ${item.label || item.class}`,
-          ),
-          createElement(
-            "span",
-            "parcel-crop-result__distribution-metrics",
-            formatters.formatAreaPercentLine(item.areaRai, item.percentOfParcel),
-          ),
-        );
-        list.appendChild(row);
-      });
-      distribution.appendChild(list);
-      section.appendChild(distribution);
-    }
-
-    return section;
-  }
-
-  function collectSuitabilitySources(items) {
-    const map = new Map();
-    items.forEach((item) => {
-      const sourceName = formatters.formatValue(item?.sourceName);
-      if (sourceName === formatters.EMPTY_TEXT) {
-        return;
-      }
-
-      if (!map.has(sourceName)) {
-        map.set(sourceName, []);
-      }
-      map.get(sourceName).push(item.title);
-    });
-    return [...map.entries()];
-  }
-
-  function createSuitabilitySourceLine(items) {
-    const sourceEntries = collectSuitabilitySources(items);
-    if (!sourceEntries.length) {
-      return null;
-    }
-
-    const container = createElement("div", "parcel-suitability-source");
-    const texts = sourceEntries.map(([sourceName, titles]) => {
-      if (sourceEntries.length === 1) {
-        return sourceName;
-      }
-      return `${titles.join(", ")}: ${sourceName}`;
-    });
-    container.textContent = `แหล่งข้อมูลความเหมาะสมของที่ดิน: ${texts.join(" | ")}`;
-    return container;
-  }
-
-  function getParcelPopupSuitabilityText(data, noCoverageText) {
-    const items = getSortedSuitabilityItems(data);
-    if (!items.length) {
-      return noCoverageText;
-    }
-
-    const primary = items[0];
-    const percentText = formatters.formatPercent(primary.percentOfParcel);
-    if (items.length > 1) {
-      return `พื้นที่ส่วนใหญ่อยู่ในระดับ ${primary.class} (${percentText})`;
-    }
-
-    return `${primary.class} — ${primary.label || primary.class} (${percentText})`;
-  }
-
   function renderParcelResult(parcelState) {
     const panel = ensureResultPanel();
     const content = panel.querySelector("#result-panel-content");
@@ -1200,28 +1039,18 @@
       { label: "ลุ่มน้ำย่อย", value: location.subBasins, formatter: formatters.formatList },
     ]);
 
-    const suitabilitySection = createElement("section", "result-section parcel-suitability-section");
-    suitabilitySection.append(
-      createParcelCropSection(
-        TEXT.riceSuitabilityTitle,
-        analysis.riceLandSuitability,
-        TEXT.parcelNoRiceCoverage,
-      ),
-      createParcelCropSection(
-        TEXT.maizeSuitabilityTitle,
-        analysis.maizeLandSuitability,
-        TEXT.parcelNoMaizeCoverage,
-      ),
+    appendSuitabilityAreaSection(
+      content,
+      TEXT.riceSuitabilityTitle,
+      analysis.riceLandSuitability,
+      TEXT.parcelNoRiceCoverage,
     );
-
-    const sourceLine = createSuitabilitySourceLine([
-      { title: "ข้าว", sourceName: analysis.riceLandSuitability?.sourceName },
-      { title: "ข้าวโพด", sourceName: analysis.maizeLandSuitability?.sourceName },
-    ]);
-    if (sourceLine) {
-      suitabilitySection.appendChild(sourceLine);
-    }
-    content.appendChild(suitabilitySection);
+    appendSuitabilityAreaSection(
+      content,
+      TEXT.maizeSuitabilityTitle,
+      analysis.maizeLandSuitability,
+      TEXT.parcelNoMaizeCoverage,
+    );
 
     appendSection(
       content,
@@ -1239,6 +1068,31 @@
       { label: "คลองชลประทานใกล้ที่สุด", value: water.nearestIrrigationCanal?.canalName },
       { label: "ระยะห่างคลอง", value: water.nearestIrrigationCanal?.distanceM, formatter: formatters.formatDistance },
     ]);
+
+    const summarySection = createElement("section", "result-section");
+    summarySection.appendChild(createElement("h3", null, TEXT.parcelSummaryTitle));
+    summarySection.appendChild(
+      createElement(
+        "p",
+        "result-message",
+        describeSuitabilityCoverage(
+          analysis.riceLandSuitability,
+          TEXT.parcelNoRiceCoverage,
+        ).headline,
+      ),
+    );
+    summarySection.appendChild(
+      createElement(
+        "p",
+        "result-message",
+        describeSuitabilityCoverage(
+          analysis.maizeLandSuitability,
+          TEXT.parcelNoMaizeCoverage,
+        ).headline,
+      ),
+    );
+    summarySection.appendChild(createElement("p", "result-message", TEXT.parcelSummaryNote));
+    content.appendChild(summarySection);
 
     panel.classList.add("is-open");
     syncSidebarLayoutState();

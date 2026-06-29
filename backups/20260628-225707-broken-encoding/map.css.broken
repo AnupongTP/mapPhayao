@@ -1,4 +1,4 @@
-html,
+﻿html,
 body {
   width: 100%;
   height: 100%;
@@ -11,7 +11,7 @@ body {
   height: 100%;
 }
 
-/* Leaflet control ต้องอยู่เหนือ tile แต่ไม่ควรทับ panel ฝั่งขวา */
+/* Leaflet control เธ•เนเธญเธเธญเธขเธนเนเน€เธซเธเธทเธญ tile เนเธ•เนเนเธกเนเธเธงเธฃเธ—เธฑเธ panel เธเธฑเนเธเธเธงเธฒ */
 .leaflet-control {
   z-index: 800;
 }
@@ -20,7 +20,7 @@ body {
   display: none;
 }
 
-/* Layer control ซ้ายบนวางห่างจาก zoom control เล็กน้อย */
+/* Layer control เธเนเธฒเธขเธเธเธงเธฒเธเธซเนเธฒเธเธเธฒเธ zoom control เน€เธฅเนเธเธเนเธญเธข */
 .leaflet-left .leaflet-control-layers {
   margin-left: 10px;
   margin-top: 10px;
@@ -34,7 +34,7 @@ body {
 
 .location-panel,
 .result-panel {
-  /* Panel หลักลอยทับแผนที่ แต่ยังต่ำกว่า popup ที่ต้องเห็นชัด */
+  /* Floating panels above map, below modal layers. */
   position: fixed;
   right: 16px;
   z-index: 1000;
@@ -314,7 +314,7 @@ body {
 }
 
 .suitability-summary-card {
-  /* Card สรุปด้านบนบอกผลจากชั้นข้อมูล Potential ก่อนเปิดดูรายละเอียด */
+  /* Card เธชเธฃเธธเธเธ”เนเธฒเธเธเธเธเธญเธเธเธฅเธเธฒเธเธเธฑเนเธเธเนเธญเธกเธนเธฅ Potential เธเนเธญเธเน€เธเธดเธ”เธ”เธนเธฃเธฒเธขเธฅเธฐเน€เธญเธตเธขเธ” */
   display: grid;
   gap: 14px;
   margin: 0 0 16px;
@@ -667,7 +667,7 @@ body {
 }
 
 @media (max-width: 700px) {
-  /* มือถือ: ย้าย panel ลงล่างเป็น bottom sheet เพื่อไม่บังแผนที่ทั้งหน้า */
+  /* เธกเธทเธญเธ–เธทเธญ: เธขเนเธฒเธข panel เธฅเธเธฅเนเธฒเธเน€เธเนเธ bottom sheet เน€เธเธทเนเธญเนเธกเนเธเธฑเธเนเธเธเธ—เธตเนเธ—เธฑเนเธเธซเธเนเธฒ */
   .location-panel,
   .result-panel {
     top: auto;
@@ -931,7 +931,6 @@ body {
 
   .app-sidebar:not(.has-result-panel) .location-panel {
     grid-area: location;
-    grid-row: 1;
   }
 
   .app-sidebar .panel-content {

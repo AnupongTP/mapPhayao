@@ -903,7 +903,6 @@ body {
     bottom: 20px;
     display: grid;
     grid-template-columns: minmax(430px, 500px) minmax(320px, 380px);
-    grid-template-areas: "result location";
     gap: 14px;
     align-items: start;
     width: auto;
@@ -912,26 +911,22 @@ body {
 
   .app-sidebar:not(.has-result-panel) {
     grid-template-columns: minmax(320px, 380px);
-    grid-template-areas: "location";
   }
 
   .app-sidebar .result-panel {
-    grid-area: result;
-    grid-row: 1;
+    grid-column: 1;
     max-height: calc(100vh - 40px);
     min-height: 0;
     overflow: hidden;
   }
 
   .app-sidebar .location-panel {
-    grid-area: location;
-    grid-row: 1;
+    grid-column: 2;
     max-height: calc(100vh - 40px);
   }
 
   .app-sidebar:not(.has-result-panel) .location-panel {
-    grid-area: location;
-    grid-row: 1;
+    grid-column: 1;
   }
 
   .app-sidebar .panel-content {

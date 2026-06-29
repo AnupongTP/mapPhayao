@@ -1,19 +1,20 @@
+// ไฟล์แปลงค่าดิบจาก API ให้เป็นข้อความที่คนอ่านง่ายบน panel และ popup
 (function (window) {
   const EMPTY_TEXT = "ไม่มีข้อมูล";
   const NOT_EVALUATED_TEXT = "ยังไม่ได้ประเมิน";
 
   const drainageLabels = {
     "ดีมาก": "ระบายน้ำได้ดีมาก",
-    ดี: "ระบายน้ำได้ดี",
+    "ดี": "ระบายน้ำได้ดี",
     "ค่อนข้างดี": "ระบายน้ำได้ค่อนข้างดี",
-    ปานกลาง: "ระบายน้ำได้ปานกลาง",
+    "ปานกลาง": "ระบายน้ำได้ปานกลาง",
     "ค่อนข้างเลว": "ระบายน้ำได้ค่อนข้างแย่",
-    เลว: "ระบายน้ำได้แย่",
+    "เลว": "ระบายน้ำได้แย่",
     "เลวมาก": "ระบายน้ำได้แย่มาก",
   };
 
   const statusLabels = {
-    AVAILABLE: "มีข้อมูลพร้อมใช้งาน",
+    AVAILABLE: "มีข้อมูลพร้อมใช้",
     PARTIAL_DATA: "มีข้อมูลดินบางส่วน",
     NO_DATA: "ไม่พบข้อมูลดินที่เพียงพอ",
     NOT_EVALUATED: NOT_EVALUATED_TEXT,
@@ -49,14 +50,18 @@
 
   function formatCoordinate(value) {
     const coordinate = Number(value);
+
     if (!Number.isFinite(coordinate)) {
       return EMPTY_TEXT;
     }
+
     return coordinate.toFixed(6);
   }
 
   function formatDistance(value) {
+    // ระยะน้อยกว่า 1000 เมตรแสดงเป็นเมตร เกินกว่านั้นแสดงเป็นกิโลเมตร
     const distance = Number(value);
+
     if (!Number.isFinite(distance)) {
       return EMPTY_TEXT;
     }
@@ -70,6 +75,7 @@
 
   function formatPercent(value) {
     const number = Number(value);
+
     if (!Number.isFinite(number)) {
       return EMPTY_TEXT;
     }
@@ -94,6 +100,7 @@
 
   function formatCentimeters(value) {
     const number = Number(value);
+
     if (!Number.isFinite(number)) {
       return EMPTY_TEXT;
     }
@@ -104,7 +111,9 @@
   }
 
   function formatAccuracy(value) {
+    // ความแม่นยำ GPS มาจากเมตรจริงของอุปกรณ์ ไม่ใช่ค่าประมาณจาก UI
     const accuracy = Number(value);
+
     if (!Number.isFinite(accuracy)) {
       return "ไม่ได้ใช้ข้อมูล GPS";
     }
@@ -122,16 +131,19 @@
     }
 
     const original = String(value).trim().replace(/\s+/g, " ");
+
     if (!original) {
       return EMPTY_TEXT;
     }
 
     const normalized = original.replace(/^การระบายน้ำ\s*/u, "").trim();
+
     return drainageLabels[normalized] || original;
   }
 
   function formatSoilDepth(value) {
     const text = formatValue(value);
+
     if (
       text === EMPTY_TEXT ||
       text === "ไม่มีข้อมูลความลึกดิน" ||
@@ -149,7 +161,6 @@
       drainage: "การระบายน้ำ",
       effectiveDepth: "ความลึกของดิน",
     };
-
     const fields = Array.isArray(value) ? value : [];
     const formatted = fields
       .map((field) => labels[field] || formatValue(field))
@@ -160,22 +171,27 @@
 
   function formatStatus(value) {
     const status = formatValue(value);
+
     if (status === EMPTY_TEXT) {
       return EMPTY_TEXT;
     }
+
     return statusLabels[status] || status;
   }
 
   function formatRuleStatus(value) {
     const status = formatValue(value);
+
     if (status === EMPTY_TEXT) {
       return EMPTY_TEXT;
     }
+
     return ruleStatusLabels[status] || status;
   }
 
   function formatAreaSqm(value) {
     const area = Number(value);
+
     if (!Number.isFinite(area)) {
       return EMPTY_TEXT;
     }
@@ -188,6 +204,7 @@
 
   function formatAreaRai(value) {
     const area = Number(value);
+
     if (!Number.isFinite(area)) {
       return EMPTY_TEXT;
     }
@@ -200,6 +217,7 @@
 
   function formatAreaRaiCompact(value) {
     const area = Number(value);
+
     if (!Number.isFinite(area)) {
       return EMPTY_TEXT;
     }
@@ -217,9 +235,11 @@
     if (areaText === EMPTY_TEXT && percentText === EMPTY_TEXT) {
       return EMPTY_TEXT;
     }
+
     if (areaText === EMPTY_TEXT) {
       return percentText;
     }
+
     if (percentText === EMPTY_TEXT) {
       return areaText;
     }
@@ -235,14 +255,18 @@
     if (raiText === EMPTY_TEXT) {
       return sqmText;
     }
+
     if (sqmText === EMPTY_TEXT) {
       return raiText;
     }
+
     return `${raiText} (${sqmText})`;
   }
 
   function formatThaiDate(value) {
+    // แปลงวันที่ ISO ให้เป็นวันที่ไทย เพื่ออ่านง่ายใน summary card
     const text = formatValue(value);
+
     if (text === EMPTY_TEXT) {
       return EMPTY_TEXT;
     }
@@ -255,6 +279,7 @@
     const year = Number(parts[0]);
     const month = Number(parts[1]);
     const day = Number(parts[2]);
+
     if (!year || month < 1 || month > 12 || day < 1 || day > 31) {
       return text;
     }
