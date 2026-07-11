@@ -1,0 +1,17 @@
+<layer>
+  <name>maize_potential</name>
+  <id>LayerInfoImpl--954812f:19f0e1c9629:-7feb</id>
+  <type>VECTOR</type>
+  <defaultStyle>
+    <id>StyleInfoImpl--954812f:19f0e1c9629:-7fdf</id>
+  </defaultStyle>
+  <resource class="featureType">
+    <id>FeatureTypeInfoImpl--954812f:19f0e1c9629:-7fec</id>
+  </resource>
+  <attribution>
+    <logoWidth>0</logoWidth>
+    <logoHeight>0</logoHeight>
+  </attribution>
+  <dateCreated>2026-06-28 12:36:39.138 UTC</dateCreated>
+  <dateModified>2026-06-28 13:00:05.139 UTC</dateModified>
+</layer>

@@ -1,0 +1,17 @@
+<layer>
+  <name>amphoe</name>
+  <id>LayerInfoImpl-23d65860:19ec27e99c3:-7ff9</id>
+  <type>VECTOR</type>
+  <defaultStyle>
+    <id>StyleInfoImpl-23d65860:19ec27e99c3:-7e8a</id>
+  </defaultStyle>
+  <resource class="featureType">
+    <id>FeatureTypeInfoImpl-23d65860:19ec27e99c3:-7ffa</id>
+  </resource>
+  <attribution>
+    <logoWidth>0</logoWidth>
+    <logoHeight>0</logoHeight>
+  </attribution>
+  <dateCreated>2026-06-13 19:43:32.796 UTC</dateCreated>
+  <dateModified>2026-06-14 13:36:56.569 UTC</dateModified>
+</layer>

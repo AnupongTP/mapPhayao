@@ -1,0 +1,17 @@
+<layer>
+  <name>tambon</name>
+  <id>LayerInfoImpl-23d65860:19ec27e99c3:-7ff1</id>
+  <type>VECTOR</type>
+  <defaultStyle>
+    <id>StyleInfoImpl-23d65860:19ec27e99c3:-7e86</id>
+  </defaultStyle>
+  <resource class="featureType">
+    <id>FeatureTypeInfoImpl-23d65860:19ec27e99c3:-7ff2</id>
+  </resource>
+  <attribution>
+    <logoWidth>0</logoWidth>
+    <logoHeight>0</logoHeight>
+  </attribution>
+  <dateCreated>2026-06-13 20:18:20.704 UTC</dateCreated>
+  <dateModified>2026-06-14 13:37:46.851 UTC</dateModified>
+</layer>

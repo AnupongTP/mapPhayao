@@ -1,0 +1,16 @@
+<layer>
+  <name>soil</name>
+  <id>LayerInfoImpl-23d65860:19ec27e99c3:-7f8d</id>
+  <type>VECTOR</type>
+  <defaultStyle>
+    <id>StyleInfoImpl--570ae188:124761b8d78:-7fe0</id>
+  </defaultStyle>
+  <resource class="featureType">
+    <id>FeatureTypeInfoImpl-23d65860:19ec27e99c3:-7f8e</id>
+  </resource>
+  <attribution>
+    <logoWidth>0</logoWidth>
+    <logoHeight>0</logoHeight>
+  </attribution>
+  <dateCreated>2026-06-14 09:03:34.13 UTC</dateCreated>
+</layer>
