@@ -1,0 +1,9 @@
+*.log
+*.lock
+logs/
+temp/
+tmp/
+gwc/
+data_dir/logs/
+data_dir/gwc/
+data_dir/temp/
