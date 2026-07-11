@@ -75,6 +75,10 @@
     saveButton: null,
     cancelButton: null,
   };
+  const mobileLayoutMediaQuery = window.matchMedia
+    ? window.matchMedia("(max-width: 700px)")
+    : null;
+  let mobileLocationLauncherAction = null;
 
   function syncSidebarLayoutState() {
     const sidebar = ensureSidebar();
@@ -92,6 +96,145 @@
       element.textContent = text;
     }
     return element;
+  }
+
+  function isMobileLayout() {
+    return mobileLayoutMediaQuery ? mobileLayoutMediaQuery.matches : window.innerWidth <= 700;
+  }
+
+  function ensureMobileLocationLauncher() {
+    let launcher = document.getElementById("mobile-location-launcher");
+    if (launcher) {
+      return launcher;
+    }
+
+    launcher = createElement("button", "mobile-location-launcher");
+    launcher.id = "mobile-location-launcher";
+    launcher.type = "button";
+    launcher.setAttribute("aria-controls", "location-panel");
+    launcher.setAttribute("aria-label", "หาตำแหน่งปัจจุบัน");
+    launcher.append(
+      createElement("span", "mobile-location-launcher-icon", "⌖"),
+      createElement("span", "mobile-location-launcher-text", "หาตำแหน่ง"),
+    );
+    launcher.addEventListener("click", () => {
+      if (typeof mobileLocationLauncherAction === "function") {
+        mobileLocationLauncherAction();
+      } else {
+        openMobileLocationPanel();
+      }
+    });
+    document.body.appendChild(launcher);
+    return launcher;
+  }
+
+  function setMobileLocationLauncherLoading(isLoading) {
+    const launcher = ensureMobileLocationLauncher();
+    const text = launcher.querySelector(".mobile-location-launcher-text");
+    launcher.disabled = Boolean(isLoading);
+    launcher.setAttribute("aria-busy", isLoading ? "true" : "false");
+    if (text) {
+      text.textContent = isLoading ? "กำลังค้นหา..." : "หาตำแหน่ง";
+    }
+  }
+
+  function ensureMobilePointConfirmButton() {
+    let button = document.getElementById("mobile-point-confirm");
+    if (button) {
+      return button;
+    }
+
+    button = createElement("button", "mobile-point-confirm", "ยืนยันตำแหน่ง");
+    button.id = "mobile-point-confirm";
+    button.type = "button";
+    button.hidden = true;
+    button.setAttribute("aria-controls", "result-panel");
+    button.setAttribute("aria-label", "ยืนยันตำแหน่งที่เลือก");
+    button.setAttribute("aria-busy", "false");
+    document.body.appendChild(button);
+    return button;
+  }
+
+  function syncMobilePanelState() {
+    const panel = document.getElementById("location-panel");
+    const resultPanel = document.getElementById("result-panel");
+    const launcher = document.getElementById("mobile-location-launcher");
+    const isMobile = isMobileLayout();
+    const isLocationOpen = Boolean(panel && panel.classList.contains("is-mobile-open"));
+    const isResultOpen = Boolean(resultPanel && resultPanel.classList.contains("is-open"));
+
+    if (panel) {
+      panel.querySelector("#location-panel-content").hidden = false;
+      if (!isMobile) {
+        panel.classList.remove("is-mobile-open");
+      } else if (isResultOpen) {
+        panel.classList.remove("is-mobile-open");
+      }
+    }
+
+    if (launcher) {
+      launcher.hidden = !isMobile || isLocationOpen || isResultOpen;
+      launcher.setAttribute("aria-expanded", isLocationOpen ? "true" : "false");
+    }
+
+    syncSidebarLayoutState();
+  }
+
+  function openMobileLocationPanel() {
+    ensureLocationPanel();
+    const panel = document.getElementById("location-panel");
+    const resultPanel = document.getElementById("result-panel");
+    if (!isMobileLayout() || !panel) {
+      syncMobilePanelState();
+      return;
+    }
+
+    if (resultPanel) {
+      resultPanel.classList.remove("is-open");
+    }
+    panel.classList.add("is-mobile-open");
+    syncMobilePanelState();
+  }
+
+  function closeMobileLocationPanel() {
+    const panel = document.getElementById("location-panel");
+    if (panel) {
+      panel.classList.remove("is-mobile-open");
+    }
+    syncMobilePanelState();
+  }
+
+  function openResultPanel(panel) {
+    const locationPanel = document.getElementById("location-panel");
+    panel.classList.add("is-open");
+    if (isMobileLayout() && locationPanel) {
+      locationPanel.classList.remove("is-mobile-open");
+    }
+    syncMobilePanelState();
+  }
+
+  function closeResultPanel(panel) {
+    panel.classList.remove("is-open");
+    syncMobilePanelState();
+  }
+
+  function closeCurrentResultPanel() {
+    const panel = document.getElementById("result-panel");
+    if (panel) {
+      closeResultPanel(panel);
+    }
+  }
+
+  function handleMobileLayoutChange() {
+    syncMobilePanelState();
+  }
+
+  if (mobileLayoutMediaQuery?.addEventListener) {
+    mobileLayoutMediaQuery.addEventListener("change", handleMobileLayoutChange);
+  } else if (mobileLayoutMediaQuery?.addListener) {
+    mobileLayoutMediaQuery.addListener(handleMobileLayoutChange);
+  } else {
+    window.addEventListener("resize", handleMobileLayoutChange);
   }
 
   function appendField(parent, label, value, formatter) {
@@ -114,6 +257,10 @@
     fields.forEach((field) => appendField(list, field.label, field.value, field.formatter));
     section.appendChild(list);
     parent.appendChild(section);
+  }
+
+  function formatCoordinatePair(value) {
+    return `${formatters.formatCoordinate(value?.lat)}, ${formatters.formatCoordinate(value?.lng)}`;
   }
 
   function createSummaryRow(label, value, formatter) {
@@ -233,6 +380,12 @@
 
     const sidebar = ensureSidebar();
     panel = createPanel("location-panel", "location-panel is-open", TEXT.locationTitle);
+    const header = panel.querySelector(".panel-header");
+    const closeButton = createElement("button", "panel-close panel-close-danger location-panel-close", "ปิด");
+    closeButton.type = "button";
+    closeButton.setAttribute("aria-label", "ปิดหน้าต่างเลือกตำแหน่ง");
+    closeButton.addEventListener("click", closeMobileLocationPanel);
+    header.appendChild(closeButton);
     const content = panel.querySelector("#location-panel-content");
     const status = createElement("p", "location-status", TEXT.noSelection);
     status.id = "location-status";
@@ -266,6 +419,8 @@
 
     content.append(status, instruction, list, actions, parcelSection);
     sidebar.appendChild(panel);
+    ensureMobileLocationLauncher();
+    syncMobilePanelState();
     return panel;
   }
 
@@ -278,11 +433,11 @@
     const sidebar = ensureSidebar();
     panel = createPanel("result-panel", "result-panel", "ผลการตรวจสอบพื้นที่");
     const header = panel.querySelector(".panel-header");
-    const closeButton = createElement("button", "panel-close", "ปิด");
+    const closeButton = createElement("button", "panel-close panel-close-danger result-panel-close", "ปิด");
     closeButton.type = "button";
+    closeButton.setAttribute("aria-label", "ปิดหน้าต่างผลการตรวจสอบพื้นที่");
     closeButton.addEventListener("click", () => {
-      panel.classList.remove("is-open");
-      syncSidebarLayoutState();
+      closeResultPanel(panel);
     });
     header.appendChild(closeButton);
     sidebar.appendChild(panel);
@@ -295,7 +450,6 @@
     appendField(list, "Latitude", location?.lat, formatters.formatCoordinate);
     appendField(list, "Longitude", location?.lng, formatters.formatCoordinate);
     appendField(list, "แหล่งที่มา", location?.source, formatSource);
-    appendField(list, "ความแม่นยำ GPS", location?.accuracy, formatters.formatAccuracy);
   }
 
   function updateLocationValues(location) {
@@ -324,9 +478,29 @@
 
   function setupLocationPanel({ onLocate, onConfirm }) {
     const panel = ensureLocationPanel();
+    mobileLocationLauncherAction = onLocate;
     panel.querySelector("#locate-button").addEventListener("click", onLocate);
     panel.querySelector("#confirm-location-button").addEventListener("click", onConfirm);
+    const mobileConfirmButton = ensureMobilePointConfirmButton();
+    mobileConfirmButton.addEventListener("click", onConfirm);
     return panel;
+  }
+
+  function syncMobilePointConfirmButton(options = {}) {
+    const button = ensureMobilePointConfirmButton();
+    const resultPanel = document.getElementById("result-panel");
+    const isResultOpen = Boolean(resultPanel && resultPanel.classList.contains("is-open"));
+    const isLoading = Boolean(options.isLoading);
+    const shouldShow =
+      isMobileLayout() &&
+      Boolean(options.hasPendingPoint) &&
+      !isResultOpen &&
+      !Boolean(options.isBlocked);
+
+    button.hidden = !shouldShow;
+    button.disabled = isLoading;
+    button.textContent = isLoading ? "กำลังตรวจสอบ..." : "ยืนยันตำแหน่ง";
+    button.setAttribute("aria-busy", isLoading ? "true" : "false");
   }
 
   function setResultPanelState(messages) {
@@ -338,15 +512,16 @@
     messageList.forEach((message) => {
       content.appendChild(createElement("p", "result-message", message));
     });
-    panel.classList.add("is-open");
-    syncSidebarLayoutState();
+    openResultPanel(panel);
   }
 
   function showGpsLoading() {
+    setMobileLocationLauncherLoading(true);
     setLocationStatus(TEXT.gpsLoading);
   }
 
   function showGpsReady(location) {
+    setMobileLocationLauncherLoading(false);
     updateLocationValues(location);
     setLocationStatus(TEXT.gpsReady);
     setConfirmEnabled(true);
@@ -365,6 +540,7 @@
   }
 
   function showLocationMessage(message) {
+    setMobileLocationLauncherLoading(false);
     setLocationStatus(message);
   }
 
@@ -392,6 +568,15 @@
   }
 
   function showApiError() {
+    if (isMobileLayout()) {
+      const resultPanel = document.getElementById("result-panel");
+      if (resultPanel) {
+        resultPanel.classList.remove("is-open");
+      }
+      setLocationStatus(TEXT.apiError);
+      openMobileLocationPanel();
+      return;
+    }
     setResultPanelState(TEXT.apiError);
   }
 
@@ -483,7 +668,7 @@
       } else {
         content.appendChild(createElement("p", "result-message", TEXT.notEvaluated));
       }
-      panel.classList.add("is-open");
+      openResultPanel(panel);
       return;
     }
 
@@ -495,8 +680,7 @@
       { label: "ตำบล", value: location.tambon },
       { label: "ลุ่มน้ำหลัก", value: location.basin },
       { label: "ลุ่มน้ำย่อย", value: location.subBasin },
-      { label: "Latitude", value: clickedPoint.latitude, formatter: formatters.formatCoordinate },
-      { label: "Longitude", value: clickedPoint.longitude, formatter: formatters.formatCoordinate },
+      { label: "พิกัด", value: { lat: clickedPoint.latitude, lng: clickedPoint.longitude }, formatter: formatCoordinatePair },
     ]);
 
     appendSection(content, "ข้อมูลชุดดิน", [
@@ -517,10 +701,10 @@
       { label: "ระยะห่างจากคลอง", value: nearestIrrigationCanal.distanceM, formatter: formatters.formatDistance },
     ]);
 
-    panel.classList.add("is-open");
+    openResultPanel(panel);
   }
 
-  function createPopupContent(data) {
+  function createPopupContent(data, options = {}) {
     const container = createElement("div", "map-popup");
     const title = createElement("h3", null, "ข้อมูลตำแหน่ง");
     const location = data.location || {};
@@ -532,6 +716,18 @@
     appendField(list, "ชุดดิน", soil.soilNameThai);
     appendField(list, "ข้าว", getPointSuitabilityText(data, "rice"));
     appendField(list, "ข้าวโพด", getPointSuitabilityText(data, "maize"));
+
+    if (typeof options.onOpenResult === "function") {
+      const button = createElement("button", "point-popup-result-button", "ดูผลการตรวจสอบพื้นที่");
+      button.type = "button";
+      button.setAttribute("aria-label", "เปิดผลการตรวจสอบพื้นที่");
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        options.onOpenResult();
+      });
+      container.append(title, list, button);
+      return container;
+    }
 
     container.append(title, list);
     return container;
@@ -726,13 +922,13 @@
 
     if (!parcelState) {
       content.appendChild(createElement("p", "result-message", TEXT.notEvaluated));
-      panel.classList.add("is-open");
+      openResultPanel(panel);
       return;
     }
 
     if (parcelState.analysisStatus === "loading") {
       content.appendChild(createElement("p", "result-message", TEXT.parcelLoading));
-      panel.classList.add("is-open");
+      openResultPanel(panel);
       return;
     }
 
@@ -741,7 +937,7 @@
       if (parcelState.analysisError) {
         content.appendChild(createElement("p", "result-message", parcelState.analysisError));
       }
-      panel.classList.add("is-open");
+      openResultPanel(panel);
       return;
     }
 
@@ -816,7 +1012,7 @@
     summarySection.appendChild(createElement("p", "result-message", TEXT.parcelSummaryNote));
     content.appendChild(summarySection);
 
-    panel.classList.add("is-open");
+    openResultPanel(panel);
   }
 
   function createParcelPopupContent(parcelState, options = {}) {
@@ -935,8 +1131,7 @@
     messageList.forEach((message) => {
       content.appendChild(createElement("p", "result-message", message));
     });
-    panel.classList.add("is-open");
-    syncSidebarLayoutState();
+    openResultPanel(panel);
   }
 
   function renderResultPanel(data) {
@@ -960,8 +1155,7 @@
       } else {
         content.appendChild(createElement("p", "result-message", TEXT.notEvaluated));
       }
-      panel.classList.add("is-open");
-      syncSidebarLayoutState();
+      openResultPanel(panel);
       return;
     }
 
@@ -973,8 +1167,7 @@
       { label: "ตำบล", value: location.tambon },
       { label: "ลุ่มน้ำหลัก", value: location.basin },
       { label: "ลุ่มน้ำย่อย", value: location.subBasin },
-      { label: "Latitude", value: clickedPoint.latitude, formatter: formatters.formatCoordinate },
-      { label: "Longitude", value: clickedPoint.longitude, formatter: formatters.formatCoordinate },
+      { label: "พิกัด", value: { lat: clickedPoint.latitude, lng: clickedPoint.longitude }, formatter: formatCoordinatePair },
     ]);
 
     appendSection(content, "ข้อมูลชุดดิน", [
@@ -995,8 +1188,7 @@
       { label: "ระยะห่างจากคลอง", value: nearestIrrigationCanal.distanceM, formatter: formatters.formatDistance },
     ]);
 
-    panel.classList.add("is-open");
-    syncSidebarLayoutState();
+    openResultPanel(panel);
   }
 
   function getSortedSuitabilityItems(data) {
@@ -1162,15 +1354,13 @@
 
     if (!parcelState) {
       content.appendChild(createElement("p", "result-message", TEXT.notEvaluated));
-      panel.classList.add("is-open");
-      syncSidebarLayoutState();
+      openResultPanel(panel);
       return;
     }
 
     if (parcelState.analysisStatus === "loading") {
       content.appendChild(createElement("p", "result-message", TEXT.parcelLoading));
-      panel.classList.add("is-open");
-      syncSidebarLayoutState();
+      openResultPanel(panel);
       return;
     }
 
@@ -1179,8 +1369,7 @@
       if (parcelState.analysisError) {
         content.appendChild(createElement("p", "result-message", parcelState.analysisError));
       }
-      panel.classList.add("is-open");
-      syncSidebarLayoutState();
+      openResultPanel(panel);
       return;
     }
 
@@ -1240,8 +1429,7 @@
       { label: "ระยะห่างคลอง", value: water.nearestIrrigationCanal?.distanceM, formatter: formatters.formatDistance },
     ]);
 
-    panel.classList.add("is-open");
-    syncSidebarLayoutState();
+    openResultPanel(panel);
   }
 
   function addParcelDrawControl(map, handlers) {
@@ -1334,11 +1522,14 @@
         })
         .addTo(map);
     },
+    isMobileLayout,
     addParcelDrawControl,
     setParcelControlState,
     setupLocationPanel,
     setConfirmEnabled,
     setLocationActionsEnabled,
+    syncMobilePointConfirmButton,
+    closeCurrentResultPanel,
     renderTemporaryParcelList,
     promptParcelName,
     showGpsLoading,

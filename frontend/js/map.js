@@ -4,6 +4,9 @@
   let accuracyCircle = null;
   let pointRequestController = null;
   let resultPopup = null;
+  let currentPointResult = null;
+  let confirmedPointKey = null;
+  let isPointAnalysisLoading = false;
   let appMap = null;
   let parcelDrawHandler = null;
   let isParcelDrawingActive = false;
@@ -63,14 +66,39 @@
     return isParcelDrawingActive || Boolean(editingTemporaryParcelId);
   }
 
+  function createPointKey(location) {
+    if (!location || !Number.isFinite(location.lat) || !Number.isFinite(location.lng)) {
+      return null;
+    }
+    return `${location.lat.toFixed(7)},${location.lng.toFixed(7)}`;
+  }
+
+  function hasConfirmedCurrentPoint() {
+    return Boolean(
+      currentPointResult &&
+      confirmedPointKey &&
+      createPointKey(selectedLocation) === confirmedPointKey,
+    );
+  }
+
+  function syncPointConfirmationState() {
+    window.MapUi.syncMobilePointConfirmButton({
+      hasPendingPoint: isValidSelectedLocation() && !hasConfirmedCurrentPoint(),
+      isLoading: isPointAnalysisLoading,
+      isBlocked: isParcelInteractionLocked(),
+    });
+  }
+
   function syncLocationActionState() {
     if (isParcelInteractionLocked()) {
       window.MapUi.setLocationActionsEnabled(false);
+      syncPointConfirmationState();
       return;
     }
 
     window.MapUi.setLocationActionsEnabled(true);
     window.MapUi.setConfirmEnabled(isValidSelectedLocation());
+    syncPointConfirmationState();
   }
 
   function getNextAvailableParcelName() {
@@ -664,6 +692,13 @@
       onLocate: requestCurrentLocation,
       onConfirm: confirmSelectedLocation,
     });
+    syncPointConfirmationState();
+    const mobilePointConfirmMediaQuery = window.matchMedia("(max-width: 700px)");
+    if (mobilePointConfirmMediaQuery.addEventListener) {
+      mobilePointConfirmMediaQuery.addEventListener("change", syncPointConfirmationState);
+    } else if (mobilePointConfirmMediaQuery.addListener) {
+      mobilePointConfirmMediaQuery.addListener(syncPointConfirmationState);
+    }
     initTemporaryParcels(map);
 
     map.on("click", handleMapClick);
@@ -686,6 +721,7 @@
     updateLocationMarker(selectedLocation);
     removeAccuracyCircle();
     window.MapUi.showMapSelectionReady(selectedLocation);
+    markSelectedPointPending(true);
   }
 
   function handleMarkerDragEnd(event) {
@@ -704,6 +740,7 @@
 
     removeAccuracyCircle();
     window.MapUi.showDragSelectionReady(selectedLocation);
+    markSelectedPointPending(true);
   }
 
   function requestCurrentLocation() {
@@ -747,6 +784,7 @@
     updateLocationMarker(selectedLocation);
     updateAccuracyCircle(selectedLocation);
     window.MapUi.showGpsReady(selectedLocation);
+    markSelectedPointPending(true);
   }
 
   function handleLocationError(error) {
@@ -794,9 +832,61 @@
     accuracyCircle = null;
   }
 
+  function refreshSelectedPointPopup(openPopup) {
+    if (!locationMarker || !isValidSelectedLocation()) {
+      closeResultPopup();
+      return;
+    }
+
+    closeResultPopup();
+    resultPopup = L.popup().setLatLng(locationMarker.getLatLng());
+
+    if (hasConfirmedCurrentPoint()) {
+      resultPopup.setContent(
+        window.MapUi.createPopupContent(currentPointResult, {
+          onOpenResult: openCurrentPointResult,
+        }),
+      );
+    } else {
+      closeResultPopup();
+      syncLocationActionState();
+      return;
+    }
+
+    locationMarker.bindPopup(resultPopup);
+    if (openPopup) {
+      locationMarker.openPopup();
+    }
+  }
+
+  function markSelectedPointPending(openPopup = true) {
+    if (!hasConfirmedCurrentPoint()) {
+      window.MapUi.closeCurrentResultPanel();
+      closeResultPopup();
+      syncLocationActionState();
+      return;
+    }
+    refreshSelectedPointPopup(openPopup);
+    syncLocationActionState();
+  }
+
+  function openCurrentPointResult() {
+    if (!hasConfirmedCurrentPoint()) {
+      syncPointConfirmationState();
+      return;
+    }
+
+    window.MapUi.renderResultPanel(currentPointResult);
+    syncPointConfirmationState();
+  }
+
   async function confirmSelectedLocation() {
     if (isParcelInteractionLocked()) {
       window.MapUi.showLocationMessage(window.MapUi.text.parcelEditLocked);
+      return;
+    }
+
+    if (isPointAnalysisLoading) {
       return;
     }
 
@@ -811,13 +901,23 @@
 
     pointRequestController = new AbortController();
     const requestController = pointRequestController;
+    const requestLocation = { ...selectedLocation };
+    const requestPointKey = createPointKey(requestLocation);
 
-    window.MapUi.showAnalysisLoading();
+    isPointAnalysisLoading = true;
+    window.MapUi.setConfirmEnabled(false);
+    syncPointConfirmationState();
+
+    if (window.MapUi.isMobileLayout()) {
+      window.MapUi.showLocationMessage(window.MapUi.text.apiLoading);
+    } else {
+      window.MapUi.showAnalysisLoading();
+    }
 
     try {
       const data = await window.MapApi.getRiceSuitabilityAtPoint(
-        selectedLocation.lat,
-        selectedLocation.lng,
+        requestLocation.lat,
+        requestLocation.lng,
         { signal: requestController.signal },
       );
 
@@ -825,23 +925,35 @@
         throw new Error(data.error || window.MapUi.text.apiError);
       }
 
-      window.MapUi.renderResultPanel(data);
+      currentPointResult = data;
+      confirmedPointKey = requestPointKey;
 
-      if (data.found !== false) {
-        openResultPopup(data);
+      if (createPointKey(selectedLocation) === requestPointKey) {
+        window.MapUi.renderResultPanel(data);
+        if (data.found !== false) {
+          refreshSelectedPointPopup(false);
+        } else {
+          closeResultPopup();
+        }
       } else {
-        closeResultPopup();
+        refreshSelectedPointPopup(false);
       }
     } catch (error) {
       if (error.name === "AbortError") {
         return;
       }
 
+      isPointAnalysisLoading = false;
+      window.MapUi.setConfirmEnabled(isValidSelectedLocation());
+      syncPointConfirmationState();
       window.MapUi.showApiError();
     } finally {
       if (pointRequestController === requestController) {
         pointRequestController = null;
       }
+      isPointAnalysisLoading = false;
+      window.MapUi.setConfirmEnabled(isValidSelectedLocation());
+      syncPointConfirmationState();
     }
   }
 
@@ -854,7 +966,11 @@
 
     resultPopup = L.popup()
       .setLatLng(locationMarker.getLatLng())
-      .setContent(window.MapUi.createPopupContent(data))
+      .setContent(
+        window.MapUi.createPopupContent(data, {
+          onOpenResult: openCurrentPointResult,
+        }),
+      )
       .openOn(appMap);
   }
 
@@ -863,6 +979,9 @@
       return;
     }
 
+    if (locationMarker) {
+      locationMarker.unbindPopup();
+    }
     resultPopup.remove();
     resultPopup = null;
   }
