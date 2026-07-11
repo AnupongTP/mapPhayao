@@ -833,7 +833,7 @@
     );
     detailsButton.type = "button";
 
-    appendField(list, "พื้นที่", parcel.areaRai, formatters.formatAreaRai);
+    appendField(list, "พื้นที่", parcel.areaSquareMeters, formatters.formatThaiLandArea);
     appendField(
       list,
       "ข้าว",
@@ -1192,8 +1192,8 @@
 
     appendSection(content, "ข้อมูลพื้นที่แปลง", [
       { label: "ชื่อแปลง", value: analysis.name || parcelState.name },
+      { label: "พื้นที่", value: parcel.areaSquareMeters, formatter: formatters.formatThaiLandArea },
       { label: "พื้นที่ตารางเมตร", value: parcel.areaSquareMeters, formatter: formatters.formatAreaSqm },
-      { label: "พื้นที่ไร่", value: parcel.areaRai, formatter: formatters.formatAreaRai },
       { label: "ตำบล", value: location.tambons, formatter: formatters.formatList },
       { label: "อำเภอ", value: location.amphoes, formatter: formatters.formatList },
       { label: "ลุ่มน้ำหลัก", value: location.mainBasins, formatter: formatters.formatList },

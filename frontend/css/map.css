@@ -906,7 +906,7 @@ body {
     grid-template-areas: "result location";
     gap: 14px;
     align-items: start;
-    width: auto;
+    width: fit-content;
     max-width: calc(100vw - 40px);
   }
 

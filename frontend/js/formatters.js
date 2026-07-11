@@ -210,6 +210,30 @@
     })} ไร่`;
   }
 
+  function formatThaiLandArea(value) {
+    const areaSquareMeters = Number(value);
+    if (!Number.isFinite(areaSquareMeters) || areaSquareMeters < 0) {
+      return EMPTY_TEXT;
+    }
+
+    const totalSquareWahHundredths = Math.round(areaSquareMeters * 25);
+    const raiUnit = 40000;
+    const nganUnit = 10000;
+
+    const rai = Math.floor(totalSquareWahHundredths / raiUnit);
+    let remainder = totalSquareWahHundredths - (rai * raiUnit);
+    const ngan = Math.floor(remainder / nganUnit);
+    remainder -= ngan * nganUnit;
+
+    const squareWah = remainder / 100;
+    const squareWahText = squareWah.toLocaleString("th-TH", {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 0,
+    });
+
+    return `${rai.toLocaleString("th-TH")} ไร่ ${ngan.toLocaleString("th-TH")} งาน ${squareWahText} ตร.ว.`;
+  }
+
   function formatAreaPercentLine(areaRai, percent, options = {}) {
     const areaText = formatAreaRaiCompact(areaRai);
     const percentText = formatPercent(percent);
@@ -295,6 +319,7 @@
     formatAreaSqm,
     formatAreaRai,
     formatAreaRaiCompact,
+    formatThaiLandArea,
     formatAreaPercentLine,
     formatAreaDetail,
     formatThaiDate,

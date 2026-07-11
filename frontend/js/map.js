@@ -92,7 +92,7 @@
       return window.MapUi.text.parcelAnalyzeError;
     }
     if (parcel.analysis && parcel.analysis.parcel) {
-      return `${window.MapFormatters.formatAreaRai(parcel.analysis.parcel.areaRai)}`;
+      return window.MapFormatters.formatThaiLandArea(parcel.analysis.parcel.areaSquareMeters);
     }
     return window.MapUi.text.notEvaluated;
   }
@@ -158,6 +158,7 @@
         analysis: {
           name: parcel.name,
           parcel: {
+            areaSquareMeters: null,
             areaRai: null,
           },
           riceLandSuitability: {},
@@ -230,7 +231,7 @@
       padding: [24, 24],
       maxZoom: 18,
     });
-    selectTemporaryParcel(parcelId);
+    openParcelPopup(parcel);
   }
 
   async function renameTemporaryParcel(parcelId) {
