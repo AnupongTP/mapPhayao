@@ -1505,13 +1505,12 @@
       };
 
       addOverlay("Thailand provinces", overlayLayers.thailandProvince);
-      addOverlay("ขอบเขตตำบล", overlayLayers.tambonWms);
-      addOverlay("ขอบเขตอำเภอ", overlayLayers.amphoeWms);
+      addOverlay("ขอบเขตตำบล", overlayLayers.tambonLayer);
+      addOverlay("ขอบเขตอำเภอ", overlayLayers.amphoeLayer);
       addOverlay("ขอบเขตลุ่มน้ำหลัก", overlayLayers.mainBasinLayer);
       addOverlay("ขอบเขตลุ่มน้ำย่อย", overlayLayers.subBasinLayer);
-      addOverlay("ลุ่มน้ำ", overlayLayers.basinWms);
-      addOverlay("แม่น้ำและลำห้วย", overlayLayers.streamWms);
-      addOverlay("คลองชลประทาน", overlayLayers.irrigationCanalWms);
+      addOverlay("แม่น้ำและลำห้วย", overlayLayers.streamLayer);
+      addOverlay("คลองชลประทาน", overlayLayers.irrigationCanalLayer);
       addOverlay("ความเหมาะสมปลูกข้าว — ทุกระดับ", overlayLayers.ricePotentialAllLayer);
       addOverlay("ความเหมาะสมปลูกข้าวโพด — ทุกระดับ", overlayLayers.maizePotentialAllLayer);
 

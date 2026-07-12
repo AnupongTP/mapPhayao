@@ -9,9 +9,11 @@
 - Frontend: HTML, CSS, JavaScript, Leaflet, Leaflet Draw
 - Backend: Node.js, Express
 - Database: PostgreSQL/PostGIS ชื่อ `map1`
-- Map service: GeoServer WMS
-- Leaflet/GPS CRS: EPSG:4326
+- Display overlays: Static GeoJSON loaded by Leaflet
+- Spatial analysis: Backend API + PostgreSQL/PostGIS
+- GeoJSON display CRS: EPSG:4326
 - Analysis CRS: EPSG:32647
+- Leaflet/GPS CRS: EPSG:4326
 - ห้ามเปลี่ยน framework หรือสร้าง frontend, backend, map, route, handler, renderer หรือ Layer Control ซ้ำโดยไม่ได้รับคำสั่ง
 
 ## 2. Workflow ปัจจุบันของระบบ
@@ -172,23 +174,60 @@ Frontend rules:
 - ห้ามใช้ raw API content กับ `innerHTML` โดยไม่ sanitize
 - ใช้ `textContent` หรือ safe DOM เป็นหลัก
 
-## 8. Leaflet และ GeoServer
+## 8. Leaflet และ Display Layers
 
-Basemap ปัจจุบัน:
-
-- `GoogleSatellite` เป็น basemap ที่ active ตอนเริ่ม
-- `GoogleSatellite` อยู่ลำดับแรกใน Layer Control
-- `OpenStreetMap` อยู่ลำดับที่สอง
-- ตอนเริ่มต้องมี active basemap เพียงหนึ่งตัว
-
-Overlay rules:
-
-- Optional WMS overlays ควรปิดไว้ก่อน ยกเว้นโค้ดปัจจุบันเปิดใช้อย่างชัดเจน
+- Basemap เริ่มต้นคือ `GoogleSatellite`
+- `GoogleSatellite` อยู่ก่อน `OpenStreetMap`
 - Layer Control อยู่ `topleft`
-- ห้ามสร้าง Layer Control ซ้ำ
-- WMS style แก้ใน GeoServer SLD ไม่ใช่ Leaflet CSS
-- ตรวจ workspace, layer name, CRS, bounding box, style และ Layer Preview ก่อนเพิ่ม WMS
-- marker, popup และ UI ต้องอยู่เหนือ WMS polygons
+- ห้ามสร้าง map, Layer Control หรือ event handler ซ้ำ
+
+Overlay ที่แสดงบนแผนที่ใช้ Static GeoJSON:
+
+- Thailand provinces
+- amphoe
+- tambon
+- basin_main
+- sub_basin_display
+- stream
+- irrigation_canal
+- rice_potential
+- maize_potential
+
+กฎการโหลด:
+
+- ใช้ `L.geoJSON(null, options)`
+- ไม่โหลด Overlay GeoJSON ตอนเปิดหน้าเว็บ
+- เปิด layer แล้วจึง fetch เฉพาะ GeoJSON ของ layer นั้น
+- ปิด layer ต้อง abort request ที่ยังไม่เสร็จและเรียก `clearLayers()`
+- ต้องป้องกัน response เก่ากลับมาเพิ่มข้อมูลหลัง layer ถูกปิด
+- ใช้ relative URL เช่น `data/layers/amphoe.geojson`
+- Optional overlays ต้องปิดตอนเริ่ม
+
+GeoJSON ใช้สำหรับแสดงผลเท่านั้น
+
+การตรวจสอบพื้นที่ยังใช้ Backend API และ PostgreSQL/PostGIS เหมือนเดิม
+
+ข้อมูลที่ใช้วิเคราะห์แต่ไม่จำเป็นต้องแสดง เช่น `soil` และ `basin` ให้คงไว้ตามเดิม
+
+ห้าม frontend display overlays ใช้:
+
+- `L.tileLayer.wms`
+- `localhost:8080`
+- GeoServer workspace หรือตำแหน่ง WMS layer
+- `CQL_FILTER`
+- GeoServer SLD style names
+
+สี เส้น ความหนา ความโปร่งใส และรูปแบบเส้นของ GeoJSON ให้กำหนดใน Leaflet JavaScript
+
+สำหรับ `rice_potential` และ `maize_potential`:
+
+- ใช้หนึ่ง GeoJSON layer ต่อพืช
+- แสดงทุกระดับ S1, S2, S3 และ N
+- Source field คือ `suitabilit`
+- Thai label field คือ `suitabil_1`
+- ห้ามเดาชื่อ field โดยไม่ตรวจข้อมูลจริง
+
+GeoServer files หรือ deployment อาจยังคงอยู่ได้ แต่ frontend overlays ต้องไม่พึ่ง GeoServer เว้นแต่มีคำสั่งใหม่โดยชัดเจน
 
 ## 9. CORS, Security และ Middleware
 
@@ -225,6 +264,14 @@ Middleware order:
 2. ตรวจโค้ด frontend, backend, SQL, route และ layer ที่เกี่ยวข้อง
 3. ใช้สถานะจริงของ repository เป็น source of truth
 4. รายงานสั้น ๆ ว่าจะเปลี่ยนไฟล์ใดและเพราะอะไร
+
+กฎเพิ่มเติม:
+
+- อ่าน `AGENTS.md` ก่อนแก้ repository ทุกครั้ง
+- ห้ามแก้ Backend หรือ PostGIS เมื่อคำสั่งเกี่ยวกับ display GeoJSON เท่านั้น
+- ห้าม regenerate GeoJSON ที่ผู้ใช้ export จาก QGIS แล้วโดยไม่มีคำสั่ง
+- ห้าม simplify, dissolve, split หรือเปลี่ยน geometry โดยไม่ได้รับคำสั่ง
+- หาก GeoJSON ใหญ่หรือช้า ให้รายงานก่อน optimize
 
 ระหว่างแก้:
 
@@ -288,4 +335,10 @@ Backend:
 5. ความปลอดภัยและโค้ดที่ดูแลต่อได้
 6. การแก้ไขให้น้อยและทดสอบตามขอบเขต
 
-สถานะจริงของ repository, database และ GeoServer คือแหล่งอ้างอิงหลัก
+สถานะจริงของ repository และ database คือแหล่งอ้างอิงหลัก
+
+Frontend overlays ใช้ Static GeoJSON และ frontend code เป็นหลัก
+
+การวิเคราะห์พื้นที่ใช้ Backend API และ PostgreSQL/PostGIS เป็นหลัก
+
+GeoServer ไม่ใช่ dependency ของ frontend overlays เว้นแต่มีคำสั่งใหม่โดยชัดเจน

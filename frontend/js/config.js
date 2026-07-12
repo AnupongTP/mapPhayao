@@ -15,6 +15,16 @@
     },
     data: {
       thailandProvinceGeoJson: "data/thailand_province.geojson",
+      layers: {
+        amphoe: "data/layers/amphoe.geojson",
+        tambon: "data/layers/tambon.geojson",
+        basinMain: "data/layers/basin_main.geojson",
+        subBasinDisplay: "data/layers/sub_basin_display.geojson",
+        stream: "data/layers/stream.geojson",
+        irrigationCanal: "data/layers/irrigation_canal.geojson",
+        ricePotential: "data/layers/rice_potential.geojson",
+        maizePotential: "data/layers/maize_potential.geojson",
+      },
     },
   };
 })(window);

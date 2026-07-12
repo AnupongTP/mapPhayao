@@ -1,10 +1,13 @@
-// ไฟล์สร้าง basemap, WMS overlay, และ pane สำหรับจัดลำดับชั้นบนแผนที่
+// Builds basemaps, lazy GeoJSON overlays, and panes for map layer ordering.
 (function (window) {
-  const GEOSERVER_WMS_URL = "http://localhost:8080/geoserver/rice_gis/wms";
-  const MAIZE_POTENTIAL_STYLE = "maize_potential676767";
+  const SUITABILITY_COLORS = {
+    S1: "#74ff00",
+    S2: "#ffbf00",
+    S3: "#ff6900",
+    N: "#ff0c00",
+  };
 
   function createBaseLayers() {
-    // Base layer คือแผนที่พื้นหลังที่ผู้ใช้เลือกได้จาก control
     const maxZoom = window.AppConfig.map.maxZoom;
     const openStreetMap = L.tileLayer(
       "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -29,7 +32,6 @@
   }
 
   function ensurePane(map, name, zIndex) {
-    // Pane กำหนดลำดับซ้อนของ layer ไม่ให้บัง marker หรือ popup
     if (!map || map.getPane(name)) {
       return;
     }
@@ -38,165 +40,287 @@
     map.getPane(name).style.zIndex = zIndex;
   }
 
+  function getSuitabilityClass(feature) {
+    return String(feature?.properties?.suitabilit || "").trim().toUpperCase();
+  }
+
+  function createSuitabilityStyle(feature) {
+    const classValue = getSuitabilityClass(feature);
+    return {
+      color: "#232323",
+      weight: 1,
+      opacity: 0.65,
+      fillColor: SUITABILITY_COLORS[classValue] || "#7a35e7",
+      fillOpacity: 0.4,
+      pane: "ricePotentialPane",
+    };
+  }
+
+  function createLazyLayerController(map, options) {
+    const state = {
+      name: options.name,
+      url: options.url,
+      layer: options.layer,
+      loaded: false,
+      loading: false,
+      abortController: null,
+      requestId: 0,
+    };
+
+    async function load() {
+      if (state.loaded || state.loading) {
+        return;
+      }
+
+      state.loading = true;
+      state.requestId += 1;
+
+      const currentRequestId = state.requestId;
+      const controller = new AbortController();
+      state.abortController = controller;
+
+      try {
+        const response = await fetch(state.url, {
+          signal: controller.signal,
+          cache: "default",
+        });
+
+        if (!response.ok) {
+          const error = new Error(
+            `${state.name}: HTTP ${response.status} ${response.statusText}`,
+          );
+          error.status = response.status;
+          error.statusText = response.statusText;
+          throw error;
+        }
+
+        const geojson = await response.json();
+        const requestIsCurrent = currentRequestId === state.requestId;
+        const layerIsVisible = map.hasLayer(state.layer);
+
+        if (!controller.signal.aborted && requestIsCurrent && layerIsVisible) {
+          state.layer.addData(geojson);
+          state.loaded = true;
+        }
+      } catch (error) {
+        if (error.name === "AbortError") {
+          return;
+        }
+
+        console.error(`[GeoJSON] Failed to load ${state.name}`, {
+          url: state.url,
+          status: error.status || null,
+          message: error.message,
+          error,
+        });
+
+        if (map.hasLayer(state.layer)) {
+          map.removeLayer(state.layer);
+        }
+      } finally {
+        if (currentRequestId === state.requestId) {
+          state.loading = false;
+          state.abortController = null;
+        }
+      }
+    }
+
+    function unload() {
+      state.requestId += 1;
+
+      if (state.abortController) {
+        state.abortController.abort();
+      }
+
+      state.layer.clearLayers();
+      state.loaded = false;
+      state.loading = false;
+      state.abortController = null;
+    }
+
+    return {
+      layer: state.layer,
+      load,
+      unload,
+      getState: () => ({
+        name: state.name,
+        url: state.url,
+        loaded: state.loaded,
+        loading: state.loading,
+        requestId: state.requestId,
+        featureCount: state.layer.getLayers().length,
+      }),
+    };
+  }
+
+  function registerLazyLayer(map, registry, options) {
+    const layer = L.geoJSON(null, options.geoJsonOptions || {});
+    const controller = createLazyLayerController(map, {
+      ...options,
+      layer,
+    });
+    registry.set(layer, controller);
+    return layer;
+  }
+
+  function bindLazyLayerEvents(map, registry) {
+    map.on("overlayadd", (event) => {
+      const controller = registry.get(event.layer);
+      if (controller) {
+        controller.load();
+      }
+    });
+
+    map.on("overlayremove", (event) => {
+      const controller = registry.get(event.layer);
+      if (controller) {
+        controller.unload();
+      }
+    });
+  }
+
   function createOverlayLayers(map) {
-    // GeoServer WMS ใช้แสดงข้อมูลเชิงพื้นที่ ฝั่งคำนวณจริงอยู่ที่ Backend/PostGIS
-    // แยก pane ตามกลุ่มข้อมูล เพื่อคุมลำดับการวาดของ basin, water, และ potential
     ensurePane(map, "subBasinPane", 320);
     ensurePane(map, "mainBasinPane", 330);
     ensurePane(map, "ricePotentialPane", 340);
     ensurePane(map, "waterPane", 350);
 
-    const thailandProvince = new L.GeoJSON.AJAX([
-      window.AppConfig.data.thailandProvinceGeoJson,
-    ]);
-    const amphoeWms = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
-      {
-        layers: "rice_gis:amphoe",
-        format: "image/png",
-        transparent: true,
-        version: "1.1.1",
-        attribution: "GeoServer",
-      },
-    );
-    const tambonWms = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
-      {
-        layers: "rice_gis:tambon",
-        format: "image/png",
-        transparent: true,
-        version: "1.1.1",
-      },
-    );
+    const data = window.AppConfig.data;
+    const lazyLayerControllers = new Map();
 
-    const mainBasinLayer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
-      {
-        layers: "rice_gis:basin_main",
-        format: "image/png",
-        transparent: true,
-        version: "1.1.1",
+    const thailandProvince = registerLazyLayer(map, lazyLayerControllers, {
+      name: "Thailand provinces",
+      url: data.thailandProvinceGeoJson,
+      geoJsonOptions: {
+        style: {
+          color: "#3388ff",
+          weight: 3,
+          opacity: 1,
+          fillOpacity: 0.2,
+        },
+      },
+    });
+
+    const tambonLayer = registerLazyLayer(map, lazyLayerControllers, {
+      name: "ขอบเขตตำบล",
+      url: data.layers.tambon,
+      geoJsonOptions: {
+        style: {
+          color: "#232323",
+          weight: 1,
+          opacity: 1,
+          fillColor: "#c6c6c6",
+          fillOpacity: 0.22,
+        },
+      },
+    });
+
+    const amphoeLayer = registerLazyLayer(map, lazyLayerControllers, {
+      name: "ขอบเขตอำเภอ",
+      url: data.layers.amphoe,
+      geoJsonOptions: {
+        style: {
+          color: "#000000",
+          weight: 2,
+          opacity: 1,
+          fillColor: "#c6c6c6",
+          fillOpacity: 0.32,
+        },
+      },
+    });
+
+    const mainBasinLayer = registerLazyLayer(map, lazyLayerControllers, {
+      name: "ขอบเขตลุ่มน้ำหลัก",
+      url: data.layers.basinMain,
+      geoJsonOptions: {
         pane: "mainBasinPane",
+        style: {
+          color: "#08519C",
+          weight: 2.5,
+          opacity: 1,
+          fillColor: "#3182BD",
+          fillOpacity: 0.05,
+        },
       },
-    );
+    });
 
-    const subBasinLayer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
-      {
-        layers: "rice_gis:sub_basin_display",
-        format: "image/png",
-        transparent: true,
-        version: "1.1.1",
+    const subBasinLayer = registerLazyLayer(map, lazyLayerControllers, {
+      name: "ขอบเขตลุ่มน้ำย่อย",
+      url: data.layers.subBasinDisplay,
+      geoJsonOptions: {
         pane: "subBasinPane",
+        style: {
+          color: "#3182BD",
+          weight: 1.2,
+          opacity: 1,
+          fillColor: "#6BAED6",
+          fillOpacity: 0.18,
+        },
       },
-    );
+    });
 
-    const streamWms = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
-      {
-        layers: "rice_gis:stream",
-        format: "image/png",
-        transparent: true,
-        version: "1.1.1",
+    const streamLayer = registerLazyLayer(map, lazyLayerControllers, {
+      name: "แม่น้ำและลำห้วย",
+      url: data.layers.stream,
+      geoJsonOptions: {
         pane: "waterPane",
+        style: {
+          color: "#003EBA",
+          weight: 2,
+          opacity: 1,
+        },
       },
-    );
+    });
 
-    const irrigationCanalWms = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
-      {
-        layers: "rice_gis:irrigation_canal",
-        format: "image/png",
-        transparent: true,
-        version: "1.1.1",
+    const irrigationCanalLayer = registerLazyLayer(map, lazyLayerControllers, {
+      name: "คลองชลประทาน",
+      url: data.layers.irrigationCanal,
+      geoJsonOptions: {
         pane: "waterPane",
+        style: {
+          color: "#0891b2",
+          weight: 2,
+          opacity: 1,
+        },
       },
-    );
+    });
 
-    const ricePotentialLayerOptions = {
-      // ใช้ layer เดียว แล้วกรองด้วย CQL_FILTER เพื่อแยก S1/S2/S3/N
-      format: "image/png",
-      transparent: true,
-      tiled: true,
-      opacity: 0.65,
-      version: "1.1.1",
-      pane: "ricePotentialPane",
-    };
-
-    const ricePotentialAllLayer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
-      {
-        ...ricePotentialLayerOptions,
-        layers: "rice_gis:rice_potential",
+    const ricePotentialAllLayer = registerLazyLayer(map, lazyLayerControllers, {
+      name: "ความเหมาะสมปลูกข้าว — ทุกระดับ",
+      url: data.layers.ricePotential,
+      geoJsonOptions: {
+        pane: "ricePotentialPane",
+        style: createSuitabilityStyle,
       },
-    );
+    });
 
-    const ricePotentialS1Layer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
-      {
-        ...ricePotentialLayerOptions,
-        layers: "rice_gis:rice_potential",
-        CQL_FILTER: "suitability_class='S1'",
+    const maizePotentialAllLayer = registerLazyLayer(map, lazyLayerControllers, {
+      name: "ความเหมาะสมปลูกข้าวโพด — ทุกระดับ",
+      url: data.layers.maizePotential,
+      geoJsonOptions: {
+        pane: "ricePotentialPane",
+        style: createSuitabilityStyle,
       },
-    );
+    });
 
-    const ricePotentialS2Layer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
-      {
-        ...ricePotentialLayerOptions,
-        layers: "rice_gis:rice_potential",
-        CQL_FILTER: "suitability_class='S2'",
-      },
-    );
-
-    const ricePotentialS3Layer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
-      {
-        ...ricePotentialLayerOptions,
-        layers: "rice_gis:rice_potential",
-        CQL_FILTER: "suitability_class='S3'",
-      },
-    );
-
-    const ricePotentialNLayer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
-      {
-        ...ricePotentialLayerOptions,
-        layers: "rice_gis:rice_potential",
-        CQL_FILTER: "suitability_class='N'",
-      },
-    );
-
-    const maizePotentialAllLayer = L.tileLayer.wms(
-      GEOSERVER_WMS_URL,
-      {
-        ...ricePotentialLayerOptions,
-        layers: "rice_gis:maize_potential",
-        styles: MAIZE_POTENTIAL_STYLE,
-      },
-    );
+    bindLazyLayerEvents(map, lazyLayerControllers);
 
     return {
       thailandProvince,
-      amphoeWms,
-      tambonWms,
+      tambonLayer,
+      amphoeLayer,
       mainBasinLayer,
       subBasinLayer,
-      streamWms,
-      irrigationCanalWms,
+      streamLayer,
+      irrigationCanalLayer,
       ricePotentialAllLayer,
-      ricePotentialS1Layer,
-      ricePotentialS2Layer,
-      ricePotentialS3Layer,
-      ricePotentialNLayer,
       maizePotentialAllLayer,
+      lazyLayerControllers,
     };
   }
 
   window.MapLayers = {
     createBaseLayers,
     createOverlayLayers,
-    GEOSERVER_WMS_URL,
-    MAIZE_POTENTIAL_STYLE,
   };
 })(window);
