@@ -74,11 +74,16 @@
     drawButton: null,
     saveButton: null,
     cancelButton: null,
+    parcelButton: null,
+    parcelPanel: null,
+    parcelList: null,
   };
   const mobileLayoutMediaQuery = window.matchMedia
     ? window.matchMedia("(max-width: 700px)")
     : null;
   let mobileLocationLauncherAction = null;
+  let expandedTemporaryParcelId = null;
+  let resultPanelCloseHandler = null;
 
   function syncSidebarLayoutState() {
     const sidebar = ensureSidebar();
@@ -206,6 +211,7 @@
 
   function openResultPanel(panel) {
     const locationPanel = document.getElementById("location-panel");
+    panel.hidden = false;
     panel.classList.add("is-open");
     if (isMobileLayout() && locationPanel) {
       locationPanel.classList.remove("is-mobile-open");
@@ -215,6 +221,10 @@
 
   function closeResultPanel(panel) {
     panel.classList.remove("is-open");
+    panel.hidden = true;
+    if (typeof resultPanelCloseHandler === "function") {
+      resultPanelCloseHandler();
+    }
     syncMobilePanelState();
   }
 
@@ -405,19 +415,7 @@
     confirmButton.disabled = true;
     actions.append(locateButton, confirmButton);
 
-    const parcelSection = createElement("section", "parcel-section");
-    parcelSection.append(createElement("h3", null, TEXT.temporaryParcelTitle));
-    const parcelList = createElement("div", "parcel-list");
-    parcelList.id = "temporary-parcel-list";
-    parcelList.appendChild(createElement("p", "parcel-empty", TEXT.empty));
-    const parcelNote = createElement(
-      "p",
-      "parcel-note",
-      "รีเฟรชหรือปิดหน้าเว็บ พื้นที่แปลงชั่วคราวจะหายทั้งหมด",
-    );
-    parcelSection.append(parcelList, parcelNote);
-
-    content.append(status, instruction, list, actions, parcelSection);
+    content.append(status, instruction, list, actions);
     sidebar.appendChild(panel);
     ensureMobileLocationLauncher();
     syncMobilePanelState();
@@ -432,6 +430,7 @@
 
     const sidebar = ensureSidebar();
     panel = createPanel("result-panel", "result-panel", "ผลการตรวจสอบพื้นที่");
+    panel.hidden = true;
     const header = panel.querySelector(".panel-header");
     const closeButton = createElement("button", "panel-close panel-close-danger result-panel-close", "ปิด");
     closeButton.type = "button";
@@ -733,40 +732,74 @@
     return container;
   }
 
-  function addParcelDrawControl(map, handlers) {
-    const ParcelDrawControl = L.Control.extend({
-      options: {
-        position: "topleft",
-      },
-      onAdd() {
-        const container = createElement("div", "parcel-draw-control leaflet-bar");
-        const drawButton = createElement("button", "panel-button", TEXT.drawParcel);
-        drawButton.type = "button";
-        const saveButton = createElement("button", "panel-button", TEXT.saveEdit);
-        saveButton.type = "button";
-        saveButton.hidden = true;
-        const cancelButton = createElement("button", "panel-button secondary", TEXT.cancelEdit);
-        cancelButton.type = "button";
-        cancelButton.hidden = true;
+  function isTemporaryParcelPanelOpen() {
+    return Boolean(parcelControlState.parcelPanel && !parcelControlState.parcelPanel.hidden);
+  }
 
-        L.DomEvent.disableClickPropagation(container);
-        L.DomEvent.disableScrollPropagation(container);
+  function openTemporaryParcelPanel() {
+    if (!parcelControlState.parcelPanel || !parcelControlState.parcelButton) {
+      return;
+    }
 
-        drawButton.addEventListener("click", handlers.onDraw);
-        saveButton.addEventListener("click", handlers.onSaveEdit);
-        cancelButton.addEventListener("click", handlers.onCancelEdit);
+    expandedTemporaryParcelId = null;
+    collapseRenderedTemporaryParcelCards();
+    parcelControlState.parcelPanel.hidden = false;
+    parcelControlState.parcelButton.setAttribute("aria-expanded", "true");
+  }
 
-        container.append(drawButton, saveButton, cancelButton);
+  function closeTemporaryParcelPanel() {
+    if (!parcelControlState.parcelPanel || !parcelControlState.parcelButton) {
+      return;
+    }
 
-        parcelControlState.drawButton = drawButton;
-        parcelControlState.saveButton = saveButton;
-        parcelControlState.cancelButton = cancelButton;
+    expandedTemporaryParcelId = null;
+    collapseRenderedTemporaryParcelCards();
+    parcelControlState.parcelPanel.hidden = true;
+    parcelControlState.parcelButton.setAttribute("aria-expanded", "false");
+    if (!parcelControlState.parcelButton.hidden) {
+      parcelControlState.parcelButton.focus({ preventScroll: true });
+    }
+  }
 
-        return container;
-      },
+  function toggleTemporaryParcelPanel() {
+    if (isTemporaryParcelPanelOpen()) {
+      closeTemporaryParcelPanel();
+      return;
+    }
+
+    openTemporaryParcelPanel();
+  }
+
+  function syncMyParcelsUI(parcelCount) {
+    const hasParcels = parcelCount > 0;
+
+    if (parcelControlState.parcelButton) {
+      parcelControlState.parcelButton.hidden = !hasParcels;
+    }
+
+    if (!hasParcels) {
+      closeTemporaryParcelPanel();
+    }
+  }
+
+  function collapseRenderedTemporaryParcelCards() {
+    const container = parcelControlState.parcelList || document.getElementById("temporary-parcel-list");
+    if (!container) {
+      return;
+    }
+
+    container.querySelectorAll(".parcel-item").forEach((item) => {
+      item.classList.remove("is-expanded");
     });
-
-    return new ParcelDrawControl().addTo(map);
+    container.querySelectorAll(".parcel-item-toggle").forEach((button) => {
+      button.setAttribute("aria-expanded", "false");
+    });
+    container.querySelectorAll(".parcel-item-actions").forEach((actions) => {
+      actions.hidden = true;
+    });
+    container.querySelectorAll(".parcel-item-chevron").forEach((chevron) => {
+      chevron.textContent = "⌄";
+    });
   }
 
   function setParcelControlState(options) {
@@ -787,30 +820,62 @@
   }
 
   function renderTemporaryParcelList(parcels, handlers) {
-    ensureLocationPanel();
-    const container = document.getElementById("temporary-parcel-list");
+    const container = parcelControlState.parcelList || document.getElementById("temporary-parcel-list");
+    if (!container) {
+      return;
+    }
+    const parcelCount = Array.isArray(parcels) ? parcels.length : 0;
+    const hasParcels = parcelCount > 0;
+    syncMyParcelsUI(parcelCount);
     container.replaceChildren();
 
-    if (!Array.isArray(parcels) || parcels.length === 0) {
+    if (!hasParcels) {
       container.appendChild(createElement("p", "parcel-empty", "ยังไม่มีพื้นที่แปลงชั่วคราว"));
       return;
     }
 
-    parcels.forEach((parcel) => {
-      const item = createElement("article", `parcel-item${parcel.isSelected ? " is-selected" : ""}`);
-      const header = createElement("div", "parcel-item-header");
-      const titleWrap = createElement("div", null);
-      titleWrap.append(
-        createElement("p", "parcel-item-name", parcel.name),
-        createElement("p", "parcel-item-status", parcel.statusText),
+    if (expandedTemporaryParcelId && !parcels.some((parcel) => parcel.id === expandedTemporaryParcelId)) {
+      expandedTemporaryParcelId = null;
+    }
+
+    parcels.forEach((parcel, index) => {
+      const isExpanded = parcel.id === expandedTemporaryParcelId;
+      const automaticName = `แปลงที่ ${index + 1}`;
+      const parcelName = typeof parcel.name === "string" ? parcel.name.trim() : "";
+      const hasCustomName = parcelName && parcelName !== automaticName;
+      const item = createElement(
+        "article",
+        `parcel-item${parcel.isSelected ? " is-selected" : ""}${isExpanded ? " is-expanded" : ""}`,
       );
-      header.appendChild(titleWrap);
+      const header = createElement("button", "parcel-item-header parcel-item-toggle");
+      const actionsId = `temporary-parcel-actions-${parcel.id}`;
+      const titleWrap = createElement("span", "parcel-item-title");
+      const titleLine = createElement("span", "parcel-item-main");
+      const chevron = createElement("span", "parcel-item-chevron", isExpanded ? "⌃" : "⌄");
+      header.type = "button";
+      header.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+      header.setAttribute("aria-controls", actionsId);
+      header.addEventListener("click", () => {
+        expandedTemporaryParcelId = isExpanded ? null : parcel.id;
+        renderTemporaryParcelList(parcels, handlers);
+      });
+      titleLine.appendChild(createElement("span", "parcel-item-index", automaticName));
+      if (hasCustomName) {
+        titleLine.appendChild(createElement("span", "parcel-item-name", parcelName));
+      }
+      titleWrap.append(titleLine, createElement("span", "parcel-item-status", parcel.statusText));
+      header.append(titleWrap, chevron);
 
       const actions = createElement("div", "parcel-item-actions");
+      actions.id = actionsId;
+      actions.hidden = !isExpanded;
       const makeButton = (label, onClick) => {
         const button = createElement("button", "parcel-action", label);
         button.type = "button";
-        button.addEventListener("click", onClick);
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          onClick();
+        });
         return button;
       };
 
@@ -937,6 +1002,18 @@
       if (parcelState.analysisError) {
         content.appendChild(createElement("p", "result-message", parcelState.analysisError));
       }
+      openResultPanel(panel);
+      return;
+    }
+
+    if (parcelState.analysisStatus === "stale") {
+      content.appendChild(
+        createElement(
+          "p",
+          "result-message",
+          "พื้นที่แปลงมีการแก้ไขขอบเขต กรุณากดวิเคราะห์ใหม่เพื่ออัปเดตผล",
+        ),
+      );
       openResultPanel(panel);
       return;
     }
@@ -1373,6 +1450,18 @@
       return;
     }
 
+    if (parcelState.analysisStatus === "stale") {
+      content.appendChild(
+        createElement(
+          "p",
+          "result-message",
+          "พื้นที่แปลงมีการแก้ไขขอบเขต กรุณากดวิเคราะห์ใหม่เพื่ออัปเดตผล",
+        ),
+      );
+      openResultPanel(panel);
+      return;
+    }
+
     const analysis = parcelState.analysis || {};
     const parcel = analysis.parcel || {};
     const location = analysis.location || {};
@@ -1448,19 +1537,52 @@
         const cancelButton = createElement("button", "panel-button secondary", TEXT.cancelEdit);
         cancelButton.type = "button";
         cancelButton.hidden = true;
+        const parcelButton = createElement("button", "panel-button secondary my-parcels-button", "แปลงของฉัน");
+        parcelButton.type = "button";
+        parcelButton.hidden = true;
+        parcelButton.setAttribute("aria-controls", "temporary-parcel-panel");
+        parcelButton.setAttribute("aria-expanded", "false");
+
+        const parcelPanel = createElement("aside", "temporary-parcel-panel");
+        parcelPanel.id = "temporary-parcel-panel";
+        parcelPanel.hidden = true;
+        parcelPanel.setAttribute("aria-label", "พื้นที่แปลง");
+        const parcelHeader = createElement("div", "temporary-parcel-panel-header");
+        parcelHeader.appendChild(createElement("h2", null, "พื้นที่แปลง"));
+        const closeButton = createElement("button", "panel-close panel-close-danger", "ปิด");
+        closeButton.type = "button";
+        closeButton.setAttribute("aria-label", "ปิดแผงพื้นที่แปลง");
+        parcelHeader.appendChild(closeButton);
+        const parcelList = createElement("div", "parcel-list temporary-parcel-panel-list");
+        parcelList.id = "temporary-parcel-list";
+        parcelList.appendChild(createElement("p", "parcel-empty", TEXT.empty));
+        const parcelNote = createElement(
+          "p",
+          "parcel-note",
+          "รีเฟรชหรือปิดหน้าเว็บ พื้นที่แปลงชั่วคราวจะหายทั้งหมด",
+        );
+        parcelPanel.append(parcelHeader, parcelList, parcelNote);
 
         L.DomEvent.disableClickPropagation(container);
         L.DomEvent.disableScrollPropagation(container);
+        L.DomEvent.disableClickPropagation(parcelPanel);
+        L.DomEvent.disableScrollPropagation(parcelPanel);
 
         drawButton.addEventListener("click", handlers.onDraw);
         saveButton.addEventListener("click", handlers.onSaveEdit);
         cancelButton.addEventListener("click", handlers.onCancelEdit);
+        parcelButton.addEventListener("click", toggleTemporaryParcelPanel);
+        closeButton.addEventListener("click", closeTemporaryParcelPanel);
 
-        container.append(drawButton, saveButton, cancelButton);
+        container.append(drawButton, saveButton, cancelButton, parcelButton, parcelPanel);
 
         parcelControlState.drawButton = drawButton;
         parcelControlState.saveButton = saveButton;
         parcelControlState.cancelButton = cancelButton;
+        parcelControlState.parcelButton = parcelButton;
+        parcelControlState.parcelPanel = parcelPanel;
+        parcelControlState.parcelList = parcelList;
+        syncMyParcelsUI(0);
 
         return container;
       },
@@ -1504,7 +1626,7 @@
         }
       };
 
-      addOverlay("Thailand provinces", overlayLayers.thailandProvince);
+      addOverlay("ขอบเขตประเทศไทย", overlayLayers.thailandProvince);
       addOverlay("ขอบเขตตำบล", overlayLayers.tambonLayer);
       addOverlay("ขอบเขตอำเภอ", overlayLayers.amphoeLayer);
       addOverlay("ขอบเขตลุ่มน้ำหลัก", overlayLayers.mainBasinLayer);
@@ -1529,6 +1651,10 @@
     setLocationActionsEnabled,
     syncMobilePointConfirmButton,
     closeCurrentResultPanel,
+    closeTemporaryParcelPanel,
+    setResultPanelCloseHandler: function (handler) {
+      resultPanelCloseHandler = typeof handler === "function" ? handler : null;
+    },
     renderTemporaryParcelList,
     promptParcelName,
     showGpsLoading,
