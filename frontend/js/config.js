@@ -9,17 +9,15 @@
   const isCurrentCloudflareTunnel =
     hostname === "rapidly-marijuana-harper-partly.trycloudflare.com";
 
-  // URL จากคำสั่ง:
-  // cloudflared tunnel --url http://localhost:3000
-  const backendTunnelUrl =
-    "https://embedded-nextel-reservoir-strike.trycloudflare.com/api";
+  const localApiBaseUrl = "http://localhost:3000/api";
+  const renderApiBaseUrl = "https://mapphayao-backend.onrender.com/api";
 
   window.AppConfig = {
     apiBaseUrl: isLocal
-      ? "http://localhost:3000/api"
+      ? localApiBaseUrl
       : isCurrentCloudflareTunnel
-        ? backendTunnelUrl
-        : "https://mapphayao-backend.onrender.com/api",
+        ? renderApiBaseUrl
+        : renderApiBaseUrl,
 
     map: {
       center: [19.0290389, 99.8906438],
