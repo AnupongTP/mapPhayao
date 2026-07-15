@@ -10,6 +10,9 @@
     dragReady: "อัปเดตตำแหน่งแล้ว กรุณาตรวจสอบหมุดและกดยืนยันตำแหน่ง",
     locate: "หาตำแหน่งปัจจุบัน",
     confirm: "ยืนยันตำแหน่ง",
+    lineSummary: "รับสรุปข้อมูลทาง LINE",
+    lineSummarySendingShort: "กำลังส่ง...",
+    lineSummarySentShort: "ส่งข้อมูลแล้ว",
     gpsLoading: "กำลังค้นหาตำแหน่งปัจจุบัน...",
     gpsReady: "พบตำแหน่งปัจจุบันแล้ว กรุณาตรวจสอบหมุดและกดยืนยันตำแหน่ง",
     apiLoading: "กำลังตรวจสอบข้อมูลพื้นที่...",
@@ -24,14 +27,16 @@
     apiError: "ไม่สามารถโหลดข้อมูลพื้นที่ได้ กรุณาลองใหม่",
     noGisData: "ไม่พบข้อมูล GIS สำหรับตำแหน่งนี้",
     phayaoCoverage: "ข้อมูลปัจจุบันครอบคลุมเฉพาะพื้นที่จังหวัดพะเยา",
+    pointResultTitle: "ผลการตรวจสอบตำแหน่ง",
+    parcelResultTitle: "ผลการตรวจสอบพื้นที่แปลง",
     mapSource: "เลือกจากแผนที่",
     dragSource: "ลากหมุด",
     gpsSource: "ตำแหน่งปัจจุบัน",
+    detailLinkSource: "ลิงก์รายละเอียด",
     riceSuitabilityTitle: "ความเหมาะสมของที่ดินสำหรับปลูกข้าว",
     maizeSuitabilityTitle: "ความเหมาะสมของที่ดินสำหรับปลูกข้าวโพด",
     riceSuitabilitySource:
       "ผลจากชั้นข้อมูลความเหมาะสมของที่ดินของกรมพัฒนาที่ดิน",
-    incompleteEvaluation: "ยังไม่ได้ประเมินครบทุกปัจจัย",
     temporaryParcelTitle: "พื้นที่แปลงชั่วคราว",
     drawParcel: "วาดพื้นที่แปลง",
     saveEdit: "บันทึกแก้ไข",
@@ -84,6 +89,13 @@
   let mobileLocationLauncherAction = null;
   let expandedTemporaryParcelId = null;
   let resultPanelCloseHandler = null;
+  let lineSummaryClickHandler = null;
+  let latestLineSummaryButtonState = {
+    visible: false,
+    enabled: false,
+    text: TEXT.lineSummary,
+    busy: false,
+  };
 
   function syncSidebarLayoutState() {
     const sidebar = ensureSidebar();
@@ -144,8 +156,12 @@
   }
 
   function ensureMobilePointConfirmButton() {
+    const actionBar = ensureMobilePointActionBar();
     let button = document.getElementById("mobile-point-confirm");
     if (button) {
+      if (button.parentElement !== actionBar) {
+        actionBar.appendChild(button);
+      }
       return button;
     }
 
@@ -156,8 +172,91 @@
     button.setAttribute("aria-controls", "result-panel");
     button.setAttribute("aria-label", "ยืนยันตำแหน่งที่เลือก");
     button.setAttribute("aria-busy", "false");
-    document.body.appendChild(button);
+    actionBar.appendChild(button);
     return button;
+  }
+
+  function ensureMobilePointActionBar() {
+    let actionBar = document.getElementById("mobile-point-actions");
+    if (actionBar) {
+      return actionBar;
+    }
+
+    actionBar = createElement("div", "mobile-point-actions");
+    actionBar.id = "mobile-point-actions";
+    actionBar.hidden = true;
+    document.body.appendChild(actionBar);
+    return actionBar;
+  }
+
+  function bindLineSummaryButton(button) {
+    if (!button) {
+      return;
+    }
+    button.onclick =
+      typeof lineSummaryClickHandler === "function" ? lineSummaryClickHandler : null;
+  }
+
+  function ensureMobileLineSummaryButton() {
+    const actionBar = ensureMobilePointActionBar();
+    let button = document.getElementById("mobile-line-summary-button");
+    if (button) {
+      if (button.parentElement !== actionBar) {
+        actionBar.appendChild(button);
+      }
+      bindLineSummaryButton(button);
+      return button;
+    }
+
+    button = createElement(
+      "button",
+      "mobile-point-confirm mobile-line-summary-button",
+      TEXT.lineSummary,
+    );
+    button.id = "mobile-line-summary-button";
+    button.type = "button";
+    button.hidden = true;
+    button.disabled = true;
+    button.dataset.lineSummaryButton = "true";
+    button.setAttribute("aria-controls", "mobile-line-summary-status");
+    button.setAttribute("aria-label", TEXT.lineSummary);
+    button.setAttribute("aria-busy", "false");
+    bindLineSummaryButton(button);
+    actionBar.appendChild(button);
+    return button;
+  }
+
+  function ensureMobileLineSummaryStatus() {
+    const actionBar = ensureMobilePointActionBar();
+    let status = document.getElementById("mobile-line-summary-status");
+    if (status) {
+      if (status.parentElement !== actionBar) {
+        actionBar.appendChild(status);
+      }
+      return status;
+    }
+
+    status = createElement("p", "mobile-line-summary-status");
+    status.id = "mobile-line-summary-status";
+    status.hidden = true;
+    status.setAttribute("aria-live", "polite");
+    status.setAttribute("role", "status");
+    actionBar.appendChild(status);
+    return status;
+  }
+
+  function syncMobilePointActionBarVisibility() {
+    const actionBar = ensureMobilePointActionBar();
+    const confirmButton = document.getElementById("mobile-point-confirm");
+    const summaryButton = document.getElementById("mobile-line-summary-button");
+    const summaryStatus = document.getElementById("mobile-line-summary-status");
+    const hasVisibleContent =
+      isMobileLayout() &&
+      ((confirmButton && !confirmButton.hidden) ||
+        (summaryButton && !summaryButton.hidden) ||
+        (summaryStatus && !summaryStatus.hidden));
+
+    actionBar.hidden = !hasVisibleContent;
   }
 
   function syncMobilePanelState() {
@@ -237,6 +336,8 @@
 
   function handleMobileLayoutChange() {
     syncMobilePanelState();
+    applyLineSummaryButtonState();
+    syncMobilePointActionBarVisibility();
   }
 
   if (mobileLayoutMediaQuery?.addEventListener) {
@@ -273,6 +374,180 @@
     return `${formatters.formatCoordinate(value?.lat)}, ${formatters.formatCoordinate(value?.lng)}`;
   }
 
+  function formatYearRange(dataPeriod) {
+    if (!dataPeriod || !dataPeriod.startYear || !dataPeriod.endYear) {
+      return TEXT.empty;
+    }
+    return `${dataPeriod.startYear}–${dataPeriod.endYear}`;
+  }
+
+  function formatYears(years) {
+    return Array.isArray(years) && years.length ? years.join(", ") : TEXT.empty;
+  }
+
+  function formatCheckedAt(value) {
+    if (!value) {
+      return TEXT.empty;
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return TEXT.empty;
+    }
+    return new Intl.DateTimeFormat("th-TH", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(date);
+  }
+
+  function formatWeatherTemperature(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+      return TEXT.empty;
+    }
+    return `${Number.isInteger(number) ? number.toFixed(0) : number.toFixed(1)} °C`;
+  }
+
+  function formatWeatherProbability(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+      return TEXT.empty;
+    }
+    return `${Math.round(Math.min(Math.max(number, 0), 100))}%`;
+  }
+
+  function formatWeatherUpdatedAt(value) {
+    if (!value) {
+      return TEXT.empty;
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return TEXT.empty;
+    }
+    const parts = new Intl.DateTimeFormat("th-TH-u-ca-buddhist", {
+      timeZone: "Asia/Bangkok",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(date);
+    const getPart = (type) => parts.find((part) => part.type === type)?.value || "";
+    return `${getPart("day")} ${getPart("month")} ${getPart("year")} ${getPart("hour")}:${getPart("minute")} น.`;
+  }
+
+  function createAgriculturalWeatherCard(weather) {
+    const card = createElement("section", "parcel-result-card agricultural-weather-card");
+    card.appendChild(createElement("h3", "parcel-result-card-title", "พยากรณ์อากาศวันนี้"));
+    const body = createElement("div", "parcel-result-card-body");
+
+    if (!weather || weather.status !== "AVAILABLE") {
+      body.appendChild(createElement("p", "result-message", "ไม่สามารถโหลดข้อมูลสภาพอากาศได้ในขณะนี้"));
+      card.appendChild(body);
+      return card;
+    }
+
+    const currentGroup = createElement("section", "summary-card-group");
+    currentGroup.appendChild(createElement("h4", null, "สภาพอากาศขณะนี้"));
+    const currentList = createElement("dl", "summary-card-list");
+    currentList.appendChild(createSummaryRow("อุณหภูมิ", weather.temperatureC, formatWeatherTemperature));
+    currentGroup.appendChild(currentList);
+
+    const trendGroup = createElement("section", "summary-card-group");
+    trendGroup.appendChild(createElement("h4", null, "อีก 1 ชั่วโมงข้างหน้า"));
+    const trendList = createElement("dl", "summary-card-list");
+    trendList.appendChild(
+      createSummaryRow(
+        "โอกาสฝนตก",
+        weather.nextHourPrecipitationProbabilityPercent,
+        formatWeatherProbability,
+      ),
+    );
+    trendGroup.appendChild(trendList);
+
+    const metaList = createElement("dl", "summary-card-list");
+    metaList.append(
+      createSummaryRow("อัปเดตล่าสุด", weather.updatedAt, formatWeatherUpdatedAt),
+      createSummaryRow("แหล่งข้อมูล", weather.source || "Open-Meteo"),
+    );
+
+    body.append(currentGroup, trendGroup, metaList);
+    card.appendChild(body);
+    return card;
+  }
+
+  function buildFloodHazardSummary(flood) {
+    if (!flood || flood.status === "unavailable") {
+      return "ยังไม่สามารถตรวจสอบประวัติน้ำท่วมซ้ำซากได้ในขณะนี้";
+    }
+    if (flood.status === "detected") {
+      return `พบประวัติน้ำท่วมซ้ำซาก ${flood.yearsDetected?.length || 0} ปี จากข้อมูลย้อนหลังช่วงปี ${formatYearRange(flood.dataPeriod)}`;
+    }
+    return "ไม่พบประวัติน้ำท่วมซ้ำซาก ณ ตำแหน่งนี้ในชุดข้อมูล GISTDA";
+  }
+
+  function buildDroughtHazardSummary(drought) {
+    if (!drought || drought.status === "unavailable") {
+      return "ยังไม่สามารถตรวจสอบประวัติภัยแล้งซ้ำซากได้ในขณะนี้";
+    }
+    if (drought.status === "detected") {
+      return `พบประวัติภัยแล้งซ้ำซาก ${drought.yearsDetected?.length || 0} ปี จากข้อมูลย้อนหลังช่วงปี ${formatYearRange(drought.dataPeriod)}`;
+    }
+    return "ไม่พบประวัติภัยแล้งซ้ำซาก ณ ตำแหน่งนี้ในชุดข้อมูล GISTDA";
+  }
+
+  function appendHazardSubsection(parent, title, fields, className) {
+    const section = createElement("section", className || "summary-card-group");
+    section.append(createElement("h4", null, title));
+    const list = createElement("dl", "summary-card-list");
+    fields
+      .filter((field) => field.value !== null && field.value !== undefined && field.value !== "")
+      .forEach((field) => list.appendChild(createSummaryRow(field.label, field.value, field.formatter)));
+    section.appendChild(list);
+    parent.appendChild(section);
+  }
+
+  function renderHazardHistorySection(hazardHistory) {
+    if (!hazardHistory) {
+      return null;
+    }
+
+    const section = createElement("section", "parcel-result-card hazard-history-section");
+    const body = createElement("div", "parcel-result-card-body parcel-hazard-card-body");
+    const flood = hazardHistory.floodRecurrence || {};
+    const drought = hazardHistory.droughtRecurrence || {};
+    const floodYearsCount = flood.yearsDetected?.length || 0;
+    const droughtYearsCount = drought.yearsDetected?.length || 0;
+    const floodFields = [
+      { label: "ผลตรวจสอบ", value: buildFloodHazardSummary(flood) },
+      { label: "ปีที่พบ", value: flood.status === "detected" ? formatYears(flood.yearsDetected) : null },
+      {
+        label: "ค่าความถี่จากชุดข้อมูล",
+        value: flood.status === "detected" && flood.frequency !== floodYearsCount ? flood.frequency : null,
+      },
+      { label: "แหล่งข้อมูล", value: flood.source || "GISTDA" },
+      { label: "ตรวจสอบเมื่อ", value: flood.checkedAt, formatter: formatCheckedAt },
+    ];
+    const droughtFields = [
+      { label: "ผลตรวจสอบ", value: buildDroughtHazardSummary(drought) },
+      { label: "ปีที่พบ", value: drought.status === "detected" ? formatYears(drought.yearsDetected) : null },
+      {
+        label: "จำนวนเหตุการณ์ตามชุดข้อมูล",
+        value: drought.status === "detected" && drought.totalOccurrences !== droughtYearsCount
+          ? drought.totalOccurrences
+          : null,
+      },
+      { label: "แหล่งข้อมูล", value: drought.source || "GISTDA" },
+      { label: "ตรวจสอบเมื่อ", value: drought.checkedAt, formatter: formatCheckedAt },
+    ];
+
+    section.append(createElement("h3", "parcel-result-card-title", "ประวัติภัยของพื้นที่"));
+    appendHazardSubsection(body, "พื้นที่น้ำท่วมซ้ำซาก (10 ปีล่าสุด)", floodFields, "summary-card-group parcel-hazard-subcard");
+    appendHazardSubsection(body, "ประวัติภัยแล้งซ้ำซากระดับตำบล", droughtFields, "summary-card-group parcel-hazard-subcard");
+    section.appendChild(body);
+    return section;
+  }
+
   function createSummaryRow(label, value, formatter) {
     const row = createElement("div", "summary-card-row");
     row.append(
@@ -304,6 +579,9 @@
     }
     if (source === "gps") {
       return TEXT.gpsSource;
+    }
+    if (source === "detail-link") {
+      return TEXT.detailLinkSource;
     }
     return TEXT.empty;
   }
@@ -413,9 +691,28 @@
     confirmButton.type = "button";
     confirmButton.id = "confirm-location-button";
     confirmButton.disabled = true;
-    actions.append(locateButton, confirmButton);
+    const lineSummaryButton = createElement(
+      "button",
+      "panel-button secondary line-summary-button",
+      TEXT.lineSummary,
+    );
+    lineSummaryButton.type = "button";
+    lineSummaryButton.id = "line-summary-button";
+    lineSummaryButton.hidden = true;
+    lineSummaryButton.disabled = true;
+    lineSummaryButton.dataset.lineSummaryButton = "true";
+    lineSummaryButton.setAttribute("aria-controls", "line-summary-status");
+    lineSummaryButton.setAttribute("aria-label", TEXT.lineSummary);
+    lineSummaryButton.setAttribute("aria-busy", "false");
+    bindLineSummaryButton(lineSummaryButton);
+    const lineSummaryStatus = createElement("p", "line-summary-status");
+    lineSummaryStatus.id = "line-summary-status";
+    lineSummaryStatus.hidden = true;
+    lineSummaryStatus.setAttribute("aria-live", "polite");
+    lineSummaryStatus.setAttribute("role", "status");
+    actions.append(locateButton, confirmButton, lineSummaryButton);
 
-    content.append(status, instruction, list, actions);
+    content.append(status, instruction, list, actions, lineSummaryStatus);
     sidebar.appendChild(panel);
     ensureMobileLocationLauncher();
     syncMobilePanelState();
@@ -429,12 +726,12 @@
     }
 
     const sidebar = ensureSidebar();
-    panel = createPanel("result-panel", "result-panel", "ผลการตรวจสอบพื้นที่");
+    panel = createPanel("result-panel", "result-panel", TEXT.pointResultTitle);
     panel.hidden = true;
     const header = panel.querySelector(".panel-header");
     const closeButton = createElement("button", "panel-close panel-close-danger result-panel-close", "ปิด");
     closeButton.type = "button";
-    closeButton.setAttribute("aria-label", "ปิดหน้าต่างผลการตรวจสอบพื้นที่");
+    closeButton.setAttribute("aria-label", "ปิดหน้าต่างผลการตรวจสอบ");
     closeButton.addEventListener("click", () => {
       closeResultPanel(panel);
     });
@@ -442,6 +739,13 @@
     sidebar.appendChild(panel);
     syncSidebarLayoutState();
     return panel;
+  }
+
+  function setResultPanelTitle(panel, title) {
+    const heading = panel?.querySelector(".panel-header h2");
+    if (heading) {
+      heading.textContent = title;
+    }
   }
 
   function updateLocationList(list, location) {
@@ -475,6 +779,79 @@
     document.getElementById("confirm-location-button").disabled = !isEnabled;
   }
 
+  function getLineSummaryButton() {
+    const panel = ensureLocationPanel();
+    return panel.querySelector("#line-summary-button");
+  }
+
+  function getLineSummaryStatus() {
+    const panel = ensureLocationPanel();
+    return panel.querySelector("#line-summary-status");
+  }
+
+  function applyLineSummaryButtonState() {
+    const panel = ensureLocationPanel();
+    const actions = panel.querySelector(".location-actions");
+    const desktopButton = getLineSummaryButton();
+    const mobileButton = ensureMobileLineSummaryButton();
+    const isVisible = Boolean(latestLineSummaryButtonState.visible);
+    const text = latestLineSummaryButtonState.text || TEXT.lineSummary;
+    const isEnabled = Boolean(latestLineSummaryButtonState.enabled);
+    const isBusy = Boolean(latestLineSummaryButtonState.busy);
+    const isMobile = isMobileLayout();
+
+    if (actions) {
+      actions.classList.toggle("has-line-summary", isVisible && !isMobile);
+    }
+
+    [desktopButton, mobileButton].forEach((button) => {
+      button.hidden =
+        !isVisible ||
+        (button === desktopButton && isMobile) ||
+        (button === mobileButton && !isMobile);
+      button.disabled = !isEnabled;
+      button.textContent = text;
+      button.setAttribute("aria-busy", isBusy ? "true" : "false");
+      bindLineSummaryButton(button);
+    });
+
+    if (!isVisible) {
+      clearLineSummaryStatus();
+    }
+
+    syncMobilePointActionBarVisibility();
+  }
+
+  function setLineSummaryButtonState(options = {}) {
+    latestLineSummaryButtonState = {
+      visible: Boolean(options.visible),
+      enabled: Boolean(options.enabled),
+      text: options.text || TEXT.lineSummary,
+      busy: Boolean(options.busy),
+    };
+    applyLineSummaryButtonState();
+  }
+
+  function setLineSummaryHandler(handler) {
+    lineSummaryClickHandler = typeof handler === "function" ? handler : null;
+    bindLineSummaryButton(getLineSummaryButton());
+    bindLineSummaryButton(ensureMobileLineSummaryButton());
+  }
+
+  function showLineSummaryStatus(message, tone) {
+    [getLineSummaryStatus(), ensureMobileLineSummaryStatus()].forEach((status) => {
+      status.textContent = message || "";
+      status.hidden = !message || (status.id === "mobile-line-summary-status" && !isMobileLayout());
+      status.classList.toggle("is-success", tone === "success");
+      status.classList.toggle("is-error", tone === "error");
+    });
+    syncMobilePointActionBarVisibility();
+  }
+
+  function clearLineSummaryStatus() {
+    showLineSummaryStatus("");
+  }
+
   function setupLocationPanel({ onLocate, onConfirm }) {
     const panel = ensureLocationPanel();
     mobileLocationLauncherAction = onLocate;
@@ -490,20 +867,24 @@
     const resultPanel = document.getElementById("result-panel");
     const isResultOpen = Boolean(resultPanel && resultPanel.classList.contains("is-open"));
     const isLoading = Boolean(options.isLoading);
+    const isLiffMode = Boolean(options.isLiffMode);
     const shouldShow =
       isMobileLayout() &&
-      Boolean(options.hasPendingPoint) &&
-      !isResultOpen &&
-      !Boolean(options.isBlocked);
+      !Boolean(options.isBlocked) &&
+      (isLiffMode
+        ? Boolean(options.hasSelectedPoint)
+        : Boolean(options.hasPendingPoint) && !isResultOpen);
 
     button.hidden = !shouldShow;
     button.disabled = isLoading;
     button.textContent = isLoading ? "กำลังตรวจสอบ..." : "ยืนยันตำแหน่ง";
     button.setAttribute("aria-busy", isLoading ? "true" : "false");
+    syncMobilePointActionBarVisibility();
   }
 
   function setResultPanelState(messages) {
     const panel = ensureResultPanel();
+    setResultPanelTitle(panel, TEXT.pointResultTitle);
     const content = panel.querySelector("#result-panel-content");
     const messageList = Array.isArray(messages) ? messages : [messages];
     content.replaceChildren();
@@ -599,6 +980,10 @@
     };
   }
 
+  function hasPointSuitabilityData(item) {
+    return Boolean(item && item.class);
+  }
+
   function legacyRenderPointSuitabilitySummaryCard(data) {
     const card = createElement("article", "suitability-summary-card");
     const header = createElement(
@@ -609,7 +994,6 @@
       ).className}`,
     );
     const body = createElement("section", "suitability-card-body");
-    const footer = createElement("footer", "suitability-card-footer");
     const riceDisplay = getPointSuitabilityDisplay(
       data.riceLandSuitability,
       TEXT.pointNoRiceCoverage,
@@ -625,14 +1009,10 @@
     );
 
     appendSummaryGroup(body, TEXT.riceSuitabilityTitle, [
-      { label: "ผลที่จุดนี้", value: riceDisplay.label },
-      { label: "วิธีประเมิน", value: data.riceLandSuitability?.evaluationMethod },
       { label: "แหล่งข้อมูล", value: data.riceLandSuitability?.sourceName },
     ]);
 
     appendSummaryGroup(body, TEXT.maizeSuitabilityTitle, [
-      { label: "ผลที่จุดนี้", value: maizeDisplay.label },
-      { label: "วิธีประเมิน", value: data.maizeLandSuitability?.evaluationMethod },
       { label: "แหล่งข้อมูล", value: data.maizeLandSuitability?.sourceName },
     ]);
 
@@ -640,14 +1020,13 @@
       { label: "คำอธิบาย", value: TEXT.riceSuitabilitySource },
     ]);
 
-    footer.append(createElement("span", "suitability-status-pill", TEXT.incompleteEvaluation));
-
-    card.append(header, body, footer);
+    card.append(header, body);
     return card;
   }
 
   function legacyRenderResultPanel(data) {
     const panel = ensureResultPanel();
+    setResultPanelTitle(panel, TEXT.pointResultTitle);
     const content = panel.querySelector("#result-panel-content");
     const payload = data || {};
     const location = payload.location || {};
@@ -667,11 +1046,19 @@
       } else {
         content.appendChild(createElement("p", "result-message", TEXT.notEvaluated));
       }
+      const hazardSection = renderHazardHistorySection(payload.hazardHistory);
+      if (hazardSection) {
+        content.appendChild(hazardSection);
+      }
       openResultPanel(panel);
       return;
     }
 
     content.appendChild(renderPointSuitabilitySummaryCard(payload));
+    const hazardSection = renderHazardHistorySection(payload.hazardHistory);
+    if (hazardSection) {
+      content.appendChild(hazardSection);
+    }
 
     appendSection(content, "ข้อมูลตำแหน่ง", [
       { label: "จังหวัด", value: location.province },
@@ -717,9 +1104,9 @@
     appendField(list, "ข้าวโพด", getPointSuitabilityText(data, "maize"));
 
     if (typeof options.onOpenResult === "function") {
-      const button = createElement("button", "point-popup-result-button", "ดูผลการตรวจสอบพื้นที่");
+      const button = createElement("button", "point-popup-result-button", "ดูผลการตรวจสอบตำแหน่ง");
       button.type = "button";
-      button.setAttribute("aria-label", "เปิดผลการตรวจสอบพื้นที่");
+      button.setAttribute("aria-label", "เปิดผลการตรวจสอบตำแหน่ง");
       button.addEventListener("click", (event) => {
         event.stopPropagation();
         options.onOpenResult();
@@ -981,6 +1368,7 @@
 
   function legacyRenderParcelResult(parcelState) {
     const panel = ensureResultPanel();
+    setResultPanelTitle(panel, TEXT.parcelResultTitle);
     const content = panel.querySelector("#result-panel-content");
     content.replaceChildren();
     content.scrollTop = 0;
@@ -1158,11 +1546,22 @@
     return section;
   }
 
+  function createPointCropResultSummary(display) {
+    const section = createElement(
+      "section",
+      `crop-suitability-summary ${display.className}`,
+    );
+    section.append(
+      createElement("div", "crop-suitability-summary-grade", display.grade),
+      createElement("p", "crop-suitability-summary-label", display.label),
+    );
+    return section;
+  }
+
   function renderPointSuitabilitySummaryCard(data) {
     const card = createElement("article", "suitability-summary-card");
     const summaryGrid = createElement("div", "crop-suitability-summary-grid");
     const body = createElement("section", "suitability-card-body");
-    const footer = createElement("footer", "suitability-card-footer");
     const riceDisplay = getPointSuitabilityDisplay(
       data.riceLandSuitability,
       TEXT.pointNoRiceCoverage,
@@ -1178,14 +1577,10 @@
     );
 
     appendSummaryGroup(body, TEXT.riceSuitabilityTitle, [
-      { label: "ผลที่จุดนี้", value: riceDisplay.label },
-      { label: "วิธีประเมิน", value: data.riceLandSuitability?.evaluationMethod },
       { label: "แหล่งข้อมูล", value: data.riceLandSuitability?.sourceName },
     ]);
 
     appendSummaryGroup(body, TEXT.maizeSuitabilityTitle, [
-      { label: "ผลที่จุดนี้", value: maizeDisplay.label },
-      { label: "วิธีประเมิน", value: data.maizeLandSuitability?.evaluationMethod },
       { label: "แหล่งข้อมูล", value: data.maizeLandSuitability?.sourceName },
     ]);
 
@@ -1193,14 +1588,41 @@
       { label: "คำอธิบาย", value: TEXT.riceSuitabilitySource },
     ]);
 
-    footer.append(createElement("span", "suitability-status-pill", TEXT.incompleteEvaluation));
+    card.append(summaryGrid, body);
+    return card;
+  }
 
-    card.append(summaryGrid, body, footer);
+  function createPointCropResultCard(title, suitability, display) {
+    const card = createElement("section", "parcel-result-card point-crop-result-card");
+    card.appendChild(createElement("h3", "parcel-result-card-title", title));
+    const body = createElement("div", "parcel-result-card-body");
+    const summary = createPointCropResultSummary(display);
+
+    if (!hasPointSuitabilityData(suitability)) {
+      body.appendChild(summary);
+      card.appendChild(body);
+      return card;
+    }
+
+    const details = createElement("dl", "summary-card-list");
+
+    [
+      { label: "แหล่งข้อมูล", value: suitability?.sourceName },
+      { label: "คำอธิบาย", value: TEXT.riceSuitabilitySource },
+    ].forEach((field) => {
+      if (field.value !== null && field.value !== undefined && field.value !== "") {
+        details.appendChild(createSummaryRow(field.label, field.value));
+      }
+    });
+
+    body.append(summary, details);
+    card.appendChild(body);
     return card;
   }
 
   function setResultPanelState(messages) {
     const panel = ensureResultPanel();
+    setResultPanelTitle(panel, TEXT.pointResultTitle);
     const content = panel.querySelector("#result-panel-content");
     const messageList = Array.isArray(messages) ? messages : [messages];
     content.replaceChildren();
@@ -1213,6 +1635,7 @@
 
   function renderResultPanel(data) {
     const panel = ensureResultPanel();
+    setResultPanelTitle(panel, TEXT.pointResultTitle);
     const content = panel.querySelector("#result-panel-content");
     const payload = data || {};
     const location = payload.location || {};
@@ -1232,13 +1655,24 @@
       } else {
         content.appendChild(createElement("p", "result-message", TEXT.notEvaluated));
       }
+      const hazardSection = renderHazardHistorySection(payload.hazardHistory);
+      if (hazardSection) {
+        content.appendChild(hazardSection);
+      }
       openResultPanel(panel);
       return;
     }
 
-    content.appendChild(renderPointSuitabilitySummaryCard(payload));
+    const riceDisplay = getPointSuitabilityDisplay(
+      payload.riceLandSuitability,
+      TEXT.pointNoRiceCoverage,
+    );
+    const maizeDisplay = getPointSuitabilityDisplay(
+      payload.maizeLandSuitability,
+      TEXT.pointNoMaizeCoverage,
+    );
 
-    appendSection(content, "ข้อมูลตำแหน่ง", [
+    appendParcelResultCard(content, "ข้อมูลตำแหน่ง", [
       { label: "จังหวัด", value: location.province },
       { label: "อำเภอ", value: location.amphoe },
       { label: "ตำบล", value: location.tambon },
@@ -1247,7 +1681,27 @@
       { label: "พิกัด", value: { lat: clickedPoint.latitude, lng: clickedPoint.longitude }, formatter: formatCoordinatePair },
     ]);
 
-    appendSection(content, "ข้อมูลชุดดิน", [
+    content.appendChild(
+      createPointCropResultCard(
+        TEXT.riceSuitabilityTitle,
+        payload.riceLandSuitability,
+        riceDisplay,
+      ),
+    );
+    content.appendChild(
+      createPointCropResultCard(
+        TEXT.maizeSuitabilityTitle,
+        payload.maizeLandSuitability,
+        maizeDisplay,
+      ),
+    );
+
+    const hazardSection = renderHazardHistorySection(payload.hazardHistory);
+    if (hazardSection) {
+      content.appendChild(hazardSection);
+    }
+
+    appendParcelResultCard(content, "ข้อมูลดิน", [
       { label: "รหัสชุดดิน", value: soil.seriesNo },
       { label: "ชื่อชุดดิน", value: soil.soilNameThai },
       { label: "การระบายน้ำ", value: soil.drainageDescriptionThai, formatter: formatters.formatDrainage },
@@ -1257,13 +1711,15 @@
       { label: "สถานะข้อมูล", value: soil.dataStatus, formatter: formatters.formatStatus },
     ]);
 
-    appendSection(content, "ข้อมูลน้ำ", [
+    appendParcelResultCard(content, "ข้อมูลน้ำ", [
       { label: "ลำน้ำใกล้ที่สุด", value: nearestStream.streamName },
       { label: "ประเภทลำน้ำ", value: nearestStream.streamType },
       { label: "ระยะห่างจากลำน้ำ", value: nearestStream.distanceM, formatter: formatters.formatDistance },
       { label: "คลองชลประทานใกล้ที่สุด", value: nearestIrrigationCanal.canalName },
       { label: "ระยะห่างจากคลอง", value: nearestIrrigationCanal.distanceM, formatter: formatters.formatDistance },
     ]);
+
+    content.appendChild(createAgriculturalWeatherCard(payload.weather));
 
     openResultPanel(panel);
   }
@@ -1316,7 +1772,11 @@
     section.appendChild(createElement("h3", "parcel-crop-result__title", title));
 
     if (!items.length) {
-      section.appendChild(createElement("p", "result-message", noCoverageText));
+      section.appendChild(createPointCropResultSummary({
+        grade: "ไม่มีข้อมูล",
+        label: noCoverageText,
+        className: suitabilityClasses.NO_COVERAGE,
+      }));
       return section;
     }
 
@@ -1423,8 +1883,154 @@
     return `${primary.class} — ${primary.label || primary.class} (${percentText})`;
   }
 
+  function formatParcelHazardPeriod(startYear, endYear) {
+    const start = Number(startYear);
+    const end = Number(endYear);
+    if (!Number.isInteger(start) || !Number.isInteger(end)) {
+      return TEXT.empty;
+    }
+    return `${start}–${end}`;
+  }
+
+  function normalizeParcelHazardYears(years) {
+    if (!Array.isArray(years)) {
+      return [];
+    }
+
+    return [...new Set(
+      years
+        .map((year) => Number(year))
+        .filter((year) => Number.isInteger(year)),
+    )].sort((left, right) => left - right);
+  }
+
+  function formatParcelHazardYears(years) {
+    const normalized = normalizeParcelHazardYears(years);
+    return normalized.length ? normalized.join(", ") : TEXT.empty;
+  }
+
+  function formatParcelHazardPercent(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+      return TEXT.empty;
+    }
+    const clamped = Math.min(Math.max(number, 0), 100);
+    return formatters.formatPercent(Object.is(clamped, -0) ? 0 : clamped);
+  }
+
+  function createHazardDetailList(fields) {
+    const list = createElement("dl", "summary-card-list");
+    fields.forEach((field) => {
+      if (field.value === null || field.value === undefined || field.value === "") {
+        return;
+      }
+      list.appendChild(createSummaryRow(field.label, field.value, field.formatter));
+    });
+    return list;
+  }
+
+  function appendParcelResultCard(parent, title, fields) {
+    const card = createElement("section", "parcel-result-card");
+    card.append(createElement("h3", "parcel-result-card-title", title));
+    const body = createElement("div", "parcel-result-card-body");
+    const list = createElement("dl", "result-list");
+    fields.forEach((field) => appendField(list, field.label, field.value, field.formatter));
+    if (fields.length) {
+      body.appendChild(list);
+    } else {
+      body.appendChild(createElement("p", "result-message", TEXT.empty));
+    }
+    card.appendChild(body);
+    parent.appendChild(card);
+    return card;
+  }
+
+  function createParcelFloodHazardCard(flood) {
+    const card = createElement("section", "summary-card-group parcel-hazard-subcard parcel-hazard-subcard--flood");
+    card.appendChild(createElement("h4", null, "พื้นที่น้ำท่วมซ้ำซาก (10 ปีล่าสุด)"));
+
+    const periodText = formatParcelHazardPeriod(flood?.startYear, flood?.endYear);
+    const years = normalizeParcelHazardYears(flood?.yearsDetected);
+
+    if (flood?.found) {
+      card.appendChild(createHazardDetailList([
+        { label: "ช่วงข้อมูล", value: periodText },
+        { label: "จำนวนปีที่พบ", value: `${Number(flood.frequency) || years.length} ปี` },
+        { label: "ปีที่พบ", value: formatParcelHazardYears(years) },
+        { label: "พื้นที่ทับซ้อน", value: flood.affectedAreaRai, formatter: formatters.formatAreaRai },
+        {
+          label: "คิดเป็น",
+          value: `${formatParcelHazardPercent(flood.affectedPercent)} ของพื้นที่แปลง`,
+        },
+        { label: "แหล่งข้อมูล", value: flood.source || "GISTDA" },
+      ]));
+      return card;
+    }
+
+    card.appendChild(
+      createElement(
+        "p",
+        "result-message",
+        periodText === TEXT.empty
+          ? "ไม่พบพื้นที่น้ำท่วมซ้ำซากในชุดข้อมูล"
+          : `ไม่พบพื้นที่น้ำท่วมซ้ำซากในชุดข้อมูลช่วง ${periodText}`,
+      ),
+    );
+    card.appendChild(createHazardDetailList([
+      { label: "แหล่งข้อมูล", value: flood?.source || "GISTDA" },
+    ]));
+    return card;
+  }
+
+  function createParcelDroughtHazardCard(drought) {
+    const card = createElement("section", "summary-card-group parcel-hazard-subcard parcel-hazard-subcard--drought");
+    card.appendChild(createElement("h4", null, "ประวัติภัยแล้งซ้ำซากระดับตำบล"));
+
+    const tambons = Array.isArray(drought?.tambons) ? drought.tambons : [];
+    if (!tambons.length) {
+      card.appendChild(
+        createElement("p", "result-message", "ไม่พบข้อมูลประวัติภัยแล้งของตำบลนี้ในชุดข้อมูล"),
+      );
+      return card;
+    }
+
+    tambons.forEach((tambon, index) => {
+      const group = createElement("div", "summary-card-list parcel-hazard-tambon");
+      const years = normalizeParcelHazardYears(tambon.yearsDetected);
+      group.appendChild(createElement("h5", null, `ตำบลที่ ${index + 1}`));
+      group.appendChild(createHazardDetailList([
+        { label: "ตำบล", value: tambon.tambon },
+        { label: "อำเภอ", value: tambon.district },
+        { label: "ช่วงข้อมูล", value: formatParcelHazardPeriod(tambon.startYear, tambon.endYear) },
+        { label: "จำนวนปีที่พบ", value: `${years.length} ปี` },
+        { label: "ปีที่พบ", value: years.length ? formatParcelHazardYears(years) : "ไม่พบข้อมูลประวัติภัยแล้งของตำบลนี้ในชุดข้อมูล" },
+        { label: "แหล่งข้อมูล", value: tambon.source || drought.source || "GISTDA" },
+      ]));
+      card.appendChild(group);
+    });
+
+    return card;
+  }
+
+  function renderParcelHistoricalHazardsSection(historicalHazards) {
+    if (!historicalHazards) {
+      return null;
+    }
+
+    const section = createElement("section", "parcel-result-card parcel-hazard-history-section");
+    const body = createElement("div", "parcel-result-card-body parcel-hazard-card-body");
+    section.appendChild(createElement("h3", "parcel-result-card-title", "ประวัติภัยของพื้นที่แปลง"));
+    body.append(
+      createParcelFloodHazardCard(historicalHazards.floodRecurrence || null),
+      createParcelDroughtHazardCard(historicalHazards.droughtRecurrence || null),
+    );
+    section.appendChild(body);
+    return section;
+  }
+
   function renderParcelResult(parcelState) {
     const panel = ensureResultPanel();
+    setResultPanelTitle(panel, TEXT.parcelResultTitle);
     const content = panel.querySelector("#result-panel-content");
     content.replaceChildren();
     content.scrollTop = 0;
@@ -1468,7 +2074,7 @@
     const soilSummary = analysis.soilSummary || {};
     const water = analysis.water || {};
 
-    appendSection(content, "ข้อมูลพื้นที่แปลง", [
+    appendParcelResultCard(content, "ข้อมูลพื้นที่แปลง", [
       { label: "ชื่อแปลง", value: analysis.name || parcelState.name },
       { label: "พื้นที่", value: parcel.areaSquareMeters, formatter: formatters.formatThaiLandArea },
       { label: "พื้นที่ตารางเมตร", value: parcel.areaSquareMeters, formatter: formatters.formatAreaSqm },
@@ -1478,30 +2084,39 @@
       { label: "ลุ่มน้ำย่อย", value: location.subBasins, formatter: formatters.formatList },
     ]);
 
-    const suitabilitySection = createElement("section", "result-section parcel-suitability-section");
-    suitabilitySection.append(
-      createParcelCropSection(
-        TEXT.riceSuitabilityTitle,
-        analysis.riceLandSuitability,
-        TEXT.parcelNoRiceCoverage,
-      ),
-      createParcelCropSection(
-        TEXT.maizeSuitabilityTitle,
-        analysis.maizeLandSuitability,
-        TEXT.parcelNoMaizeCoverage,
-      ),
+    const riceSection = createParcelCropSection(
+      TEXT.riceSuitabilityTitle,
+      analysis.riceLandSuitability,
+      TEXT.parcelNoRiceCoverage,
     );
+    riceSection.classList.add("parcel-result-card");
+    const maizeSection = createParcelCropSection(
+      TEXT.maizeSuitabilityTitle,
+      analysis.maizeLandSuitability,
+      TEXT.parcelNoMaizeCoverage,
+    );
+    maizeSection.classList.add("parcel-result-card");
 
-    const sourceLine = createSuitabilitySourceLine([
+    const riceSourceLine = createSuitabilitySourceLine([
       { title: "ข้าว", sourceName: analysis.riceLandSuitability?.sourceName },
+    ]);
+    const maizeSourceLine = createSuitabilitySourceLine([
       { title: "ข้าวโพด", sourceName: analysis.maizeLandSuitability?.sourceName },
     ]);
-    if (sourceLine) {
-      suitabilitySection.appendChild(sourceLine);
+    if (getSortedSuitabilityItems(analysis.riceLandSuitability).length && riceSourceLine) {
+      riceSection.appendChild(riceSourceLine);
     }
-    content.appendChild(suitabilitySection);
+    if (getSortedSuitabilityItems(analysis.maizeLandSuitability).length && maizeSourceLine) {
+      maizeSection.appendChild(maizeSourceLine);
+    }
+    content.append(riceSection, maizeSection);
 
-    appendSection(
+    const parcelHazardSection = renderParcelHistoricalHazardsSection(analysis.historicalHazards);
+    if (parcelHazardSection) {
+      content.appendChild(parcelHazardSection);
+    }
+
+    appendParcelResultCard(
       content,
       "ข้อมูลดิน",
       (soilSummary.items || []).map((item, index) => ({
@@ -1510,13 +2125,15 @@
       })),
     );
 
-    appendSection(content, "ข้อมูลน้ำ", [
+    appendParcelResultCard(content, "ข้อมูลน้ำ", [
       { label: "ลำน้ำใกล้ที่สุด", value: water.nearestStream?.streamName },
       { label: "ประเภทลำน้ำ", value: water.nearestStream?.streamType },
       { label: "ระยะห่างลำน้ำ", value: water.nearestStream?.distanceM, formatter: formatters.formatDistance },
       { label: "คลองชลประทานใกล้ที่สุด", value: water.nearestIrrigationCanal?.canalName },
       { label: "ระยะห่างคลอง", value: water.nearestIrrigationCanal?.distanceM, formatter: formatters.formatDistance },
     ]);
+
+    content.appendChild(createAgriculturalWeatherCard(analysis.weather));
 
     openResultPanel(panel);
   }
@@ -1635,6 +2252,14 @@
       addOverlay("คลองชลประทาน", overlayLayers.irrigationCanalLayer);
       addOverlay("ความเหมาะสมปลูกข้าว — ทุกระดับ", overlayLayers.ricePotentialAllLayer);
       addOverlay("ความเหมาะสมปลูกข้าวโพด — ทุกระดับ", overlayLayers.maizePotentialAllLayer);
+      addOverlay(
+        "พื้นที่น้ำท่วมซ้ำซาก",
+        overlayLayers.floodRecurrenceLayer,
+      );
+      addOverlay(
+        "พื้นที่ภัยแล้งซ้ำซาก",
+        overlayLayers.droughtRecurrenceLayer,
+      );
 
       return L.control
         .layers(layerControlBaseLayers, layerControlOverlayLayers, {
@@ -1649,6 +2274,10 @@
     setupLocationPanel,
     setConfirmEnabled,
     setLocationActionsEnabled,
+    setLineSummaryButtonState,
+    setLineSummaryHandler,
+    showLineSummaryStatus,
+    clearLineSummaryStatus,
     syncMobilePointConfirmButton,
     closeCurrentResultPanel,
     closeTemporaryParcelPanel,

@@ -7,12 +7,12 @@
     hostname === "127.0.0.1";
 
   const isCurrentCloudflareTunnel =
-    hostname === "https://sustainable-album-certificate-buffalo.trycloudflare.com";
+    hostname === "rapidly-marijuana-harper-partly.trycloudflare.com";
 
   // URL จากคำสั่ง:
   // cloudflared tunnel --url http://localhost:3000
   const backendTunnelUrl =
-    "https://slides-act-writes-antiques.trycloudflare.com/api";
+    "https://embedded-nextel-reservoir-strike.trycloudflare.com/api";
 
   window.AppConfig = {
     apiBaseUrl: isLocal

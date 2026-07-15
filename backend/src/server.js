@@ -11,7 +11,10 @@ const healthRoutes = require("./routes/healthRoutes");
 const pgConnectRoutes = require("./routes/pgConnectRoutes");
 const parcelRoutes = require("./routes/parcelRoutes");
 const riceSuitabilityRoutes = require("./routes/riceSuitabilityRoutes");
+const locationReportRoutes = require("./routes/locationReportRoutes");
 const areaAnalysisRoutes = require("./routes/areaAnalysisRoutes");
+const lineRoutes = require("./routes/lineRoutes");
+const hazardLayerRoutes = require("./routes/hazardLayerRoutes");
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -21,13 +24,23 @@ const developmentOrigins = [
   "http://127.0.0.1:5500",
   "http://localhost:5500",
 ];
+const temporaryTunnelOrigins = [
+  "https://rapidly-marijuana-harper-partly.trycloudflare.com",
+];
+const temporaryTunnelOriginSet = new Set(temporaryTunnelOrigins);
 const configuredOrigins = String(process.env.CORS_ORIGINS || "")
   .split(",")
   .map((value) => value.trim())
-  .filter(Boolean);
+  .filter(Boolean)
+  .filter(
+    (value) =>
+      !value.endsWith(".trycloudflare.com") ||
+      temporaryTunnelOriginSet.has(value),
+  );
 // อนุญาตเฉพาะ origin ที่ตั้งใจใช้กับงานพัฒนา และ origin จาก CORS_ORIGINS
 const allowedOrigins = new Set([
   ...(process.env.NODE_ENV === "production" ? [] : developmentOrigins),
+  ...temporaryTunnelOrigins,
   ...configuredOrigins,
 ]);
 
@@ -53,8 +66,11 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/api/health", healthRoutes);
 app.use("/api/pgconnect", pgConnectRoutes);
 app.use("/api/rice-suitability", riceSuitabilityRoutes);
+app.use("/api/location-report", locationReportRoutes);
 app.use("/api/area-analysis", areaAnalysisRoutes);
 app.use("/api/parcels", parcelRoutes);
+app.use("/api/line", lineRoutes);
+app.use("/api/hazard-layers", hazardLayerRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found" });

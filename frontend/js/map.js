@@ -1,11 +1,16 @@
 (function (window) {
   let selectedLocation = null;
   let locationMarker = null;
+  let selectedPointRevision = 0;
   let accuracyCircle = null;
   let pointRequestController = null;
   let resultPopup = null;
   let currentPointResult = null;
   let confirmedPointKey = null;
+  let lastConfirmedPoint = null;
+  let isLineSummarySending = false;
+  let lineSummaryCloseTimer = null;
+  let hasLineSummarySent = false;
   let isPointAnalysisLoading = false;
   let appMap = null;
   let parcelDrawHandler = null;
@@ -41,6 +46,20 @@
   };
 
   const POLYGON_ANALYSIS_TIMEOUT_MS = 30000;
+  const LINE_SUMMARY_CLOSE_DELAY_MS = 1000;
+  const DETAIL_LINK_POINT_ZOOM = 17;
+
+  const LINE_SUMMARY_MESSAGES = {
+    sending: "กำลังส่งข้อมูลสรุปทาง LINE...",
+    success: "ส่งข้อมูลแล้ว กำลังกลับไป LINE",
+    missingPoint: "กรุณายืนยันตำแหน่งก่อนรับข้อมูลสรุป",
+    lineUnavailable: "ไม่สามารถเชื่อมต่อ LINE ได้ กรุณาเปิดผ่านแอป LINE อีกครั้ง",
+    validation: "ไม่สามารถส่งข้อมูลได้ กรุณายืนยันตำแหน่งอีกครั้ง",
+    sessionExpired: "เซสชัน LINE หมดอายุ กรุณาปิดแล้วเปิดหน้านี้จาก LINE อีกครั้ง",
+    rateLimited: "มีการส่งข้อมูลถี่เกินไป กรุณารอสักครู่แล้วลองใหม่",
+    temporaryFailure: "ไม่สามารถส่งข้อมูลทาง LINE ได้ในขณะนี้ กรุณาลองอีกครั้ง",
+    generalFailure: "ไม่สามารถส่งข้อมูลทาง LINE ได้ กรุณาลองอีกครั้ง",
+  };
 
   function createFrontendId() {
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -55,15 +74,7 @@
   }
 
   function isValidSelectedLocation() {
-    return (
-      selectedLocation &&
-      Number.isFinite(selectedLocation.lat) &&
-      Number.isFinite(selectedLocation.lng) &&
-      selectedLocation.lat >= -90 &&
-      selectedLocation.lat <= 90 &&
-      selectedLocation.lng >= -180 &&
-      selectedLocation.lng <= 180
-    );
+    return window.MapPointState.isValidPoint(selectedLocation);
   }
 
   function isParcelInteractionLocked() {
@@ -71,10 +82,7 @@
   }
 
   function createPointKey(location) {
-    if (!location || !Number.isFinite(location.lat) || !Number.isFinite(location.lng)) {
-      return null;
-    }
-    return `${location.lat.toFixed(7)},${location.lng.toFixed(7)}`;
+    return window.MapPointState.createPointKey(location);
   }
 
   function hasConfirmedCurrentPoint() {
@@ -87,9 +95,11 @@
 
   function syncPointConfirmationState() {
     window.MapUi.syncMobilePointConfirmButton({
+      hasSelectedPoint: isValidSelectedLocation(),
       hasPendingPoint: isValidSelectedLocation() && !hasConfirmedCurrentPoint(),
       isLoading: isPointAnalysisLoading,
-      isBlocked: isParcelInteractionLocked(),
+      isBlocked: isParcelInteractionLocked() || isLiffConfirmationUnavailable(),
+      isLiffMode: isLiffModeEnabled(),
     });
   }
 
@@ -97,12 +107,323 @@
     if (isParcelInteractionLocked()) {
       window.MapUi.setLocationActionsEnabled(false);
       syncPointConfirmationState();
+      syncLineSummaryButtonState();
       return;
     }
 
     window.MapUi.setLocationActionsEnabled(true);
-    window.MapUi.setConfirmEnabled(isValidSelectedLocation());
+    window.MapUi.setConfirmEnabled(isValidSelectedLocation() && !isLiffConfirmationUnavailable());
     syncPointConfirmationState();
+    syncLineSummaryButtonState();
+  }
+
+  function isLiffModeEnabled() {
+    return Boolean(window.MapLiffMode && window.MapLiffMode.isEnabled());
+  }
+
+  function isLiffConfirmationUnavailable() {
+    return isLiffModeEnabled() && !window.MapLiffMode.isReady();
+  }
+
+  function getLiffUnavailableMessage() {
+    return (
+      (window.MapLiffMode && window.MapLiffMode.getErrorMessage()) ||
+      "กรุณาเปิดหน้านี้ผ่านแอป LINE แล้วลองใหม่อีกครั้ง"
+    );
+  }
+
+  function hasUsableLineSummaryPoint() {
+    return Boolean(
+      lastConfirmedPoint &&
+        window.MapPointState.isValidPoint(lastConfirmedPoint) &&
+        hasConfirmedCurrentPoint() &&
+        window.MapPointState.areSamePoints(lastConfirmedPoint, selectedLocation),
+    );
+  }
+
+  function clearLineSummaryCloseTimer() {
+    if (!lineSummaryCloseTimer) {
+      return;
+    }
+
+    window.clearTimeout(lineSummaryCloseTimer);
+    lineSummaryCloseTimer = null;
+  }
+
+  function syncLineSummaryButtonState() {
+    const hasSummaryPoint = hasUsableLineSummaryPoint();
+    const isVisible = isLiffModeEnabled() && hasSummaryPoint;
+    const text = hasLineSummarySent
+      ? window.MapUi.text.lineSummarySentShort
+      : isLineSummarySending
+        ? window.MapUi.text.lineSummarySendingShort
+        : window.MapUi.text.lineSummary;
+
+    window.MapUi.setLineSummaryButtonState({
+      visible: isVisible,
+      enabled:
+        isVisible &&
+        hasSummaryPoint &&
+        !isLineSummarySending &&
+        !hasLineSummarySent &&
+        !isParcelInteractionLocked() &&
+        !isLiffConfirmationUnavailable(),
+      text,
+      busy: isLineSummarySending,
+    });
+  }
+
+  function invalidateConfirmedPoint(options = {}) {
+    lastConfirmedPoint = null;
+    hasLineSummarySent = false;
+    clearLineSummaryCloseTimer();
+
+    if (options.clearStatus !== false) {
+      window.MapUi.clearLineSummaryStatus();
+    }
+
+    syncLineSummaryButtonState();
+  }
+
+  function setSelectedPoint(input, source, options = {}) {
+    const point = window.MapPointState.normalizePoint(input, undefined, { source });
+    if (!point) {
+      return null;
+    }
+
+    selectedLocation = point;
+    selectedPointRevision += 1;
+    invalidateConfirmedPoint(options.invalidateOptions || {});
+
+    if (options.updateMarker !== false) {
+      updateLocationMarker(selectedLocation);
+    }
+
+    if (options.accuracyCircle === "update") {
+      updateAccuracyCircle(selectedLocation);
+    } else if (options.accuracyCircle !== "keep") {
+      removeAccuracyCircle();
+    }
+
+    return selectedLocation;
+  }
+
+  function markLineSummaryPointConfirmed(location) {
+    if (!isLiffModeEnabled()) {
+      syncLineSummaryButtonState();
+      return;
+    }
+
+    const confirmedPoint = window.MapPointState.createConfirmedPoint(location);
+    if (
+      !confirmedPoint ||
+      !hasConfirmedCurrentPoint() ||
+      !window.MapPointState.areSamePoints(confirmedPoint, selectedLocation)
+    ) {
+      invalidateConfirmedPoint({ clearStatus: false });
+      return;
+    }
+
+    lastConfirmedPoint = confirmedPoint;
+    hasLineSummarySent = false;
+    clearLineSummaryCloseTimer();
+    window.MapUi.clearLineSummaryStatus();
+    syncLineSummaryButtonState();
+  }
+
+  function getLineSummaryErrorMessage(error) {
+    if (!error) {
+      return LINE_SUMMARY_MESSAGES.generalFailure;
+    }
+
+    if (error.statusCode === 400) {
+      return LINE_SUMMARY_MESSAGES.validation;
+    }
+    if (error.statusCode === 401) {
+      return LINE_SUMMARY_MESSAGES.sessionExpired;
+    }
+    if (error.statusCode === 429) {
+      return LINE_SUMMARY_MESSAGES.rateLimited;
+    }
+    if (error.statusCode === 502 || error.statusCode === 503) {
+      return LINE_SUMMARY_MESSAGES.temporaryFailure;
+    }
+    if (error.name === "TypeError" || error.name === "AbortError") {
+      return LINE_SUMMARY_MESSAGES.temporaryFailure;
+    }
+
+    return LINE_SUMMARY_MESSAGES.generalFailure;
+  }
+
+  function getPointAnalysisErrorMessage(error) {
+    if (!isLiffModeEnabled()) {
+      return null;
+    }
+
+    if (error.statusCode === 400) {
+      return "ข้อมูลตำแหน่งไม่ถูกต้อง";
+    }
+    if (error.statusCode === 401) {
+      return "ไม่สามารถยืนยันตัวตนกับ LINE ได้ กรุณาปิดแล้วเปิดใหม่";
+    }
+    if (error.statusCode === 502) {
+      return "ไม่สามารถติดต่อบริการ LINE ได้ กรุณาลองใหม่";
+    }
+
+    return error.message || null;
+  }
+
+  async function requestPointAnalysis(location, options) {
+    if (!isLiffModeEnabled()) {
+      return window.MapApi.getLocationReport(location.lat, location.lng, options);
+    }
+
+    if (!window.MapLiffMode.isReady()) {
+      throw new Error(getLiffUnavailableMessage());
+    }
+
+    return window.MapApi.analyzeLineLocation(
+      {
+        idToken: window.MapLiffMode.getIdToken(),
+        lat: location.lat,
+        lng: location.lng,
+      },
+      options,
+    );
+  }
+
+  function parseDetailLinkLocation() {
+    if (isLiffModeEnabled()) {
+      return null;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const hasLat = params.has("lat");
+    const hasLng = params.has("lng");
+    if (!hasLat && !hasLng) {
+      return null;
+    }
+    if (!hasLat || !hasLng) {
+      return null;
+    }
+
+    const lat = Number(params.get("lat"));
+    const lng = Number(params.get("lng"));
+    if (
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      lat < -90 ||
+      lat > 90 ||
+      lng < -180 ||
+      lng > 180
+    ) {
+      return null;
+    }
+
+    return {
+      lat,
+      lng,
+      accuracy: null,
+      source: "detail-link",
+    };
+  }
+
+  async function processDetailLinkLocation() {
+    const detailLocation = parseDetailLinkLocation();
+    if (!detailLocation) {
+      return;
+    }
+
+    const selectedPoint = setSelectedPoint(detailLocation, "detail-link");
+    if (!selectedPoint) {
+      return;
+    }
+
+    appMap.setView(
+      [selectedPoint.lat, selectedPoint.lng],
+      Math.min(DETAIL_LINK_POINT_ZOOM, window.AppConfig.map.maxZoom || DETAIL_LINK_POINT_ZOOM),
+    );
+    window.MapUi.showMapSelectionReady(selectedPoint);
+    syncLocationActionState();
+    await confirmSelectedLocation();
+  }
+
+  async function sendConfirmedPointSummaryToLine() {
+    if (isLineSummarySending) {
+      return;
+    }
+
+    if (!isLiffModeEnabled() || !window.MapLiffMode || !window.MapLiffMode.isReady()) {
+      window.MapUi.showLineSummaryStatus(LINE_SUMMARY_MESSAGES.lineUnavailable, "error");
+      syncLineSummaryButtonState();
+      return;
+    }
+
+    if (!hasUsableLineSummaryPoint()) {
+      window.MapUi.showLineSummaryStatus(LINE_SUMMARY_MESSAGES.missingPoint, "error");
+      syncLineSummaryButtonState();
+      return;
+    }
+
+    const idToken = window.MapLiffMode.getIdToken();
+    if (!idToken) {
+      window.MapUi.showLineSummaryStatus(LINE_SUMMARY_MESSAGES.lineUnavailable, "error");
+      syncLineSummaryButtonState();
+      return;
+    }
+
+    const requestPoint = window.MapPointState.createConfirmedPoint(lastConfirmedPoint);
+    if (!requestPoint || !window.MapPointState.areSamePoints(requestPoint, selectedLocation)) {
+      invalidateConfirmedPoint({ clearStatus: false });
+      window.MapUi.showLineSummaryStatus(LINE_SUMMARY_MESSAGES.validation, "error");
+      syncLineSummaryButtonState();
+      return;
+    }
+
+    isLineSummarySending = true;
+    hasLineSummarySent = false;
+    clearLineSummaryCloseTimer();
+    syncLineSummaryButtonState();
+    window.MapUi.showLineSummaryStatus(LINE_SUMMARY_MESSAGES.sending);
+
+    try {
+      const result = await window.MapApi.sendLineLocationSummary({
+        idToken,
+        lat: requestPoint.lat,
+        lng: requestPoint.lng,
+      });
+
+      if (!result || result.ok !== true || result.status !== "SENT") {
+        throw new Error("LINE summary request did not return SENT");
+      }
+
+      if (!window.MapPointState.areSamePoints(lastConfirmedPoint, requestPoint)) {
+        return;
+      }
+
+      hasLineSummarySent = true;
+      window.MapUi.showLineSummaryStatus(LINE_SUMMARY_MESSAGES.success, "success");
+      syncLineSummaryButtonState();
+      lineSummaryCloseTimer = window.setTimeout(() => {
+        lineSummaryCloseTimer = null;
+        if (
+          window.MapLiffMode &&
+          typeof window.MapLiffMode.isInClient === "function" &&
+          window.MapLiffMode.isInClient() &&
+          typeof window.MapLiffMode.closeWindow === "function"
+        ) {
+          window.MapLiffMode.closeWindow();
+        }
+      }, LINE_SUMMARY_CLOSE_DELAY_MS);
+    } catch (error) {
+      if (window.MapPointState.areSamePoints(lastConfirmedPoint, requestPoint)) {
+        hasLineSummarySent = false;
+        window.MapUi.showLineSummaryStatus(getLineSummaryErrorMessage(error), "error");
+      }
+    } finally {
+      isLineSummarySending = false;
+      syncLineSummaryButtonState();
+    }
   }
 
   function clearParcelDetailPanelState() {
@@ -717,6 +1038,16 @@
       onLocate: requestCurrentLocation,
       onConfirm: confirmSelectedLocation,
     });
+    window.MapUi.setLineSummaryHandler(sendConfirmedPointSummaryToLine);
+    syncLineSummaryButtonState();
+    if (isLiffModeEnabled()) {
+      window.MapLiffMode.initialize()
+        .then(syncLocationActionState)
+        .catch(() => {
+          window.MapUi.showLocationMessage(getLiffUnavailableMessage());
+          syncLocationActionState();
+        });
+    }
     window.MapUi.setResultPanelCloseHandler(clearParcelDetailPanelState);
     syncPointConfirmationState();
     const mobilePointConfirmMediaQuery = window.matchMedia("(max-width: 700px)");
@@ -730,6 +1061,9 @@
     map.on("click", handleMapClick);
 
     window.appMap = map;
+    processDetailLinkLocation().catch(() => {
+      window.MapUi.showLocationMessage(window.MapUi.text.apiError);
+    });
   }
 
   function handleMapClick(event) {
@@ -737,16 +1071,16 @@
       return;
     }
 
-    selectedLocation = {
+    const selectedPoint = setSelectedPoint({
       lat: event.latlng.lat,
       lng: event.latlng.lng,
       accuracy: null,
-      source: "map",
-    };
+    }, "map");
+    if (!selectedPoint) {
+      return;
+    }
 
-    updateLocationMarker(selectedLocation);
-    removeAccuracyCircle();
-    window.MapUi.showMapSelectionReady(selectedLocation);
+    window.MapUi.showMapSelectionReady(selectedPoint);
     markSelectedPointPending(true);
   }
 
@@ -757,15 +1091,16 @@
 
     const position = event.target.getLatLng();
 
-    selectedLocation = {
+    const selectedPoint = setSelectedPoint({
       lat: position.lat,
       lng: position.lng,
       accuracy: null,
-      source: "drag",
-    };
+    }, "drag", { updateMarker: false });
+    if (!selectedPoint) {
+      return;
+    }
 
-    removeAccuracyCircle();
-    window.MapUi.showDragSelectionReady(selectedLocation);
+    window.MapUi.showDragSelectionReady(selectedPoint);
     markSelectedPointPending(true);
   }
 
@@ -787,6 +1122,7 @@
       return;
     }
 
+    invalidateConfirmedPoint();
     navigator.geolocation.getCurrentPosition(
       handleLocationSuccess,
       handleLocationError,
@@ -800,16 +1136,17 @@
       return;
     }
 
-    selectedLocation = {
+    const selectedPoint = setSelectedPoint({
       lat: position.coords.latitude,
       lng: position.coords.longitude,
       accuracy: position.coords.accuracy,
-      source: "gps",
-    };
+    }, "gps", { accuracyCircle: "update" });
+    if (!selectedPoint) {
+      window.MapUi.showLocationMessage(window.MapUi.text.positionUnavailable);
+      return;
+    }
 
-    updateLocationMarker(selectedLocation);
-    updateAccuracyCircle(selectedLocation);
-    window.MapUi.showGpsReady(selectedLocation);
+    window.MapUi.showGpsReady(selectedPoint);
     markSelectedPointPending(true);
   }
 
@@ -824,6 +1161,9 @@
       locationMarker = L.marker(latLng, {
         draggable: true,
       }).addTo(appMap);
+      locationMarker.on("dragstart", () => {
+        invalidateConfirmedPoint();
+      });
       locationMarker.on("dragend", handleMarkerDragEnd);
     } else {
       locationMarker.setLatLng(latLng);
@@ -922,16 +1262,30 @@
       return;
     }
 
+    if (isLiffConfirmationUnavailable()) {
+      window.MapUi.showLocationMessage(getLiffUnavailableMessage());
+      return;
+    }
+
     if (pointRequestController) {
       pointRequestController.abort();
     }
 
     pointRequestController = new AbortController();
     const requestController = pointRequestController;
-    const requestLocation = { ...selectedLocation };
+    const requestLocation = window.MapPointState.createConfirmedPoint(selectedLocation);
+    if (!requestLocation) {
+      window.MapUi.showLocationMessage(window.MapUi.text.positionUnavailable);
+      return;
+    }
+
     const requestPointKey = createPointKey(requestLocation);
+    const requestPointRevision = selectedPointRevision;
 
     isPointAnalysisLoading = true;
+    if (isLiffModeEnabled()) {
+      invalidateConfirmedPoint({ clearStatus: false });
+    }
     window.MapUi.setConfirmEnabled(false);
     syncPointConfirmationState();
 
@@ -943,45 +1297,59 @@
     }
 
     try {
-      const data = await window.MapApi.getRiceSuitabilityAtPoint(
-        requestLocation.lat,
-        requestLocation.lng,
-        { signal: requestController.signal },
-      );
+      const data = await requestPointAnalysis(requestLocation, {
+        signal: requestController.signal,
+      });
 
       if (data.success === false) {
         throw new Error(data.error || window.MapUi.text.apiError);
       }
 
+      if (
+        selectedPointRevision !== requestPointRevision ||
+        !window.MapPointState.shouldAcceptPointAnalysisResponse(
+          requestLocation,
+          selectedLocation,
+        ) ||
+        createPointKey(selectedLocation) !== requestPointKey
+      ) {
+        invalidateConfirmedPoint({ clearStatus: false });
+        refreshSelectedPointPopup(false);
+        return;
+      }
+
       currentPointResult = data;
       confirmedPointKey = requestPointKey;
 
-      if (createPointKey(selectedLocation) === requestPointKey) {
-        clearParcelDetailPanelState();
-        window.MapUi.renderResultPanel(data);
-        if (data.found !== false) {
-          refreshSelectedPointPopup(false);
-        } else {
-          closeResultPopup();
-        }
-      } else {
+      clearParcelDetailPanelState();
+      window.MapUi.renderResultPanel(data);
+      if (data.found !== false) {
         refreshSelectedPointPopup(false);
+      } else {
+        closeResultPopup();
       }
+      markLineSummaryPointConfirmed(requestLocation);
     } catch (error) {
       if (error.name === "AbortError") {
         return;
       }
 
+      invalidateConfirmedPoint({ clearStatus: false });
       isPointAnalysisLoading = false;
-      window.MapUi.setConfirmEnabled(isValidSelectedLocation());
+      window.MapUi.setConfirmEnabled(isValidSelectedLocation() && !isLiffConfirmationUnavailable());
       syncPointConfirmationState();
-      window.MapUi.showApiError();
+      const message = getPointAnalysisErrorMessage(error);
+      if (message) {
+        window.MapUi.showLocationMessage(message);
+      } else {
+        window.MapUi.showApiError();
+      }
     } finally {
       if (pointRequestController === requestController) {
         pointRequestController = null;
       }
       isPointAnalysisLoading = false;
-      window.MapUi.setConfirmEnabled(isValidSelectedLocation());
+      window.MapUi.setConfirmEnabled(isValidSelectedLocation() && !isLiffConfirmationUnavailable());
       syncPointConfirmationState();
     }
   }

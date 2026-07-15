@@ -1,0 +1,296 @@
+{
+  "type": "bubble",
+  "size": "mega",
+  "header": {
+    "type": "box",
+    "layout": "vertical",
+    "backgroundColor": "#2F6F10",
+    "paddingAll": "16px",
+    "contents": [
+      {
+        "type": "text",
+        "text": "ผลตรวจความเหมาะสมของพื้นที่",
+        "wrap": true,
+        "color": "#FFFFFF",
+        "size": "lg",
+        "weight": "bold"
+      },
+      {
+        "type": "text",
+        "text": "ต.แม่กา อ.เมืองพะเยา",
+        "wrap": true,
+        "color": "#E7F5DF",
+        "size": "sm",
+        "margin": "sm"
+      }
+    ]
+  },
+  "body": {
+    "type": "box",
+    "layout": "vertical",
+    "paddingAll": "16px",
+    "spacing": "md",
+    "contents": [
+      {
+        "type": "box",
+        "layout": "vertical",
+        "backgroundColor": "#F7FAF5",
+        "borderColor": "#D8E5D2",
+        "borderWidth": "normal",
+        "cornerRadius": "md",
+        "paddingAll": "12px",
+        "spacing": "sm",
+        "contents": [
+          {
+            "type": "text",
+            "text": "ข้าว",
+            "wrap": true,
+            "size": "md",
+            "weight": "bold",
+            "color": "#2F6F10",
+            "align": "center"
+          },
+          {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#DCFCE7",
+            "cornerRadius": "xl",
+            "paddingAll": "8px",
+            "contents": [
+              {
+                "type": "text",
+                "text": "S1",
+                "wrap": true,
+                "size": "3xl",
+                "weight": "bold",
+                "color": "#166534",
+                "align": "center"
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "text": "เหมาะสมมาก",
+            "wrap": true,
+            "size": "sm",
+            "weight": "bold",
+            "color": "#2F6F10",
+            "align": "center"
+          }
+        ]
+      },
+      {
+        "type": "box",
+        "layout": "vertical",
+        "backgroundColor": "#FFFBEB",
+        "borderColor": "#FDE68A",
+        "borderWidth": "normal",
+        "cornerRadius": "md",
+        "paddingAll": "12px",
+        "spacing": "sm",
+        "contents": [
+          {
+            "type": "text",
+            "text": "ข้าวโพด",
+            "wrap": true,
+            "size": "md",
+            "weight": "bold",
+            "color": "#B45309",
+            "align": "center"
+          },
+          {
+            "type": "box",
+            "layout": "vertical",
+            "backgroundColor": "#FEF3C7",
+            "cornerRadius": "xl",
+            "paddingAll": "8px",
+            "contents": [
+              {
+                "type": "text",
+                "text": "S2",
+                "wrap": true,
+                "size": "3xl",
+                "weight": "bold",
+                "color": "#92400E",
+                "align": "center"
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "text": "เหมาะสมปานกลาง",
+            "wrap": true,
+            "size": "sm",
+            "weight": "bold",
+            "color": "#B45309",
+            "align": "center"
+          }
+        ]
+      },
+      {
+        "type": "separator",
+        "margin": "lg"
+      },
+      {
+        "type": "box",
+        "layout": "vertical",
+        "spacing": "sm",
+        "margin": "lg",
+        "contents": [
+          {
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "md",
+            "contents": [
+              {
+                "type": "text",
+                "text": "ชุดดิน",
+                "wrap": true,
+                "size": "sm",
+                "color": "#6B7280",
+                "flex": 4
+              },
+              {
+                "type": "text",
+                "text": "ชุดพะเยา (Pg)",
+                "wrap": true,
+                "size": "sm",
+                "weight": "bold",
+                "color": "#111827",
+                "align": "end",
+                "flex": 5
+              }
+            ]
+          },
+          {
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "md",
+            "contents": [
+              {
+                "type": "text",
+                "text": "ข้อมูลน้ำท่วม",
+                "wrap": true,
+                "size": "sm",
+                "color": "#6B7280",
+                "flex": 4
+              },
+              {
+                "type": "text",
+                "text": "พบ 3 ปีใน 10 ปี",
+                "wrap": true,
+                "size": "sm",
+                "weight": "bold",
+                "color": "#111827",
+                "align": "end",
+                "flex": 5
+              }
+            ]
+          },
+          {
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "md",
+            "contents": [
+              {
+                "type": "text",
+                "text": "ข้อมูลภัยแล้ง",
+                "wrap": true,
+                "size": "sm",
+                "color": "#6B7280",
+                "flex": 4
+              },
+              {
+                "type": "text",
+                "text": "ระดับปานกลาง",
+                "wrap": true,
+                "size": "sm",
+                "weight": "bold",
+                "color": "#111827",
+                "align": "end",
+                "flex": 5
+              }
+            ]
+          },
+          {
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "md",
+            "contents": [
+              {
+                "type": "text",
+                "text": "อุณหภูมิ",
+                "wrap": true,
+                "size": "sm",
+                "color": "#6B7280",
+                "flex": 4
+              },
+              {
+                "type": "text",
+                "text": "24.1 °C",
+                "wrap": true,
+                "size": "sm",
+                "weight": "bold",
+                "color": "#111827",
+                "align": "end",
+                "flex": 5
+              }
+            ]
+          },
+          {
+            "type": "box",
+            "layout": "horizontal",
+            "spacing": "md",
+            "contents": [
+              {
+                "type": "text",
+                "text": "ฝนในอีก 1 ชม.",
+                "wrap": true,
+                "size": "sm",
+                "color": "#6B7280",
+                "flex": 4
+              },
+              {
+                "type": "text",
+                "text": "82%",
+                "wrap": true,
+                "size": "sm",
+                "weight": "bold",
+                "color": "#111827",
+                "align": "end",
+                "flex": 5
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "text": "ข้อมูลภัยแล้งเป็นข้อมูลสรุประดับตำบล",
+            "wrap": true,
+            "size": "xs",
+            "color": "#64748B",
+            "margin": "sm"
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "type": "box",
+    "layout": "vertical",
+    "backgroundColor": "#2F6F10",
+    "paddingAll": "8px",
+    "contents": [
+      {
+        "type": "button",
+        "style": "link",
+        "height": "sm",
+        "color": "#FFFFFF",
+        "action": {
+          "type": "uri",
+          "label": "ดูรายละเอียดพื้นที่",
+          "uri": "https://example.com/map"
+        }
+      }
+    ]
+  }
+}

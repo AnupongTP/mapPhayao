@@ -1,6 +1,12 @@
 const db = require("../config/database");
+const { getFloodYearWindow } = require("./hazardLayerService");
+const weatherService = require("./weatherService");
 
 const MIN_ANALYSIS_AREA_SQM = 10;
+const RAI_SQUARE_METERS = 1600;
+const HAZARD_SOURCE = "GISTDA";
+const DROUGHT_TAMBON_NOTE =
+  "ข้อมูลนี้เป็นผลสรุปประวัติภัยแล้งระดับตำบล ไม่ใช่ขอบเขตภัยแล้งภายในพื้นที่แปลง";
 
 const CLASS_ORDER = {
   S1: 1,
@@ -63,8 +69,44 @@ function toRoundedNumber(value) {
   return number === null ? null : Number(number.toFixed(2));
 }
 
+function clampNumber(value, min, max) {
+  const number = toNumberOrNull(value);
+  if (number === null) {
+    return null;
+  }
+  return Math.min(Math.max(number, min), max);
+}
+
 function dedupeStrings(values) {
   return [...new Set(values.filter((value) => typeof value === "string" && value.trim()))];
+}
+
+function normalizeYears(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  return [...new Set(
+    values
+      .filter((value) => value !== null && value !== undefined && value !== "")
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value)),
+  )].sort((left, right) => left - right);
+}
+
+function buildEmptyFloodRecurrence(yearWindow) {
+  return {
+    found: false,
+    frequency: 0,
+    yearsDetected: [],
+    startYear: yearWindow?.startYear ?? null,
+    endYear: yearWindow?.endYear ?? null,
+    affectedAreaSquareMeters: 0,
+    affectedAreaRai: 0,
+    affectedPercent: 0,
+    source: HAZARD_SOURCE,
+    summaryLevel: "parcel-intersection",
+  };
 }
 
 async function getParcelMeta(geometryJson) {
@@ -101,6 +143,46 @@ async function getParcelMeta(geometryJson) {
     areaRai: toRoundedNumber(row.area_rai),
     geometryType: String(row.geometry_type || "").replace(/^ST_/u, ""),
   };
+}
+
+async function getParcelRepresentativePoint(geometryJson) {
+  const result = await db.query(
+    `
+    ${PREPARED_PARCEL_CTE}
+    SELECT
+      ST_Y(ST_Transform(ST_PointOnSurface(geom), 4326)) AS latitude,
+      ST_X(ST_Transform(ST_PointOnSurface(geom), 4326)) AS longitude
+    FROM parcel_checked
+    WHERE NOT is_empty
+      AND is_valid;
+    `,
+    [geometryJson],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  const latitude = toNumberOrNull(row.latitude);
+  const longitude = toNumberOrNull(row.longitude);
+  if (latitude === null || longitude === null) {
+    return null;
+  }
+
+  return { latitude, longitude };
+}
+
+async function getWeatherForParcel(geometryJson, service = weatherService) {
+  try {
+    const point = await getParcelRepresentativePoint(geometryJson);
+    if (!point) {
+      return weatherService.buildUnavailableResult();
+    }
+    return await service.getWeatherForLocation(point);
+  } catch (error) {
+    return weatherService.buildUnavailableResult();
+  }
 }
 
 async function getAdministrativeRows(geometryJson) {
@@ -299,6 +381,202 @@ async function getNearestWaterRows(geometryJson) {
   };
 }
 
+async function getFloodRecurrenceForParcel(geometryJson, parcelAreaSquareMeters) {
+  const yearWindow = await getFloodYearWindow();
+  if (!yearWindow) {
+    return buildEmptyFloodRecurrence(null);
+  }
+
+  const result = await db.query(
+    `
+    ${PREPARED_PARCEL_CTE}
+    , parcel_meta AS (
+      SELECT geom, area_sqm
+      FROM parcel_checked
+      WHERE NOT is_empty
+        AND is_valid
+    ),
+    qualifying_features AS (
+      SELECT
+        f.id,
+        ST_CollectionExtract(
+          ST_MakeValid(ST_Transform(f.geom, 32647)),
+          3
+        ) AS geom,
+        ARRAY(
+          SELECT DISTINCT year_value
+          FROM (
+            SELECT
+              CASE
+                WHEN (item ->> 'year') ~ '^\\d{4}$'
+                THEN (item ->> 'year')::int
+                ELSE NULL
+              END AS year_value,
+              CASE
+                WHEN (item ->> 'frequency') ~ '^-?\\d+(\\.\\d+)?$'
+                THEN (item ->> 'frequency')::numeric
+                ELSE 0
+              END AS frequency_value
+            FROM jsonb_array_elements(
+              CASE
+                WHEN jsonb_typeof(f.yearly_frequency) = 'array'
+                THEN f.yearly_frequency
+                ELSE '[]'::jsonb
+              END
+            ) AS item
+          ) yearly
+          WHERE year_value BETWEEN $2 AND $3
+            AND frequency_value > 0
+          ORDER BY year_value
+        ) AS years_detected
+      FROM gis.flood_recurrence_pyo f
+      CROSS JOIN parcel_meta p
+      WHERE f.geom && ST_Transform(p.geom, 4326)
+        AND ST_Intersects(ST_Transform(f.geom, 32647), p.geom)
+        AND jsonb_typeof(f.yearly_frequency) = 'array'
+    ),
+    filtered_features AS (
+      SELECT id, geom, years_detected
+      FROM qualifying_features
+      WHERE cardinality(years_detected) > 0
+        AND NOT ST_IsEmpty(geom)
+    ),
+    intersections AS (
+      SELECT
+        ST_CollectionExtract(
+          ST_MakeValid(ST_Intersection(ff.geom, p.geom)),
+          3
+        ) AS geom,
+        ff.years_detected
+      FROM filtered_features ff
+      CROSS JOIN parcel_meta p
+      WHERE ST_Intersects(ff.geom, p.geom)
+    ),
+    valid_intersections AS (
+      SELECT geom, years_detected
+      FROM intersections
+      WHERE NOT ST_IsEmpty(geom)
+    ),
+    unioned AS (
+      SELECT
+        ST_CollectionExtract(
+          ST_MakeValid(ST_UnaryUnion(ST_Collect(geom))),
+          3
+        ) AS geom
+      FROM valid_intersections
+    ),
+    year_values AS (
+      SELECT DISTINCT unnest(years_detected) AS year_value
+      FROM valid_intersections
+    )
+    SELECT
+      COALESCE(
+        ROUND(ST_Area((SELECT geom FROM unioned))::numeric, 2),
+        0
+      ) AS affected_area_square_meters,
+      ARRAY(
+        SELECT year_value
+        FROM year_values
+        WHERE year_value IS NOT NULL
+        ORDER BY year_value
+      ) AS years_detected;
+    `,
+    [geometryJson, yearWindow.startYear, yearWindow.endYear],
+  );
+
+  const row = result.rows[0] || {};
+  const yearsDetected = normalizeYears(row.years_detected);
+  const parcelArea = toNumberOrNull(parcelAreaSquareMeters) || 0;
+  const rawArea = toNumberOrNull(row.affected_area_square_meters) || 0;
+  const affectedAreaSquareMeters = toRoundedNumber(clampNumber(rawArea, 0, parcelArea));
+  const affectedAreaRai = toRoundedNumber((affectedAreaSquareMeters || 0) / RAI_SQUARE_METERS);
+  const affectedPercent = parcelArea > 0
+    ? toRoundedNumber(clampNumber(((affectedAreaSquareMeters || 0) / parcelArea) * 100, 0, 100))
+    : 0;
+
+  return {
+    found: yearsDetected.length > 0 && (affectedAreaSquareMeters || 0) > 0,
+    frequency: yearsDetected.length,
+    yearsDetected,
+    startYear: yearWindow.startYear,
+    endYear: yearWindow.endYear,
+    affectedAreaSquareMeters,
+    affectedAreaRai,
+    affectedPercent,
+    source: HAZARD_SOURCE,
+    summaryLevel: "parcel-intersection",
+  };
+}
+
+async function getDroughtRecurrenceForParcel(geometryJson) {
+  const result = await db.query(
+    `
+    ${PREPARED_PARCEL_CTE}
+    , parcel_meta AS (
+      SELECT geom
+      FROM parcel_checked
+      WHERE NOT is_empty
+        AND is_valid
+    )
+    SELECT
+      d.tambon_name,
+      d.district_name,
+      d.province_name,
+      d.total_occurrences,
+      d.years_detected,
+      d.start_year,
+      d.end_year,
+      d.response_status,
+      d.source,
+      ROUND(
+        ST_Area(
+          ST_Intersection(
+            ST_CollectionExtract(ST_MakeValid(ST_Transform(d.geom, 32647)), 3),
+            p.geom
+          )
+        )::numeric,
+        2
+      ) AS intersection_area_square_meters
+    FROM gis.drought_recurrence_tambon_pyo d
+    CROSS JOIN parcel_meta p
+    WHERE d.geom && ST_Transform(p.geom, 4326)
+      AND ST_Intersects(ST_Transform(d.geom, 32647), p.geom)
+    ORDER BY intersection_area_square_meters DESC, d.tambon_name ASC;
+    `,
+    [geometryJson],
+  );
+
+  return {
+    summaryLevel: "tambon",
+    source: HAZARD_SOURCE,
+    note: DROUGHT_TAMBON_NOTE,
+    tambons: result.rows.map((row) => ({
+      tambon: row.tambon_name ?? null,
+      district: row.district_name ?? null,
+      province: row.province_name ?? null,
+      totalOccurrences: toNumberOrNull(row.total_occurrences),
+      yearsDetected: normalizeYears(row.years_detected),
+      startYear: toNumberOrNull(row.start_year),
+      endYear: toNumberOrNull(row.end_year),
+      responseStatus: row.response_status ?? null,
+      source: row.source || HAZARD_SOURCE,
+      summaryLevel: "tambon",
+    })),
+  };
+}
+
+async function getHistoricalHazards(geometryJson, parcelAreaSquareMeters) {
+  const [floodRecurrence, droughtRecurrence] = await Promise.all([
+    getFloodRecurrenceForParcel(geometryJson, parcelAreaSquareMeters),
+    getDroughtRecurrenceForParcel(geometryJson),
+  ]);
+
+  return {
+    floodRecurrence,
+    droughtRecurrence,
+  };
+}
+
 function buildLocationResponse(rows) {
   const provinceCandidates = dedupeStrings([
     ...rows.amphoes.map((row) => row.province_name),
@@ -412,8 +690,9 @@ function buildWaterResponse(rows) {
   };
 }
 
-async function analyzePolygon({ name, geometry }) {
+async function analyzePolygon({ name, geometry }, dependencies = {}) {
   const geometryJson = JSON.stringify(geometry);
+  const agriWeatherService = dependencies.weatherService || weatherService;
 
   try {
     const parcel = await getParcelMeta(geometryJson);
@@ -423,12 +702,16 @@ async function analyzePolygon({ name, geometry }) {
       maizeResult,
       soilResult,
       waterRows,
+      historicalHazards,
+      weather,
     ] = await Promise.all([
       getAdministrativeRows(geometryJson),
       getSuitabilityRows(geometryJson, "gis.rice_potential"),
       getSuitabilityRows(geometryJson, "gis.maize_potential"),
       getSoilRows(geometryJson),
       getNearestWaterRows(geometryJson),
+      getHistoricalHazards(geometryJson, parcel.areaSquareMeters),
+      getWeatherForParcel(geometryJson, agriWeatherService),
     ]);
 
     return {
@@ -450,6 +733,8 @@ async function analyzePolygon({ name, geometry }) {
       }),
       soilSummary: buildSoilSummary(soilResult.rows),
       water: buildWaterResponse(waterRows),
+      historicalHazards,
+      weather,
       overallStatus: {
         finalClass: null,
         status: "NOT_FULLY_EVALUATED",
@@ -473,4 +758,9 @@ async function analyzePolygon({ name, geometry }) {
 
 module.exports = {
   analyzePolygon,
+  _private: {
+    normalizeYears,
+    buildEmptyFloodRecurrence,
+    getParcelRepresentativePoint,
+  },
 };
