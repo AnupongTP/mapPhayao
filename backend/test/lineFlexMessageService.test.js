@@ -131,6 +131,14 @@ function collectUriActions(value) {
   return collectActionValues(value).filter((action) => action.type === "uri");
 }
 
+function getBodyContents(message) {
+  return message.contents.body.contents;
+}
+
+function getSuitabilityRow(message) {
+  return getBodyContents(message)[0];
+}
+
 function assertTextsInclude(message, expected) {
   const texts = collectTextValues(message);
   expected.forEach((text) => {
@@ -166,10 +174,9 @@ test("creates a complete flex message with header, body, footer, and sample temp
   assert.ok(message.contents.header);
   assert.ok(message.contents.body);
   assert.ok(message.contents.footer);
-  assert.equal(message.contents.header.backgroundColor, "#2F6F10");
-  assert.equal(message.contents.header.paddingAll, "16px");
-  assert.equal(message.contents.footer.backgroundColor, "#2F6F10");
-  assert.equal(message.contents.footer.paddingAll, "8px");
+  assert.equal(message.contents.header.backgroundColor, "#287A12");
+  assert.equal(message.contents.header.paddingAll, "18px");
+  assert.equal(message.contents.footer.paddingAll, "0px");
   assertTextsInclude(message, [
     "ผลตรวจความเหมาะสมของพื้นที่",
     "ต.แม่กา อ.เมืองพะเยา",
@@ -179,49 +186,60 @@ test("creates a complete flex message with header, body, footer, and sample temp
     "ข้าวโพด",
     "S2",
     "เหมาะสมปานกลาง",
-    "ชุดดิน",
+    "ข้อมูลดิน",
     "ชุดพะเยา (Pg)",
     "ข้อมูลน้ำท่วม",
-    "พบประวัติน้ำท่วมซ้ำซาก 3 ปี จากข้อมูลย้อนหลังช่วงปี 2015-2024",
+    "พบประวัติน้ำท่วมซ้ำซาก 3 ปี",
+    "จากข้อมูลย้อนหลังช่วงปี 2015-2024",
     "ข้อมูลภัยแล้ง",
-    "พบประวัติภัยแล้งซ้ำซาก 3 ปี จากข้อมูลย้อนหลังช่วงปี 2015-2024",
+    "พบประวัติภัยแล้งซ้ำซาก 3 ปี",
     "อุณหภูมิ",
     "24.1 °C",
     "ฝนในอีก 1 ชม.",
     "82%",
-    "ข้อมูลภัยแล้งเป็นข้อมูลสรุประดับตำบล",
     "แหล่งข้อมูล: GISTDA",
     "ตรวจสอบเมื่อ: 16 ก.ค. 2569 20:57",
   ]);
 });
 
-test("keeps rice and maize results separate and ordered", () => {
-  const texts = collectTextValues(build());
-  assert.ok(texts.indexOf("ข้าว") < texts.indexOf("S1"));
-  assert.ok(texts.indexOf("S1") < texts.indexOf("ข้าวโพด"));
-  assert.ok(texts.indexOf("ข้าวโพด") < texts.indexOf("S2"));
+test("keeps rice and maize cards side by side in one compact row", () => {
+  const message = build();
+  const row = getSuitabilityRow(message);
+  const [riceCard, maizeCard] = row.contents;
+
+  assert.equal(row.layout, "horizontal");
+  assert.equal(row.spacing, "sm");
+  assert.equal(row.contents.length, 2);
+  assert.equal(riceCard.flex, 1);
+  assert.equal(maizeCard.flex, 1);
+  assert.equal(riceCard.layout, "vertical");
+  assert.equal(maizeCard.layout, "vertical");
+  assert.equal(collectTextValues(riceCard).includes("ข้าว"), true);
+  assert.equal(collectTextValues(maizeCard).includes("ข้าวโพด"), true);
+  assert.notEqual(getBodyContents(message)[1], maizeCard);
 });
 
 test("maps rice S1, S2, S3, N, and no-data without turning no-data into N", () => {
   const expected = [
-    ["s1", "S1", "เหมาะสมมาก", "#DCFCE7"],
-    [" S2 ", "S2", "เหมาะสมปานกลาง", "#FEF3C7"],
-    ["S3", "S3", "เหมาะสมน้อย", "#FFEDD5"],
-    ["n", "N", "ไม่เหมาะสม", "#FEE2E2"],
+    ["s1", "S1", "เหมาะสมมาก", "#F0FDF4", "#166534"],
+    [" S2 ", "S2", "เหมาะสมปานกลาง", "#FFFBEA", "#92400E"],
+    ["S3", "S3", "เหมาะสมน้อย", "#FFF9EE", "#9B3305"],
+    ["n", "N", "ไม่เหมาะสม", "#FFF7F7", "#A71919"],
   ];
 
-  expected.forEach(([input, code, label, badgeColor]) => {
+  expected.forEach(([input, code, label, cardColor, scoreColor]) => {
     const message = build(sampleAnalysis({
       riceLandSuitability: { class: input, label: "ignored" },
     }));
     assertTextsInclude(message, [code, label]);
-    assert.equal(JSON.stringify(message).includes(badgeColor), true);
+    assert.equal(JSON.stringify(message).includes(cardColor), true);
+    assert.equal(JSON.stringify(message).includes(scoreColor), true);
   });
 
   const noData = build(sampleAnalysis({
     riceLandSuitability: { class: null, label: "ไม่มีข้อมูล", status: "NO_COVERAGE" },
   }));
-  assertTextsInclude(noData, ["ไม่มีข้อมูล", "ไม่พบข้อมูลความเหมาะสม"]);
+  assertTextsInclude(noData, ["—", "ยังไม่มีผลประเมิน"]);
   assert.equal(collectTextValues(noData).includes("N"), false);
 });
 
@@ -236,22 +254,29 @@ test("maps maize S1, S2, S3, N, and missing maize safely", () => {
   const message = build(sampleAnalysis({
     maizeLandSuitability: null,
   }));
-  assertTextsInclude(message, ["ข้าวโพด", "ไม่มีข้อมูล", "ไม่พบข้อมูลความเหมาะสม"]);
+  assertTextsInclude(message, ["ข้าวโพด", "—", "ยังไม่มีผลประเมิน"]);
 });
 
 test("formats soil series with name and code, name only, code only, and no-data", () => {
   assertTextsInclude(build(), ["ชุดพะเยา (Pg)"]);
   assertTextsInclude(build(sampleAnalysis({ soil: { soilSymbol: "" } })), ["ชุดพะเยา"]);
   assertTextsInclude(build(sampleAnalysis({ soil: { soilNameThai: "", soilSymbol: "Pg" } })), ["Pg"]);
-  assertTextsInclude(build(sampleAnalysis({ soil: null })), ["ไม่มีข้อมูล"]);
+  assertTextsInclude(build(sampleAnalysis({ soil: null })), ["ยังไม่มีข้อมูลดินสำหรับตำแหน่งนี้"]);
   assertTextsInclude(
     build(sampleAnalysis({ soil: { soilNameThai: "ชุดพะเยา (Pg)", soilSymbol: "Pg" } })),
     ["ชุดพะเยา (Pg)"],
   );
+  assertTextsInclude(
+    build(sampleAnalysis({ soil: { soilNameThai: "ชุดพะเยา", drainageDescriptionThai: "ระบายน้ำดี" } })),
+    ["ระบายน้ำดี"],
+  );
 });
 
 test("formats flood recurrence for available, no-history, unavailable, and unknown states", () => {
-  assertTextsInclude(build(), ["พบประวัติน้ำท่วมซ้ำซาก 3 ปี จากข้อมูลย้อนหลังช่วงปี 2015-2024"]);
+  assertTextsInclude(build(), [
+    "พบประวัติน้ำท่วมซ้ำซาก 3 ปี",
+    "จากข้อมูลย้อนหลังช่วงปี 2015-2024",
+  ]);
   assertTextsInclude(
     build(sampleAnalysis({
       hazardHistory: {
@@ -308,7 +333,21 @@ test("formats flood recurrence for available, no-history, unavailable, and unkno
         },
       },
     })),
-    ["พบประวัติน้ำท่วมซ้ำซาก 2 ปี จากข้อมูลย้อนหลังช่วงปี 2021-2025"],
+    ["พบประวัติน้ำท่วมซ้ำซาก 2 ปี", "จากข้อมูลย้อนหลังช่วงปี 2021-2025"],
+  );
+
+  assertTextsInclude(
+    build(sampleAnalysis({
+      hazardHistory: {
+        floodRecurrence: {
+          status: "no_coverage",
+          dataPeriod: { startYear: null, endYear: null, totalYears: null },
+          checkedAt: "2026-07-16T13:57:00.000Z",
+          source: "GISTDA",
+        },
+      },
+    })),
+    ["ไม่มีข้อมูลครอบคลุมพื้นที่นี้"],
   );
 
   const malformed = build(sampleAnalysis({
@@ -321,7 +360,10 @@ test("formats flood recurrence for available, no-history, unavailable, and unkno
 });
 
 test("formats drought recurrence for available, no-history, unavailable, and unknown states", () => {
-  assertTextsInclude(build(), ["พบประวัติภัยแล้งซ้ำซาก 3 ปี จากข้อมูลย้อนหลังช่วงปี 2015-2024"]);
+  assertTextsInclude(build(), [
+    "พบประวัติภัยแล้งซ้ำซาก 3 ปี",
+    "จากข้อมูลย้อนหลังช่วงปี 2015-2024",
+  ]);
   assertSerializedDoesNotInclude(build(), ["ระดับระดับ", "ไร่", "% ของพื้นที่", "affectedArea"]);
 
   assertTextsInclude(
@@ -371,6 +413,20 @@ test("formats drought recurrence for available, no-history, unavailable, and unk
   assertTextsInclude(unavailable, ["ยังไม่สามารถตรวจสอบประวัติภัยแล้งซ้ำซากได้ในขณะนี้"]);
   assert.equal(collectTextValues(unavailable).includes("ไม่มีข้อมูล"), false);
 
+  assertTextsInclude(
+    build(sampleAnalysis({
+      hazardHistory: {
+        droughtRecurrence: {
+          status: "no_coverage",
+          dataPeriod: { startYear: null, endYear: null, totalYears: null },
+          checkedAt: "2026-07-16T13:57:00.000Z",
+          source: "GISTDA",
+        },
+      },
+    })),
+    ["ไม่มีข้อมูลครอบคลุมพื้นที่นี้"],
+  );
+
   const malformed = build(sampleAnalysis({
     hazardHistory: {
       droughtRecurrence: { status: "unexpected", message: "raw upstream drought stack" },
@@ -406,7 +462,7 @@ test("formats weather temperature and next-hour rain probability only when weath
   );
   assertTextsInclude(
     build(sampleAnalysis({ weather: { status: "UNAVAILABLE", temperatureC: 24.1, nextHourPrecipitationProbabilityPercent: 82 } })),
-    ["ไม่มีข้อมูล"],
+    ["—"],
   );
 
   const oldRainField = ["max", "PrecipitationProbabilityPercent"].join("");
@@ -424,7 +480,9 @@ test("formats locations with tambon, amphoe, missing values, and no duplicate pr
   assertTextsInclude(build(), ["ต.แม่กา อ.เมืองพะเยา"]);
   assertTextsInclude(build(sampleAnalysis({ location: { amphoe: "" } })), ["ต.แม่กา"]);
   assertTextsInclude(build(sampleAnalysis({ location: { tambon: "" } })), ["อ.เมืองพะเยา"]);
-  assertTextsInclude(build(sampleAnalysis({ location: { tambon: "", amphoe: "" } })), ["ไม่พบข้อมูลตำแหน่ง"]);
+  const noLocation = build(sampleAnalysis({ location: { tambon: "", amphoe: "" } }));
+  assert.equal(collectTextValues(noLocation).includes("ไม่พบข้อมูลตำแหน่ง"), false);
+  assert.equal(noLocation.altText.includes("ไม่พบข้อมูลตำแหน่ง"), true);
 
   const prefixed = build(sampleAnalysis({
     location: {
@@ -440,6 +498,8 @@ test("footer uses required label and caller-provided detailUrl", () => {
   const message = build();
   const action = collectActionValues(message)[0];
 
+  assert.equal(message.contents.footer.contents[0].style, "primary");
+  assert.equal(message.contents.footer.contents[0].color, "#287A12");
   assert.equal(action.type, "uri");
   assert.equal(action.label, "ดูรายละเอียดพื้นที่");
   assert.equal(action.uri, DETAIL_URL);
@@ -530,9 +590,11 @@ test("sample output contains the approved template visible texts", () => {
     "ผลตรวจความเหมาะสมของพื้นที่",
     "ข้าว",
     "ข้าวโพด",
-    "ชุดดิน",
+    "ข้อมูลดิน",
+    "ประวัติภัยของพื้นที่",
     "ข้อมูลน้ำท่วม",
     "ข้อมูลภัยแล้ง",
+    "สภาพอากาศ",
     "อุณหภูมิ",
     "ฝนในอีก 1 ชม.",
   ]);

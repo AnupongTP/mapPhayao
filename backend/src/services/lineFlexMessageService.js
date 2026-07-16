@@ -1,8 +1,8 @@
 const NO_DATA_TEXT = "ไม่มีข้อมูล";
+const EMPTY_TEXT = "—";
 const HEADER_TITLE = "ผลตรวจความเหมาะสมของพื้นที่";
-const HEADER_COLOR = "#2F6F10";
+const HEADER_COLOR = "#287A12";
 const LOCATION_FALLBACK = "ไม่พบข้อมูลตำแหน่ง";
-const DROUGHT_NOTE = "ข้อมูลภัยแล้งเป็นข้อมูลสรุประดับตำบล";
 const HAZARD_UNKNOWN_TEXT = "ยังไม่สามารถแสดงผลการตรวจสอบได้ในขณะนี้";
 const HAZARD_SOURCE_FALLBACK = "GISTDA";
 const HAZARD_STATUS = {
@@ -17,47 +17,42 @@ const SUITABILITY_STYLES = {
   S1: {
     code: "S1",
     label: "เหมาะสมมาก",
-    mainColor: "#2F6F10",
-    badgeBackground: "#DCFCE7",
-    badgeText: "#166534",
-    cardBackground: "#F7FAF5",
-    border: "#D8E5D2",
+    mainColor: "#15803D",
+    scoreColor: "#166534",
+    cardBackground: "#F0FDF4",
+    border: "#86D69A",
   },
   S2: {
     code: "S2",
     label: "เหมาะสมปานกลาง",
-    mainColor: "#B45309",
-    badgeBackground: "#FEF3C7",
-    badgeText: "#92400E",
-    cardBackground: "#FFFBEB",
-    border: "#FDE68A",
+    mainColor: "#A16207",
+    scoreColor: "#92400E",
+    cardBackground: "#FFFBEA",
+    border: "#EACD69",
   },
   S3: {
     code: "S3",
     label: "เหมาะสมน้อย",
-    mainColor: "#C2410C",
-    badgeBackground: "#FFEDD5",
-    badgeText: "#9A3412",
-    cardBackground: "#FFF7ED",
-    border: "#FED7AA",
+    mainColor: "#AF4B08",
+    scoreColor: "#9B3305",
+    cardBackground: "#FFF9EE",
+    border: "#F1C974",
   },
   N: {
     code: "N",
     label: "ไม่เหมาะสม",
-    mainColor: "#B91C1C",
-    badgeBackground: "#FEE2E2",
-    badgeText: "#991B1B",
-    cardBackground: "#FEF2F2",
-    border: "#FECACA",
+    mainColor: "#B42323",
+    scoreColor: "#A71919",
+    cardBackground: "#FFF7F7",
+    border: "#F3B8B8",
   },
   NO_DATA: {
-    code: NO_DATA_TEXT,
-    label: "ไม่พบข้อมูลความเหมาะสม",
-    mainColor: "#475569",
-    badgeBackground: "#E2E8F0",
-    badgeText: "#334155",
-    cardBackground: "#F8FAFC",
-    border: "#CBD5E1",
+    code: EMPTY_TEXT,
+    label: "ยังไม่มีผลประเมิน",
+    mainColor: "#4B5563",
+    scoreColor: "#374151",
+    cardBackground: "#F7F8FA",
+    border: "#D1D5DB",
   },
 };
 
@@ -109,7 +104,7 @@ function normalizeAdminName(value, type) {
   return text.replace(prefixPattern, "").trim();
 }
 
-function formatLocation(analysis) {
+function formatAdministrativeSubtitle(analysis) {
   const location = analysis && typeof analysis === "object" ? analysis.location || {} : {};
   const tambon = normalizeAdminName(location.tambon, "tambon");
   const amphoe = normalizeAdminName(location.amphoe, "amphoe");
@@ -122,7 +117,11 @@ function formatLocation(analysis) {
     parts.push(`อ.${amphoe}`);
   }
 
-  return parts.length ? parts.join(" ") : LOCATION_FALLBACK;
+  return parts.join(" ");
+}
+
+function formatLocation(analysis) {
+  return formatAdministrativeSubtitle(analysis) || LOCATION_FALLBACK;
 }
 
 function normalizeSuitabilityResult(value) {
@@ -130,7 +129,11 @@ function normalizeSuitabilityResult(value) {
   return SUITABILITY_STYLES[code] || SUITABILITY_STYLES.NO_DATA;
 }
 
-function formatSoilSeries(analysis) {
+function getSuitabilityStyle(suitability) {
+  return suitability && typeof suitability === "object" ? suitability : SUITABILITY_STYLES.NO_DATA;
+}
+
+function getSoilInfo(analysis) {
   const soil = analysis && typeof analysis === "object" ? analysis.soil || {} : {};
   const name = normalizeText(soil.soilNameThai || soil.name || soil.soilSeries, "", { maxLength: 80 });
   const code = normalizeText(
@@ -138,15 +141,28 @@ function formatSoilSeries(analysis) {
     "",
     { maxLength: 24 },
   );
+  const detail = normalizeText(
+    soil.drainageDescriptionThai ||
+      soil.depthDescriptionThai ||
+      soil.surfaceTextureThai ||
+      soil.description ||
+      soil.condition,
+    "",
+    { maxLength: 120 },
+  );
 
   if (!name && !code) {
-    return NO_DATA_TEXT;
+    return {
+      title: "",
+      detail,
+      hasData: Boolean(detail),
+    };
   }
   if (!name) {
-    return code;
+    return { title: code, detail, hasData: true };
   }
   if (!code) {
-    return name;
+    return { title: name, detail, hasData: true };
   }
 
   const escapedCode = code.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -154,10 +170,15 @@ function formatSoilSeries(analysis) {
     new RegExp(`\\(${escapedCode}\\)`, "iu").test(name) ||
     new RegExp(`(?:^|\\s)${escapedCode}(?:\\s|$)`, "iu").test(name)
   ) {
-    return name;
+    return { title: name, detail, hasData: true };
   }
 
-  return `${name} (${code})`;
+  return { title: `${name} (${code})`, detail, hasData: true };
+}
+
+function formatSoilSeries(analysis) {
+  const soil = getSoilInfo(analysis);
+  return soil.title || soil.detail || NO_DATA_TEXT;
 }
 
 function getPeriodYears(dataPeriod) {
@@ -237,16 +258,20 @@ function formatHazardYearRange(dataPeriod) {
 
 function formatFloodSummary(analysis) {
   const flood = analysis?.hazardHistory?.floodRecurrence;
+  return formatFloodHazard(flood).summary;
+}
+
+function formatFloodHazard(flood) {
   const status = normalizeHazardStatus(flood);
 
   if (status === HAZARD_STATUS.UNAVAILABLE) {
-    return "ยังไม่สามารถตรวจสอบประวัติน้ำท่วมซ้ำซากได้ในขณะนี้";
+    return { summary: "ยังไม่สามารถตรวจสอบประวัติน้ำท่วมซ้ำซากได้ในขณะนี้", detail: "" };
   }
   if (status === HAZARD_STATUS.NO_HISTORY) {
-    return "ไม่พบประวัติน้ำท่วมซ้ำซากในพื้นที่นี้";
+    return { summary: "ไม่พบประวัติน้ำท่วมซ้ำซากในพื้นที่นี้", detail: "" };
   }
   if (status === HAZARD_STATUS.NO_COVERAGE) {
-    return "ยังไม่มีข้อมูลประวัติน้ำท่วมซ้ำซากสำหรับพื้นที่นี้";
+    return { summary: "ไม่มีข้อมูลครอบคลุมพื้นที่นี้", detail: "" };
   }
 
   if (status === HAZARD_STATUS.AVAILABLE) {
@@ -256,14 +281,15 @@ function formatFloodSummary(analysis) {
     const yearRange = formatHazardYearRange(flood.dataPeriod);
 
     if (detectedCount > 0) {
-      return yearRange
-        ? `พบประวัติน้ำท่วมซ้ำซาก ${detectedCount} ปี จากข้อมูลย้อนหลังช่วงปี ${yearRange}`
-        : `พบประวัติน้ำท่วมซ้ำซาก ${detectedCount} ปี`;
+      return {
+        summary: `พบประวัติน้ำท่วมซ้ำซาก ${detectedCount} ปี`,
+        detail: yearRange ? `จากข้อมูลย้อนหลังช่วงปี ${yearRange}` : "",
+      };
     }
-    return "พบประวัติน้ำท่วมซ้ำซาก";
+    return { summary: "พบประวัติน้ำท่วมซ้ำซาก", detail: "" };
   }
 
-  return HAZARD_UNKNOWN_TEXT;
+  return { summary: HAZARD_UNKNOWN_TEXT, detail: "" };
 }
 
 function getDroughtOccurrenceCount(drought) {
@@ -303,16 +329,20 @@ function getDroughtLevelFromOccurrences(count, windowYears) {
 
 function formatDroughtSummary(analysis) {
   const drought = analysis?.hazardHistory?.droughtRecurrence;
+  return formatDroughtHazard(drought).summary;
+}
+
+function formatDroughtHazard(drought) {
   const status = normalizeHazardStatus(drought);
 
   if (status === HAZARD_STATUS.UNAVAILABLE) {
-    return "ยังไม่สามารถตรวจสอบประวัติภัยแล้งซ้ำซากได้ในขณะนี้";
+    return { summary: "ยังไม่สามารถตรวจสอบประวัติภัยแล้งซ้ำซากได้ในขณะนี้", detail: "" };
   }
   if (status === HAZARD_STATUS.NO_HISTORY) {
-    return "ไม่พบประวัติภัยแล้งซ้ำซากในพื้นที่นี้";
+    return { summary: "ไม่พบประวัติภัยแล้งซ้ำซากในพื้นที่นี้", detail: "" };
   }
   if (status === HAZARD_STATUS.NO_COVERAGE) {
-    return "ยังไม่มีข้อมูลประวัติภัยแล้งซ้ำซากสำหรับพื้นที่นี้";
+    return { summary: "ไม่มีข้อมูลครอบคลุมพื้นที่นี้", detail: "" };
   }
 
   if (status === HAZARD_STATUS.AVAILABLE) {
@@ -323,28 +353,29 @@ function formatDroughtSummary(analysis) {
     const yearRange = formatHazardYearRange(drought.dataPeriod);
 
     if (count !== null && count > 0) {
-      return yearRange
-        ? `พบประวัติภัยแล้งซ้ำซาก ${count} ปี จากข้อมูลย้อนหลังช่วงปี ${yearRange}`
-        : `พบประวัติภัยแล้งซ้ำซาก ${count} ปี`;
+      return {
+        summary: `พบประวัติภัยแล้งซ้ำซาก ${count} ปี`,
+        detail: yearRange ? `จากข้อมูลย้อนหลังช่วงปี ${yearRange}` : "",
+      };
     }
     if (level) {
-      return `พบประวัติภัยแล้งซ้ำซากระดับ${level}`;
+      return { summary: `พบประวัติภัยแล้งซ้ำซากระดับ${level}`, detail: "" };
     }
-    return "พบประวัติภัยแล้งซ้ำซากระดับตำบล";
+    return { summary: "พบประวัติภัยแล้งซ้ำซากระดับตำบล", detail: "" };
   }
 
-  return HAZARD_UNKNOWN_TEXT;
+  return { summary: HAZARD_UNKNOWN_TEXT, detail: "" };
 }
 
 function formatTemperature(analysis) {
   const weather = analysis?.weather;
   if (!weather || weather.status !== "AVAILABLE") {
-    return NO_DATA_TEXT;
+    return EMPTY_TEXT;
   }
 
   const number = toFiniteNumber(weather.temperatureC);
   if (number === null) {
-    return NO_DATA_TEXT;
+    return EMPTY_TEXT;
   }
 
   return `${Number.isInteger(number) ? number.toFixed(0) : number.toFixed(1)} °C`;
@@ -353,55 +384,48 @@ function formatTemperature(analysis) {
 function formatRainProbability(analysis) {
   const weather = analysis?.weather;
   if (!weather || weather.status !== "AVAILABLE") {
-    return NO_DATA_TEXT;
+    return EMPTY_TEXT;
   }
 
   const number = toFiniteNumber(weather.nextHourPrecipitationProbabilityPercent);
   if (number === null || number < 0 || number > 100) {
-    return NO_DATA_TEXT;
+    return EMPTY_TEXT;
   }
 
   return `${Math.round(number)}%`;
 }
 
 function createCropCard(title, suitability) {
-  const codeSize = suitability.code === NO_DATA_TEXT ? "xl" : "3xl";
+  const style = getSuitabilityStyle(suitability);
   return {
     type: "box",
     layout: "vertical",
-    backgroundColor: suitability.cardBackground,
-    borderColor: suitability.border,
+    flex: 1,
+    backgroundColor: style.cardBackground,
+    borderColor: style.border,
     borderWidth: "normal",
-    cornerRadius: "md",
+    cornerRadius: "12px",
     paddingAll: "12px",
-    spacing: "sm",
     contents: [
       createText(title, {
         size: "md",
         weight: "bold",
-        color: suitability.mainColor,
+        color: style.mainColor,
         align: "center",
       }),
-      {
-        type: "box",
-        layout: "vertical",
-        backgroundColor: suitability.badgeBackground,
-        cornerRadius: "xl",
-        paddingAll: "8px",
-        contents: [
-          createText(suitability.code, {
-            size: codeSize,
-            weight: "bold",
-            color: suitability.badgeText,
-            align: "center",
-          }),
-        ],
-      },
-      createText(suitability.label, {
+      createText(style.code, {
+        size: style.code === EMPTY_TEXT ? "xl" : "3xl",
+        weight: "bold",
+        color: style.scoreColor,
+        align: "center",
+        margin: "md",
+      }),
+      createText(style.label, {
         size: "sm",
         weight: "bold",
-        color: suitability.mainColor,
+        color: style.mainColor,
         align: "center",
+        margin: "sm",
       }),
     ],
   };
@@ -433,18 +457,53 @@ function createHazardBlock(title, value) {
   return {
     type: "box",
     layout: "vertical",
-    spacing: "xs",
+    backgroundColor: "#F7F8FA",
+    cornerRadius: "10px",
+    paddingAll: "12px",
     contents: [
       createText(title, {
         size: "sm",
         weight: "bold",
-        color: "#374151",
+        color: "#1F2937",
       }),
       createText(value, {
         size: "sm",
-        color: "#111827",
+        color: "#374151",
+        margin: "sm",
       }),
     ],
+  };
+}
+
+function createHazardCard(title, hazard) {
+  const contents = [
+    createText(title, {
+      size: "sm",
+      weight: "bold",
+      color: "#1F2937",
+    }),
+    createText(hazard.summary, {
+      size: "sm",
+      color: "#374151",
+      margin: "sm",
+    }),
+  ];
+
+  if (hazard.detail) {
+    contents.push(createText(hazard.detail, {
+      size: "xs",
+      color: "#6B7280",
+      margin: "sm",
+    }));
+  }
+
+  return {
+    type: "box",
+    layout: "vertical",
+    backgroundColor: "#F7F8FA",
+    cornerRadius: "10px",
+    paddingAll: "12px",
+    contents,
   };
 }
 
@@ -457,6 +516,50 @@ function collectHazardSources(flood, drought) {
 
 function getHazardCheckedAt(flood, drought) {
   return formatThaiDateTime(flood?.checkedAt) || formatThaiDateTime(drought?.checkedAt);
+}
+
+function createSoilSection(analysis) {
+  const soil = getSoilInfo(analysis);
+  const contents = [
+    createText("ข้อมูลดิน", {
+      weight: "bold",
+      size: "md",
+      color: "#1F2937",
+    }),
+  ];
+
+  if (soil.hasData) {
+    if (soil.title) {
+      contents.push(createText(soil.title, {
+        weight: "bold",
+        size: "sm",
+        color: "#111827",
+        margin: "md",
+      }));
+    }
+    if (soil.detail) {
+      contents.push(createText(soil.detail, {
+        size: "sm",
+        color: "#4B5563",
+        margin: "sm",
+      }));
+    }
+  } else {
+    contents.push(createText("ยังไม่มีข้อมูลดินสำหรับตำแหน่งนี้", {
+      size: "sm",
+      color: "#4B5563",
+      margin: "md",
+    }));
+  }
+
+  return {
+    type: "box",
+    layout: "vertical",
+    backgroundColor: "#F7F8FA",
+    cornerRadius: "12px",
+    paddingAll: "14px",
+    contents,
+  };
 }
 
 function createHazardHistorySection(analysis) {
@@ -483,22 +586,55 @@ function createHazardHistorySection(analysis) {
     margin: "md",
     contents: [
       createText("ประวัติภัยของพื้นที่", {
+        size: "md",
+        weight: "bold",
+        color: "#1F2937",
+      }),
+      createHazardCard("ข้อมูลน้ำท่วม", formatFloodHazard(flood)),
+      createHazardCard("ข้อมูลภัยแล้ง", formatDroughtHazard(drought)),
+      ...meta.map((text) => createText(text, {
+        size: "xs",
+        color: "#6B7280",
+        margin: "sm",
+      })),
+    ],
+  };
+}
+
+function createWeatherRow(label, value) {
+  return {
+    type: "box",
+    layout: "horizontal",
+    contents: [
+      createText(label, {
+        size: "sm",
+        color: "#6B7280",
+        flex: 1,
+      }),
+      createText(value, {
         size: "sm",
         weight: "bold",
         color: "#111827",
+        align: "end",
+        flex: 1,
       }),
-      createHazardBlock("ข้อมูลน้ำท่วม", formatFloodSummary(analysis)),
-      createHazardBlock("ข้อมูลภัยแล้ง", formatDroughtSummary(analysis)),
-      createText(DROUGHT_NOTE, {
-        size: "xs",
-        color: "#64748B",
-        margin: "xs",
+    ],
+  };
+}
+
+function createWeatherSection(analysis) {
+  return {
+    type: "box",
+    layout: "vertical",
+    spacing: "sm",
+    contents: [
+      createText("สภาพอากาศ", {
+        weight: "bold",
+        size: "md",
+        color: "#1F2937",
       }),
-      ...meta.map((text) => createText(text, {
-        size: "xs",
-        color: "#64748B",
-        margin: "xs",
-      })),
+      createWeatherRow("อุณหภูมิ", formatTemperature(analysis)),
+      createWeatherRow("ฝนในอีก 1 ชม.", formatRainProbability(analysis)),
     ],
   };
 }
@@ -534,9 +670,25 @@ function createAltText({ locationText, rice, maize }) {
 function createLocationSummaryFlexMessage(analysis, options = {}) {
   const detailUrl = validateDetailUrl(options.detailUrl);
   const locationText = formatLocation(analysis);
+  const subtitle = formatAdministrativeSubtitle(analysis);
   const rice = normalizeSuitabilityResult(analysis?.riceLandSuitability);
   const maize = normalizeSuitabilityResult(analysis?.maizeLandSuitability);
   const altText = createAltText({ locationText, rice, maize });
+  const headerContents = [
+    createText(HEADER_TITLE, {
+      color: "#FFFFFF",
+      size: "xl",
+      weight: "bold",
+    }),
+  ];
+
+  if (subtitle) {
+    headerContents.push(createText(subtitle, {
+      color: "#E8F5E5",
+      size: "sm",
+      margin: "sm",
+    }));
+  }
 
   return {
     type: "flex",
@@ -548,19 +700,8 @@ function createLocationSummaryFlexMessage(analysis, options = {}) {
         type: "box",
         layout: "vertical",
         backgroundColor: HEADER_COLOR,
-        paddingAll: "16px",
-        contents: [
-          createText(HEADER_TITLE, {
-            color: "#FFFFFF",
-            size: "lg",
-            weight: "bold",
-          }),
-          createText(locationText, {
-            color: "#E7F5DF",
-            size: "sm",
-            margin: "sm",
-          }),
-        ],
+        paddingAll: "18px",
+        contents: headerContents,
       },
       body: {
         type: "box",
@@ -568,37 +709,40 @@ function createLocationSummaryFlexMessage(analysis, options = {}) {
         paddingAll: "16px",
         spacing: "md",
         contents: [
-          createCropCard("ข้าว", rice),
-          createCropCard("ข้าวโพด", maize),
-          {
-            type: "separator",
-            margin: "lg",
-          },
           {
             type: "box",
-            layout: "vertical",
+            layout: "horizontal",
             spacing: "sm",
-            margin: "lg",
             contents: [
-              createDetailRow("ชุดดิน", formatSoilSeries(analysis)),
-              createHazardHistorySection(analysis),
-              createDetailRow("อุณหภูมิ", formatTemperature(analysis)),
-              createDetailRow("ฝนในอีก 1 ชม.", formatRainProbability(analysis)),
+              createCropCard("ข้าว", rice),
+              createCropCard("ข้าวโพด", maize),
             ],
           },
+          {
+            type: "separator",
+            margin: "md",
+            color: "#E5E7EB",
+          },
+          createSoilSection(analysis),
+          createHazardHistorySection(analysis),
+          {
+            type: "separator",
+            margin: "md",
+            color: "#E5E7EB",
+          },
+          createWeatherSection(analysis),
         ],
       },
       footer: {
         type: "box",
         layout: "vertical",
-        backgroundColor: HEADER_COLOR,
-        paddingAll: "8px",
+        paddingAll: "0px",
         contents: [
           {
             type: "button",
-            style: "link",
+            style: "primary",
             height: "sm",
-            color: "#FFFFFF",
+            color: HEADER_COLOR,
             action: {
               type: "uri",
               label: "ดูรายละเอียดพื้นที่",
