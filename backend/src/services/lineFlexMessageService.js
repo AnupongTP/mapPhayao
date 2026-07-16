@@ -403,7 +403,7 @@ function createCropCard(title, suitability) {
     flex: 1,
     backgroundColor: style.cardBackground,
     borderColor: style.border,
-    borderWidth: "normal",
+    borderWidth: "1px",
     cornerRadius: "12px",
     paddingAll: "12px",
     contents: [
@@ -659,21 +659,16 @@ function validateDetailUrl(value) {
   return text;
 }
 
-function createAltText({ locationText, rice, maize }) {
-  return normalizeText(
-    `ผลความเหมาะสมพื้นที่ ${locationText}: ข้าว ${rice.code}, ข้าวโพด ${maize.code}`,
-    "ผลสรุปความเหมาะสมของพื้นที่",
-    { maxLength: 250 },
-  );
+function createAltText() {
+  return HEADER_TITLE;
 }
 
 function createLocationSummaryFlexMessage(analysis, options = {}) {
   const detailUrl = validateDetailUrl(options.detailUrl);
-  const locationText = formatLocation(analysis);
   const subtitle = formatAdministrativeSubtitle(analysis);
   const rice = normalizeSuitabilityResult(analysis?.riceLandSuitability);
   const maize = normalizeSuitabilityResult(analysis?.maizeLandSuitability);
-  const altText = createAltText({ locationText, rice, maize });
+  const altText = createAltText();
   const headerContents = [
     createText(HEADER_TITLE, {
       color: "#FFFFFF",
@@ -736,12 +731,11 @@ function createLocationSummaryFlexMessage(analysis, options = {}) {
       footer: {
         type: "box",
         layout: "vertical",
-        paddingAll: "0px",
         contents: [
           {
             type: "button",
             style: "primary",
-            height: "sm",
+            height: "md",
             color: HEADER_COLOR,
             action: {
               type: "uri",

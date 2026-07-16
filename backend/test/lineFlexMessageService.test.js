@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const {
   createLocationSummaryFlexMessage,
@@ -10,6 +12,10 @@ const LONG_PUBLIC_APP_URL =
   "https://dishes-prefix-revised-whom.trycloudflare.com/mapphayao1/frontend/index.html";
 const LONG_DETAIL_URL =
   `${LONG_PUBLIC_APP_URL}?lat=19.039846300072156&lng=99.94005686022584`;
+const serviceSource = fs.readFileSync(
+  path.join(__dirname, "../src/services/lineFlexMessageService.js"),
+  "utf8",
+);
 
 function sampleAnalysis(overrides = {}) {
   const hasOwn = (key) => Object.prototype.hasOwnProperty.call(overrides, key);
@@ -167,8 +173,7 @@ test("creates a complete flex message with header, body, footer, and sample temp
   const message = build();
 
   assert.equal(message.type, "flex");
-  assert.equal(typeof message.altText, "string");
-  assert.notEqual(message.altText.trim(), "");
+  assert.equal(message.altText, "ผลตรวจความเหมาะสมของพื้นที่");
   assert.equal(message.contents.type, "bubble");
   assert.equal(message.contents.size, "mega");
   assert.ok(message.contents.header);
@@ -176,7 +181,7 @@ test("creates a complete flex message with header, body, footer, and sample temp
   assert.ok(message.contents.footer);
   assert.equal(message.contents.header.backgroundColor, "#287A12");
   assert.equal(message.contents.header.paddingAll, "18px");
-  assert.equal(message.contents.footer.paddingAll, "0px");
+  assert.equal(Object.prototype.hasOwnProperty.call(message.contents.footer, "paddingAll"), false);
   assertTextsInclude(message, [
     "ผลตรวจความเหมาะสมของพื้นที่",
     "ต.แม่กา อ.เมืองพะเยา",
@@ -214,9 +219,24 @@ test("keeps rice and maize cards side by side in one compact row", () => {
   assert.equal(maizeCard.flex, 1);
   assert.equal(riceCard.layout, "vertical");
   assert.equal(maizeCard.layout, "vertical");
+  assert.equal(riceCard.borderWidth, "1px");
+  assert.equal(maizeCard.borderWidth, "1px");
   assert.equal(collectTextValues(riceCard).includes("ข้าว"), true);
   assert.equal(collectTextValues(maizeCard).includes("ข้าวโพด"), true);
   assert.notEqual(getBodyContents(message)[1], maizeCard);
+  assert.equal(riceCard.contents.some((item) => item.type === "box" && item.backgroundColor), false);
+});
+
+test("body contents match the approved section order", () => {
+  const contents = getBodyContents(build());
+
+  assert.equal(contents.length, 6);
+  assert.equal(contents[0].layout, "horizontal");
+  assert.equal(contents[1].type, "separator");
+  assert.equal(collectTextValues(contents[2]).includes("ข้อมูลดิน"), true);
+  assert.equal(collectTextValues(contents[3]).includes("ประวัติภัยของพื้นที่"), true);
+  assert.equal(contents[4].type, "separator");
+  assert.equal(collectTextValues(contents[5]).includes("สภาพอากาศ"), true);
 });
 
 test("maps rice S1, S2, S3, N, and no-data without turning no-data into N", () => {
@@ -482,7 +502,8 @@ test("formats locations with tambon, amphoe, missing values, and no duplicate pr
   assertTextsInclude(build(sampleAnalysis({ location: { tambon: "" } })), ["อ.เมืองพะเยา"]);
   const noLocation = build(sampleAnalysis({ location: { tambon: "", amphoe: "" } }));
   assert.equal(collectTextValues(noLocation).includes("ไม่พบข้อมูลตำแหน่ง"), false);
-  assert.equal(noLocation.altText.includes("ไม่พบข้อมูลตำแหน่ง"), true);
+  assert.equal(noLocation.contents.header.contents.length, 1);
+  assert.equal(JSON.stringify(noLocation).includes("ต. อ."), false);
 
   const prefixed = build(sampleAnalysis({
     location: {
@@ -498,7 +519,10 @@ test("footer uses required label and caller-provided detailUrl", () => {
   const message = build();
   const action = collectActionValues(message)[0];
 
+  assert.equal(Object.prototype.hasOwnProperty.call(message.contents.footer, "paddingAll"), false);
+  assert.notEqual(message.contents.footer.paddingAll, "0px");
   assert.equal(message.contents.footer.contents[0].style, "primary");
+  assert.equal(message.contents.footer.contents[0].height, "md");
   assert.equal(message.contents.footer.contents[0].color, "#287A12");
   assert.equal(action.type, "uri");
   assert.equal(action.label, "ดูรายละเอียดพื้นที่");
@@ -520,6 +544,10 @@ test("footer URI preserves long map-click detailUrl without text truncation", ()
   assert.notEqual(actions[0].uri, LONG_PUBLIC_APP_URL);
   assert.equal(actions[0].uri.includes("lat=19.039846300072156"), true);
   assert.equal(actions[0].uri.includes("lng=99.94005686022584"), true);
+});
+
+test("temporary Cloudflare URL is only supplied by tests and is not hardcoded in the builder", () => {
+  assert.equal(serviceSource.includes("dishes-prefix-revised-whom.trycloudflare.com"), false);
 });
 
 test("rejects invalid detailUrl safely", () => {
