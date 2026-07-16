@@ -7,7 +7,7 @@
     hostname === "127.0.0.1";
 
   const isCurrentCloudflareTunnel =
-    hostname === "dishes-prefix-revised-whom.trycloudflare.com";
+    hostname === "https://foreign-copper-provision-constitute.trycloudflare.com";
 
   const localApiBaseUrl = "http://localhost:3000/api";
   const renderApiBaseUrl = "https://mapphayao-backend.onrender.com/api";

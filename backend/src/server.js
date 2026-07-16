@@ -25,7 +25,7 @@ const developmentOrigins = [
   "http://localhost:5500",
 ];
 const temporaryTunnelOrigins = [
-  "https://dishes-prefix-revised-whom.trycloudflare.com",
+  "https://foreign-copper-provision-constitute.trycloudflare.com",
 ];
 const temporaryTunnelOriginSet = new Set(temporaryTunnelOrigins);
 const configuredOrigins = String(process.env.CORS_ORIGINS || "")
