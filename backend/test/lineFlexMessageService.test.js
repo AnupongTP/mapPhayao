@@ -57,6 +57,7 @@ function sampleAnalysis(overrides = {}) {
         frequency: 3,
         yearsDetected: [2020, 2022, 2024],
         dataPeriod: { startYear: 2015, endYear: 2024, totalYears: 10 },
+        checkedAt: "2026-07-16T13:57:00.000Z",
         source: "GISTDA",
       }),
       droughtRecurrence: mergeHazardOverride("droughtRecurrence", {
@@ -65,6 +66,7 @@ function sampleAnalysis(overrides = {}) {
         yearsDetected: [2019, 2021, 2023],
         dataPeriod: { startYear: 2015, endYear: 2024, totalYears: 10 },
         summaryLevel: "tambon",
+        checkedAt: "2026-07-16T13:57:00.000Z",
         source: "GISTDA",
       }),
       ...(overrides.hazardHistory || {}),
@@ -180,14 +182,16 @@ test("creates a complete flex message with header, body, footer, and sample temp
     "ชุดดิน",
     "ชุดพะเยา (Pg)",
     "ข้อมูลน้ำท่วม",
-    "พบ 3 ปีใน 10 ปี",
+    "พบประวัติน้ำท่วมซ้ำซาก 3 ปี จากข้อมูลย้อนหลังช่วงปี 2015-2024",
     "ข้อมูลภัยแล้ง",
-    "ระดับปานกลาง",
+    "พบประวัติภัยแล้งซ้ำซาก 3 ปี จากข้อมูลย้อนหลังช่วงปี 2015-2024",
     "อุณหภูมิ",
     "24.1 °C",
     "ฝนในอีก 1 ชม.",
     "82%",
     "ข้อมูลภัยแล้งเป็นข้อมูลสรุประดับตำบล",
+    "แหล่งข้อมูล: GISTDA",
+    "ตรวจสอบเมื่อ: 16 ก.ค. 2569 20:57",
   ]);
 });
 
@@ -246,8 +250,8 @@ test("formats soil series with name and code, name only, code only, and no-data"
   );
 });
 
-test("formats flood recurrence for detected, zero, unavailable, and dynamic year windows", () => {
-  assertTextsInclude(build(), ["พบ 3 ปีใน 10 ปี"]);
+test("formats flood recurrence for available, no-history, unavailable, and unknown states", () => {
+  assertTextsInclude(build(), ["พบประวัติน้ำท่วมซ้ำซาก 3 ปี จากข้อมูลย้อนหลังช่วงปี 2015-2024"]);
   assertTextsInclude(
     build(sampleAnalysis({
       hazardHistory: {
@@ -256,23 +260,41 @@ test("formats flood recurrence for detected, zero, unavailable, and dynamic year
           frequency: null,
           yearsDetected: [],
           dataPeriod: { startYear: 2015, endYear: 2024, totalYears: 10 },
+          checkedAt: "2026-07-16T13:57:00.000Z",
+          source: "GISTDA",
         },
       },
     })),
-    ["ไม่พบใน 10 ปี"],
+    ["ไม่พบประวัติน้ำท่วมซ้ำซากในพื้นที่นี้"],
   );
-  assertTextsInclude(
-    build(sampleAnalysis({
+  const noHistory = build(sampleAnalysis({
+    hazardHistory: {
+      floodRecurrence: {
+        status: "none_detected",
+        frequency: null,
+        yearsDetected: [],
+        dataPeriod: { startYear: 2015, endYear: 2024, totalYears: 10 },
+        checkedAt: "2026-07-16T13:57:00.000Z",
+        source: "GISTDA",
+      },
+    },
+  }));
+  assert.equal(collectTextValues(noHistory).includes("ไม่มีข้อมูล"), false);
+
+  const unavailable = build(sampleAnalysis({
       hazardHistory: {
         floodRecurrence: {
           status: "unavailable",
           yearsDetected: [],
           dataPeriod: { startYear: null, endYear: null, totalYears: null },
+          checkedAt: "2026-07-16T13:57:00.000Z",
+          source: "GISTDA",
         },
       },
-    })),
-    ["ไม่มีข้อมูล"],
-  );
+    }));
+  assertTextsInclude(unavailable, ["ยังไม่สามารถตรวจสอบประวัติน้ำท่วมซ้ำซากได้ในขณะนี้"]);
+  assert.equal(collectTextValues(unavailable).includes("ไม่มีข้อมูล"), false);
+
   assertTextsInclude(
     build(sampleAnalysis({
       hazardHistory: {
@@ -281,16 +303,25 @@ test("formats flood recurrence for detected, zero, unavailable, and dynamic year
           frequency: 2,
           yearsDetected: [2024, 2025],
           dataPeriod: { startYear: 2021, endYear: 2025, totalYears: 5 },
+          checkedAt: "2026-07-16T13:57:00.000Z",
+          source: "GISTDA",
         },
       },
     })),
-    ["พบ 2 ปีใน 5 ปี"],
+    ["พบประวัติน้ำท่วมซ้ำซาก 2 ปี จากข้อมูลย้อนหลังช่วงปี 2021-2025"],
   );
-  assertSerializedDoesNotInclude(build(), ["2015", "2024", "พบ 0 ปีใน 10 ปี"]);
+
+  const malformed = build(sampleAnalysis({
+    hazardHistory: {
+      floodRecurrence: { status: "unexpected", message: "raw upstream flood stack" },
+    },
+  }));
+  assertTextsInclude(malformed, ["ยังไม่สามารถแสดงผลการตรวจสอบได้ในขณะนี้"]);
+  assertSerializedDoesNotInclude(malformed, ["raw upstream flood stack", "พบ 0 ปี"]);
 });
 
-test("formats drought summary as tambon-level level text without area or percent claims", () => {
-  assertTextsInclude(build(), ["ระดับปานกลาง"]);
+test("formats drought recurrence for available, no-history, unavailable, and unknown states", () => {
+  assertTextsInclude(build(), ["พบประวัติภัยแล้งซ้ำซาก 3 ปี จากข้อมูลย้อนหลังช่วงปี 2015-2024"]);
   assertSerializedDoesNotInclude(build(), ["ระดับระดับ", "ไร่", "% ของพื้นที่", "affectedArea"]);
 
   assertTextsInclude(
@@ -302,25 +333,65 @@ test("formats drought summary as tambon-level level text without area or percent
           totalOccurrences: null,
           yearsDetected: [],
           dataPeriod: { startYear: 2015, endYear: 2024, totalYears: 10 },
+          checkedAt: "2026-07-16T13:57:00.000Z",
+          source: "GISTDA",
         },
       },
     })),
-    ["ระดับปานกลาง"],
+    ["พบประวัติภัยแล้งซ้ำซากระดับปานกลาง"],
   );
 
-  assertTextsInclude(
-    build(sampleAnalysis({
+  const noHistory = build(sampleAnalysis({
+    hazardHistory: {
+      droughtRecurrence: {
+        status: "none_detected",
+        totalOccurrences: 0,
+        yearsDetected: [],
+        dataPeriod: { startYear: 2015, endYear: 2024, totalYears: 10 },
+        checkedAt: "2026-07-16T13:57:00.000Z",
+        source: "GISTDA",
+      },
+    },
+  }));
+  assertTextsInclude(noHistory, ["ไม่พบประวัติภัยแล้งซ้ำซากในพื้นที่นี้"]);
+  assert.equal(collectTextValues(noHistory).includes("ไม่มีข้อมูล"), false);
+
+  const unavailable = build(sampleAnalysis({
       hazardHistory: {
         droughtRecurrence: {
           status: "unavailable",
           totalOccurrences: null,
           yearsDetected: [],
           dataPeriod: { startYear: null, endYear: null, totalYears: null },
+          checkedAt: "2026-07-16T13:57:00.000Z",
+          source: "GISTDA",
         },
       },
-    })),
-    ["ไม่มีข้อมูล"],
-  );
+    }));
+  assertTextsInclude(unavailable, ["ยังไม่สามารถตรวจสอบประวัติภัยแล้งซ้ำซากได้ในขณะนี้"]);
+  assert.equal(collectTextValues(unavailable).includes("ไม่มีข้อมูล"), false);
+
+  const malformed = build(sampleAnalysis({
+    hazardHistory: {
+      droughtRecurrence: { status: "unexpected", message: "raw upstream drought stack" },
+    },
+  }));
+  assertTextsInclude(malformed, ["ยังไม่สามารถแสดงผลการตรวจสอบได้ในขณะนี้"]);
+  assertSerializedDoesNotInclude(malformed, ["raw upstream drought stack"]);
+});
+
+test("hazard source and checked time are retained without raw ISO timestamps", () => {
+  const message = build();
+  const texts = collectTextValues(message);
+
+  assert.equal(texts.includes("แหล่งข้อมูล: GISTDA"), true);
+  assert.equal(texts.includes("ตรวจสอบเมื่อ: 16 ก.ค. 2569 20:57"), true);
+  assert.equal(texts.filter((text) => text.startsWith("ตรวจสอบเมื่อ:")).length, 1);
+  assertSerializedDoesNotInclude(message, [
+    "2026-07-16T13:57:00.000Z",
+    "T13:57",
+    ".000Z",
+  ]);
 });
 
 test("formats weather temperature and next-hour rain probability only when weather is available", () => {

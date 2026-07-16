@@ -254,6 +254,31 @@
     return selectedLocation;
   }
 
+  function removeLocationMarker() {
+    if (locationMarker && appMap && typeof appMap.removeLayer === "function") {
+      appMap.removeLayer(locationMarker);
+    }
+    locationMarker = null;
+  }
+
+  function clearPendingPointSelectionForParcelEdit() {
+    if (!isValidSelectedLocation() || hasConfirmedCurrentPoint()) {
+      syncLocationActionState();
+      return;
+    }
+
+    selectedLocation = null;
+    selectedPointRevision += 1;
+    currentPointResult = null;
+    confirmedPointKey = null;
+    closeResultPopup();
+    removeAccuracyCircle();
+    removeLocationMarker();
+    invalidateConfirmedPoint({ clearStatus: false });
+    window.MapUi.setConfirmEnabled(false);
+    syncLocationActionState();
+  }
+
   function markLineSummaryPointConfirmed(location) {
     if (!isLiffModeEnabled()) {
       syncLineSummaryButtonState();
@@ -833,25 +858,90 @@
     clearSavedParcelHighlight({ closeResult: true });
   }
 
-  function createSavedBoundaryEditLayer(geometry) {
-    const geoJsonLayer = L.geoJSON(
-      {
+  function getSavedBoundaryEditFeatures(geometry) {
+    if (!geometry || geometry.type === "Polygon") {
+      return [{
         type: "Feature",
-        geometry,
+        geometry: cloneGeometry(geometry),
         properties: {},
-      },
-      {
+      }];
+    }
+
+    if (geometry.type === "MultiPolygon") {
+      return geometry.coordinates.map((coordinates, index) => ({
+        type: "Feature",
+        geometry: {
+          type: "Polygon",
+          coordinates: cloneGeometry(coordinates),
+        },
+        properties: {
+          partIndex: index,
+        },
+      }));
+    }
+
+    return [];
+  }
+
+  function createSavedBoundaryEditLayers(geometry, parcelId) {
+    const layers = [];
+    getSavedBoundaryEditFeatures(geometry).forEach((feature, partIndex) => {
+      const geoJsonLayer = L.geoJSON(feature, {
         style: SAVED_PARCEL_EDIT_STYLE,
         interactive: true,
         bubblingMouseEvents: false,
-      },
-    );
-    const layers = typeof geoJsonLayer.getLayers === "function" ? geoJsonLayer.getLayers() : [];
-    const layer = layers[0] || geoJsonLayer;
-    if (layer && typeof layer.setStyle === "function") {
-      layer.setStyle(SAVED_PARCEL_EDIT_STYLE);
+      });
+      const childLayers =
+        typeof geoJsonLayer.getLayers === "function" ? geoJsonLayer.getLayers() : [geoJsonLayer];
+
+      childLayers.forEach((layer) => {
+        if (!layer || typeof layer.toGeoJSON !== "function") {
+          return;
+        }
+        layer._mapPhayaoParcelId = parcelId;
+        layer._mapPhayaoSavedBoundaryEdit = true;
+        layer._mapPhayaoSavedBoundaryPartIndex = partIndex;
+        if (typeof layer.setStyle === "function") {
+          layer.setStyle(SAVED_PARCEL_EDIT_STYLE);
+        }
+        if (typeof layer.on === "function") {
+          layer.on("click", stopSavedParcelClick);
+        }
+        layers.push(layer);
+      });
+    });
+    return layers;
+  }
+
+  function isEditableLayerEditingEnabled(layer) {
+    if (!layer || !layer.editing) {
+      return false;
     }
-    return layer;
+    if (typeof layer.editing.enabled === "function") {
+      return layer.editing.enabled();
+    }
+    if (typeof layer.editing.enabled === "boolean") {
+      return layer.editing.enabled;
+    }
+    return true;
+  }
+
+  function enableSavedBoundaryEditing(layer) {
+    if (!layer || !layer.editing || typeof layer.editing.enable !== "function") {
+      throw new Error("Leaflet Draw editing is unavailable for this parcel layer");
+    }
+    layer.editing.enable();
+    if (!isEditableLayerEditingEnabled(layer)) {
+      throw new Error("Leaflet Draw editing did not activate for this parcel layer");
+    }
+  }
+
+  function disableSavedBoundaryEditing(layers) {
+    (Array.isArray(layers) ? layers : []).forEach((layer) => {
+      if (layer && layer.editing && typeof layer.editing.disable === "function") {
+        layer.editing.disable();
+      }
+    });
   }
 
   function getGeometryFromLayer(layer) {
@@ -864,6 +954,41 @@
       return null;
     }
     return geojson.type === "Feature" ? geojson.geometry : geojson.geometry || geojson;
+  }
+
+  function getGeometryFromEditLayers(layers, originalGeometryType) {
+    const polygonCoordinates = [];
+    (Array.isArray(layers) ? layers : []).forEach((layer) => {
+      const geometry = getGeometryFromLayer(layer);
+      if (!geometry) {
+        return;
+      }
+      if (geometry.type === "Polygon") {
+        polygonCoordinates.push(geometry.coordinates);
+      } else if (geometry.type === "MultiPolygon") {
+        geometry.coordinates.forEach((coordinates) => polygonCoordinates.push(coordinates));
+      }
+    });
+
+    if (polygonCoordinates.length === 0) {
+      return null;
+    }
+
+    if (originalGeometryType === "MultiPolygon" || polygonCoordinates.length > 1) {
+      return {
+        type: "MultiPolygon",
+        coordinates: polygonCoordinates,
+      };
+    }
+
+    return {
+      type: "Polygon",
+      coordinates: polygonCoordinates[0],
+    };
+  }
+
+  function getSavedBoundaryEditParcelName(parcel) {
+    return parcel?.parcelName || parcel?.parcelCode || "แปลง";
   }
 
   function getSavedBoundaryEditErrorMessage(error) {
@@ -883,6 +1008,8 @@
     window.MapUi.setParcelControlState({
       isEditing: true,
       drawDisabled: true,
+      hideDraw: true,
+      hideParcelList: true,
       isSaving,
       saveText: isSaving ? "กำลังบันทึก..." : window.MapUi.text.saveBoundary,
       cancelText: window.MapUi.text.cancel,
@@ -892,15 +1019,21 @@
 
   function finishSavedBoundaryEdit(options = {}) {
     const state = savedBoundaryEditState;
-    if (state && state.layer && state.layer.editing && typeof state.layer.editing.disable === "function") {
-      state.layer.editing.disable();
-    }
+    disableSavedBoundaryEditing(
+      state && Array.isArray(state.layers)
+        ? state.layers
+        : state && state.layer
+          ? [state.layer]
+          : [],
+    );
     savedBoundaryEditLayers.clearLayers();
     savedBoundaryEditState = null;
     window.MapUi.setParcelControlState({
       isEditing: false,
       drawDisabled: false,
       isDrawing: false,
+      hideDraw: false,
+      hideParcelList: false,
     });
     syncLocationActionState();
     refreshSavedParcelStyles();
@@ -922,34 +1055,49 @@
       return;
     }
 
+    savedBoundaryEditState = {
+      parcelId: parcel.id,
+      originalParcel: null,
+      originalGeometryType: null,
+      layers: [],
+      isSaving: false,
+      isStarting: true,
+    };
+    clearPendingPointSelectionForParcelEdit();
+    syncSavedBoundaryEditControls(false);
+    window.MapParcelManagement.closeMyParcelsSheet();
+    window.MapUi.closeCurrentResultPanel();
+
     try {
       const detail = await getOwnedParcelDetail(parcel);
+      const state = savedBoundaryEditState;
+      if (!state || state.parcelId !== parcel.id) {
+        return;
+      }
       if (!window.MapParcelState.isValidGeoJsonGeometry(detail?.geometry)) {
         throw new Error("ไม่สามารถแก้ไขขอบเขตแปลงนี้ได้");
       }
 
-      window.MapParcelManagement.closeMyParcelsSheet();
       selectSavedParcelLayer(detail);
       focusSavedParcelLayer(detail);
       savedBoundaryEditLayers.clearLayers();
 
-      const editLayer = createSavedBoundaryEditLayer(detail.geometry);
-      editLayer._mapPhayaoParcelId = detail.id;
-      savedBoundaryEditLayers.addLayer(editLayer);
-      if (editLayer.editing && typeof editLayer.editing.enable === "function") {
-        editLayer.editing.enable();
+      const editLayers = createSavedBoundaryEditLayers(detail.geometry, detail.id);
+      if (editLayers.length === 0) {
+        throw new Error("Leaflet Draw editing is unavailable for this parcel geometry");
       }
-
-      savedBoundaryEditState = {
-        parcelId: detail.id,
-        originalParcel: detail,
-        layer: editLayer,
-        isSaving: false,
-      };
-      window.MapUi.closeCurrentResultPanel();
+      state.originalParcel = detail;
+      state.originalGeometryType = detail.geometry.type;
+      state.layers = editLayers;
+      state.isStarting = false;
+      editLayers.forEach((editLayer) => savedBoundaryEditLayers.addLayer(editLayer));
+      editLayers.forEach(enableSavedBoundaryEditing);
       syncSavedBoundaryEditControls(false);
-      window.MapUi.showLocationMessage("กำลังแก้ไขขอบเขตแปลง เลื่อนจุดแล้วกดบันทึกขอบเขต");
+      window.MapUi.showLocationMessage(
+        `กำลังแก้ไขขอบเขต: ${getSavedBoundaryEditParcelName(detail)} - ลากจุดมุมเพื่อปรับขอบเขตแปลง`,
+      );
     } catch (error) {
+      finishSavedBoundaryEdit({ silent: true });
       window.MapUi.showLocationMessage(getSavedBoundaryEditErrorMessage(error));
     }
   }
@@ -960,7 +1108,7 @@
       return;
     }
 
-    const geometry = getGeometryFromLayer(state.layer);
+    const geometry = getGeometryFromEditLayers(state.layers, state.originalGeometryType);
     if (!window.MapParcelState.isValidGeoJsonGeometry(geometry)) {
       window.MapUi.showLocationMessage("ขอบเขตแปลงไม่ถูกต้อง กรุณาปรับขอบเขตใหม่");
       return;
@@ -1021,8 +1169,23 @@
         throw new Error("ขอบเขตแปลงเปลี่ยนแล้ว กรุณาวิเคราะห์ใหม่ก่อนบันทึก");
       }
       parcel.savedParcelId = savedParcel.id;
+      if (window.MapParcelManagement.upsertCachedParcel) {
+        window.MapParcelManagement.upsertCachedParcel(savedParcel);
+      }
       if (!window.MapParcelManagement.refreshMyParcelsIfOpen()) {
-        await refreshOwnedParcelLayersFromApi();
+        if (window.MapParcelManagement.refreshSavedParcelsState) {
+          await window.MapParcelManagement.refreshSavedParcelsState();
+        } else {
+          await refreshOwnedParcelLayersFromApi();
+        }
+      }
+      temporaryParcelLayers.removeLayer(parcel.layer);
+      temporaryParcels.delete(parcel.id);
+      if (selectedTemporaryParcelId === parcel.id) {
+        selectedTemporaryParcelId = null;
+      }
+      if (currentDetailParcelId === parcel.id) {
+        window.MapUi.closeCurrentResultPanel();
       }
       refreshTemporaryParcelList();
       renderTemporaryParcelSaveAction(parcel);
@@ -1617,6 +1780,11 @@
 
     window.MapUi.addParcelDrawControl(map, {
       onDraw: startParcelDrawing,
+      onOpenSavedParcels: () => {
+        if (window.MapParcelManagement) {
+          window.MapParcelManagement.openMyParcelsSheet();
+        }
+      },
       onSaveEdit: () => {
         if (savedBoundaryEditState) {
           return saveSavedBoundaryEdit();
@@ -1652,6 +1820,14 @@
         onParcelsLoaded: renderOwnedParcelLayers,
         onParcelUpdated: handleSavedParcelUpdated,
         onParcelDeleted: handleSavedParcelDeleted,
+        onSavedParcelAvailabilityChange: (hasSavedParcels) => {
+          if (
+            window.MapUi &&
+            typeof window.MapUi.setSavedParcelsControlVisible === "function"
+          ) {
+            window.MapUi.setSavedParcelsControlVisible(hasSavedParcels);
+          }
+        },
       });
       window.MapParcelManagement.setLiffReady(
         isLiffModeEnabled() && window.MapLiffMode && window.MapLiffMode.isReady(),

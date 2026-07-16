@@ -43,6 +43,7 @@
   let lastFocusedElement = null;
   let cachedParcels = [];
   let expandedSavedParcelId = null;
+  let activeListRequest = null;
 
   function createElement(tagName, className, text) {
     const element = document.createElement(tagName);
@@ -79,31 +80,10 @@
     return error && error.message ? error.message : TEXT.loadFailed;
   }
 
-  function ensureMyParcelsButton() {
-    let button = document.getElementById("mobile-my-parcels-button");
-    if (button) {
-      return button;
-    }
-
-    button = createElement("button", "mobile-my-parcels-button", TEXT.myParcels);
-    button.id = "mobile-my-parcels-button";
-    button.type = "button";
-    button.hidden = true;
-    button.setAttribute("aria-controls", "my-parcels-sheet");
-    button.addEventListener("click", () => {
-      if (!liffReady) {
-        showLineOnlyMessage();
-        return;
-      }
-      openMyParcelsSheet();
-    });
-    document.body.appendChild(button);
-    return button;
-  }
-
   function syncMyParcelsButton() {
-    const button = ensureMyParcelsButton();
-    button.hidden = !(isLiffEnabled() && liffReady);
+    const hasSavedParcels =
+      isLiffEnabled() && liffReady && Array.isArray(cachedParcels) && cachedParcels.length > 0;
+    handlers.onSavedParcelAvailabilityChange?.(hasSavedParcels);
   }
 
   function closeSheet(sheet) {
@@ -450,33 +430,66 @@
     });
   }
 
-  async function loadMyParcels(container, status) {
+  function applyLoadedParcels(result, requestRevision) {
+    if (!window.MapParcelState.shouldAcceptListResponse(requestRevision, listRevision)) {
+      return { stale: true };
+    }
+
+    cachedParcels = Array.isArray(result?.parcels) ? result.parcels : [];
+    syncMyParcelsButton();
+    let layerResult = null;
+    try {
+      layerResult = handlers.onParcelsLoaded?.(cachedParcels) || null;
+    } catch (error) {
+      layerResult = { skipped: cachedParcels.length };
+    }
+    return { stale: false, parcels: cachedParcels, layerResult };
+  }
+
+  function requestMyParcels() {
+    if (activeListRequest) {
+      return activeListRequest;
+    }
+
     const requestRevision = ++listRevision;
+    activeListRequest = window.MapApi.listMyParcels()
+      .then((result) => applyLoadedParcels(result, requestRevision))
+      .finally(() => {
+        activeListRequest = null;
+      });
+    return activeListRequest;
+  }
+
+  async function refreshSavedParcelsState() {
+    if (!isLiffEnabled() || !liffReady) {
+      syncMyParcelsButton();
+      return null;
+    }
+
+    try {
+      return await requestMyParcels();
+    } catch (error) {
+      syncMyParcelsButton();
+      return null;
+    }
+  }
+
+  async function loadMyParcels(container, status) {
     setStatus(status, TEXT.loading);
     container.replaceChildren();
 
     try {
-      const result = await window.MapApi.listMyParcels();
-      if (!window.MapParcelState.shouldAcceptListResponse(requestRevision, listRevision)) {
+      const result = await requestMyParcels();
+      if (!result || result.stale) {
         return;
-      }
-      cachedParcels = Array.isArray(result?.parcels) ? result.parcels : [];
-      let layerResult = null;
-      try {
-        layerResult = handlers.onParcelsLoaded?.(cachedParcels) || null;
-      } catch (error) {
-        layerResult = { skipped: cachedParcels.length };
       }
       setStatus(
         status,
-        layerResult && layerResult.skipped > 0 ? TEXT.partialMapLoad : "",
-        layerResult && layerResult.skipped > 0 ? "error" : undefined,
+        result.layerResult && result.layerResult.skipped > 0 ? TEXT.partialMapLoad : "",
+        result.layerResult && result.layerResult.skipped > 0 ? "error" : undefined,
       );
       renderParcelCards(container, cachedParcels);
     } catch (error) {
-      if (!window.MapParcelState.shouldAcceptListResponse(requestRevision, listRevision)) {
-        return;
-      }
       setStatus(status, getFriendlyError(error) || TEXT.loadFailed, "error");
       container.replaceChildren();
       const retry = createElement("button", "panel-button secondary", "ลองใหม่");
@@ -487,6 +500,13 @@
   }
 
   function openMyParcelsSheet() {
+    if (!liffReady) {
+      showLineOnlyMessage();
+      return;
+    }
+    if (window.MapUi && typeof window.MapUi.closeTemporaryParcelPanel === "function") {
+      window.MapUi.closeTemporaryParcelPanel();
+    }
     const { body } = createSheet("my-parcels-sheet", TEXT.myParcels);
     const status = createElement("p", "parcel-sheet-status");
     status.id = "my-parcels-status";
@@ -522,6 +542,7 @@
       try {
         await window.MapApi.deleteMyParcel(parcel.id);
         cachedParcels = cachedParcels.filter((item) => item.id !== parcel.id);
+        syncMyParcelsButton();
         if (expandedSavedParcelId === parcel.id) {
           expandedSavedParcelId = null;
         }
@@ -589,6 +610,24 @@
       return;
     }
     cachedParcels = cachedParcels.map((item) => (item.id === parcel.id ? parcel : item));
+    syncMyParcelsButton();
+    const list = document.getElementById("my-parcels-list");
+    if (list) {
+      renderParcelCards(list, cachedParcels);
+    }
+  }
+
+  function upsertCachedParcel(parcel) {
+    if (!parcel || !parcel.id) {
+      return;
+    }
+    const existingIndex = cachedParcels.findIndex((item) => item.id === parcel.id);
+    if (existingIndex >= 0) {
+      cachedParcels = cachedParcels.map((item) => (item.id === parcel.id ? parcel : item));
+    } else {
+      cachedParcels = [parcel, ...cachedParcels];
+    }
+    syncMyParcelsButton();
     const list = document.getElementById("my-parcels-list");
     if (list) {
       renderParcelCards(list, cachedParcels);
@@ -597,7 +636,6 @@
 
   function init(options = {}) {
     handlers = options;
-    ensureMyParcelsButton();
     syncMyParcelsButton();
   }
 
@@ -606,6 +644,9 @@
     setLiffReady(value) {
       liffReady = Boolean(value);
       syncMyParcelsButton();
+      if (liffReady) {
+        refreshSavedParcelsState();
+      }
     },
     renderSaveAction,
     openSaveSheet,
@@ -613,6 +654,8 @@
     openMyParcelsSheet,
     closeMyParcelsSheet,
     replaceCachedParcel,
+    upsertCachedParcel,
+    refreshSavedParcelsState,
     refreshMyParcelsIfOpen,
     confirmOpenSavedParcel,
     getFriendlyError,

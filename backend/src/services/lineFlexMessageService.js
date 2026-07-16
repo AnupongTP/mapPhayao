@@ -3,6 +3,15 @@ const HEADER_TITLE = "ผลตรวจความเหมาะสมขอ�
 const HEADER_COLOR = "#2F6F10";
 const LOCATION_FALLBACK = "ไม่พบข้อมูลตำแหน่ง";
 const DROUGHT_NOTE = "ข้อมูลภัยแล้งเป็นข้อมูลสรุประดับตำบล";
+const HAZARD_UNKNOWN_TEXT = "ยังไม่สามารถแสดงผลการตรวจสอบได้ในขณะนี้";
+const HAZARD_SOURCE_FALLBACK = "GISTDA";
+const HAZARD_STATUS = {
+  AVAILABLE: "AVAILABLE",
+  NO_HISTORY: "NO_HISTORY",
+  UNAVAILABLE: "UNAVAILABLE",
+  NO_COVERAGE: "NO_COVERAGE",
+  UNKNOWN: "UNKNOWN",
+};
 
 const SUITABILITY_STYLES = {
   S1: {
@@ -170,30 +179,91 @@ function getPeriodYears(dataPeriod) {
   return null;
 }
 
-function formatYearWindowText(prefix, windowYears) {
-  return windowYears ? `${prefix}ใน ${windowYears} ปี` : prefix.trim();
+function formatThaiDateTime(value) {
+  if (typeof value !== "string" && !(value instanceof Date)) {
+    return "";
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat("th-TH-u-ca-buddhist", {
+    timeZone: "Asia/Bangkok",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(date).replace(",", "");
+}
+
+function normalizeHazardStatus(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return HAZARD_STATUS.UNKNOWN;
+  }
+
+  const status = normalizeText(value.status).toLowerCase();
+  if (status === "detected" || status === "available") {
+    return HAZARD_STATUS.AVAILABLE;
+  }
+  if (status === "none_detected" || status === "no_history" || status === "not_detected") {
+    return HAZARD_STATUS.NO_HISTORY;
+  }
+  if (status === "unavailable") {
+    return HAZARD_STATUS.UNAVAILABLE;
+  }
+  if (status === "no_coverage" || status === "outside_service_area" || status === "unsupported") {
+    return HAZARD_STATUS.NO_COVERAGE;
+  }
+
+  return HAZARD_STATUS.UNKNOWN;
+}
+
+function formatHazardYearRange(dataPeriod) {
+  const startYear = toFiniteNumber(dataPeriod?.startYear);
+  const endYear = toFiniteNumber(dataPeriod?.endYear);
+  if (
+    Number.isInteger(startYear) &&
+    Number.isInteger(endYear) &&
+    endYear >= startYear
+  ) {
+    return `${startYear}-${endYear}`;
+  }
+  return "";
 }
 
 function formatFloodSummary(analysis) {
   const flood = analysis?.hazardHistory?.floodRecurrence;
-  if (!flood || flood.status === "unavailable") {
-    return NO_DATA_TEXT;
+  const status = normalizeHazardStatus(flood);
+
+  if (status === HAZARD_STATUS.UNAVAILABLE) {
+    return "ยังไม่สามารถตรวจสอบประวัติน้ำท่วมซ้ำซากได้ในขณะนี้";
+  }
+  if (status === HAZARD_STATUS.NO_HISTORY) {
+    return "ไม่พบประวัติน้ำท่วมซ้ำซากในพื้นที่นี้";
+  }
+  if (status === HAZARD_STATUS.NO_COVERAGE) {
+    return "ยังไม่มีข้อมูลประวัติน้ำท่วมซ้ำซากสำหรับพื้นที่นี้";
   }
 
-  const windowYears = getPeriodYears(flood.dataPeriod);
-  const detectedYears = Array.isArray(flood.yearsDetected) ? flood.yearsDetected.length : null;
-  const frequency = toFiniteNumber(flood.frequency);
-  const detectedCount = detectedYears !== null ? detectedYears : frequency;
+  if (status === HAZARD_STATUS.AVAILABLE) {
+    const detectedYears = Array.isArray(flood.yearsDetected) ? flood.yearsDetected.length : null;
+    const frequency = toFiniteNumber(flood.frequency);
+    const detectedCount = detectedYears !== null ? detectedYears : frequency;
+    const yearRange = formatHazardYearRange(flood.dataPeriod);
 
-  if (flood.status === "detected" && detectedCount > 0) {
-    return formatYearWindowText(`พบ ${detectedCount} ปี`, windowYears);
+    if (detectedCount > 0) {
+      return yearRange
+        ? `พบประวัติน้ำท่วมซ้ำซาก ${detectedCount} ปี จากข้อมูลย้อนหลังช่วงปี ${yearRange}`
+        : `พบประวัติน้ำท่วมซ้ำซาก ${detectedCount} ปี`;
+    }
+    return "พบประวัติน้ำท่วมซ้ำซาก";
   }
 
-  if (flood.status === "none_detected" || detectedCount === 0) {
-    return formatYearWindowText("ไม่พบ", windowYears);
-  }
-
-  return NO_DATA_TEXT;
+  return HAZARD_UNKNOWN_TEXT;
 }
 
 function getDroughtOccurrenceCount(drought) {
@@ -233,20 +303,37 @@ function getDroughtLevelFromOccurrences(count, windowYears) {
 
 function formatDroughtSummary(analysis) {
   const drought = analysis?.hazardHistory?.droughtRecurrence;
-  if (!drought || drought.status === "unavailable") {
-    return NO_DATA_TEXT;
+  const status = normalizeHazardStatus(drought);
+
+  if (status === HAZARD_STATUS.UNAVAILABLE) {
+    return "ยังไม่สามารถตรวจสอบประวัติภัยแล้งซ้ำซากได้ในขณะนี้";
+  }
+  if (status === HAZARD_STATUS.NO_HISTORY) {
+    return "ไม่พบประวัติภัยแล้งซ้ำซากในพื้นที่นี้";
+  }
+  if (status === HAZARD_STATUS.NO_COVERAGE) {
+    return "ยังไม่มีข้อมูลประวัติภัยแล้งซ้ำซากสำหรับพื้นที่นี้";
   }
 
-  const explicitLevel = formatDroughtLevel(drought.level || drought.severity || drought.riskLevel);
-  const count = getDroughtOccurrenceCount(drought);
-  const windowYears = getPeriodYears(drought.dataPeriod);
-  const level = explicitLevel || getDroughtLevelFromOccurrences(count, windowYears);
+  if (status === HAZARD_STATUS.AVAILABLE) {
+    const explicitLevel = formatDroughtLevel(drought.level || drought.severity || drought.riskLevel);
+    const count = getDroughtOccurrenceCount(drought);
+    const windowYears = getPeriodYears(drought.dataPeriod);
+    const level = explicitLevel || getDroughtLevelFromOccurrences(count, windowYears);
+    const yearRange = formatHazardYearRange(drought.dataPeriod);
 
-  if (!level) {
-    return NO_DATA_TEXT;
+    if (count !== null && count > 0) {
+      return yearRange
+        ? `พบประวัติภัยแล้งซ้ำซาก ${count} ปี จากข้อมูลย้อนหลังช่วงปี ${yearRange}`
+        : `พบประวัติภัยแล้งซ้ำซาก ${count} ปี`;
+    }
+    if (level) {
+      return `พบประวัติภัยแล้งซ้ำซากระดับ${level}`;
+    }
+    return "พบประวัติภัยแล้งซ้ำซากระดับตำบล";
   }
 
-  return `ระดับ${level}`;
+  return HAZARD_UNKNOWN_TEXT;
 }
 
 function formatTemperature(analysis) {
@@ -342,6 +429,80 @@ function createDetailRow(label, value) {
   };
 }
 
+function createHazardBlock(title, value) {
+  return {
+    type: "box",
+    layout: "vertical",
+    spacing: "xs",
+    contents: [
+      createText(title, {
+        size: "sm",
+        weight: "bold",
+        color: "#374151",
+      }),
+      createText(value, {
+        size: "sm",
+        color: "#111827",
+      }),
+    ],
+  };
+}
+
+function collectHazardSources(flood, drought) {
+  return [flood, drought]
+    .map((item) => normalizeText(item?.source, HAZARD_SOURCE_FALLBACK, { maxLength: 40 }))
+    .filter(Boolean)
+    .filter((source, index, sources) => sources.indexOf(source) === index);
+}
+
+function getHazardCheckedAt(flood, drought) {
+  return formatThaiDateTime(flood?.checkedAt) || formatThaiDateTime(drought?.checkedAt);
+}
+
+function createHazardHistorySection(analysis) {
+  const flood = analysis?.hazardHistory?.floodRecurrence;
+  const drought = analysis?.hazardHistory?.droughtRecurrence;
+  const sources = collectHazardSources(flood, drought);
+  const checkedAt = getHazardCheckedAt(flood, drought);
+  const meta = [];
+
+  if (sources.length === 1) {
+    meta.push(`แหล่งข้อมูล: ${sources[0]}`);
+  } else if (sources.length > 1) {
+    meta.push(`แหล่งข้อมูลน้ำท่วม: ${sources[0]}`);
+    meta.push(`แหล่งข้อมูลภัยแล้ง: ${sources[1]}`);
+  }
+  if (checkedAt) {
+    meta.push(`ตรวจสอบเมื่อ: ${checkedAt}`);
+  }
+
+  return {
+    type: "box",
+    layout: "vertical",
+    spacing: "sm",
+    margin: "md",
+    contents: [
+      createText("ประวัติภัยของพื้นที่", {
+        size: "sm",
+        weight: "bold",
+        color: "#111827",
+      }),
+      createHazardBlock("ข้อมูลน้ำท่วม", formatFloodSummary(analysis)),
+      createHazardBlock("ข้อมูลภัยแล้ง", formatDroughtSummary(analysis)),
+      createText(DROUGHT_NOTE, {
+        size: "xs",
+        color: "#64748B",
+        margin: "xs",
+      }),
+      ...meta.map((text) => createText(text, {
+        size: "xs",
+        color: "#64748B",
+        margin: "xs",
+      })),
+    ],
+  };
+}
+
 function validateDetailUrl(value) {
   const text = typeof value === "string" ? value.trim() : "";
   if (!text) {
@@ -420,15 +581,9 @@ function createLocationSummaryFlexMessage(analysis, options = {}) {
             margin: "lg",
             contents: [
               createDetailRow("ชุดดิน", formatSoilSeries(analysis)),
-              createDetailRow("ข้อมูลน้ำท่วม", formatFloodSummary(analysis)),
-              createDetailRow("ข้อมูลภัยแล้ง", formatDroughtSummary(analysis)),
+              createHazardHistorySection(analysis),
               createDetailRow("อุณหภูมิ", formatTemperature(analysis)),
               createDetailRow("ฝนในอีก 1 ชม.", formatRainProbability(analysis)),
-              createText(DROUGHT_NOTE, {
-                size: "xs",
-                color: "#64748B",
-                margin: "sm",
-              }),
             ],
           },
         ],

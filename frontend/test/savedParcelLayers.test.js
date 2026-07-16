@@ -55,6 +55,16 @@ function nextTick() {
   return Promise.resolve();
 }
 
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 function createEventTarget() {
   const listeners = new Map();
   return {
@@ -199,8 +209,15 @@ function createLeafletStub(state) {
       getLatLngs() {
         return [];
       },
+      setGeometry(geometry) {
+        this.data = {
+          ...this.data,
+          geometry,
+        };
+        return this;
+      },
       toGeoJSON() {
-        return data;
+        return this.data;
       },
     };
     if (typeof options.onEachFeature === "function") {
@@ -227,6 +244,13 @@ function createLeafletStub(state) {
           return this;
         },
         panTo() {
+          return this;
+        },
+        removeLayer(layer) {
+          state.removedLayers.push(layer);
+          if (state.marker === layer) {
+            state.marker = undefined;
+          }
           return this;
         },
         listenerCount: target.listenerCount,
@@ -353,6 +377,7 @@ function createHarness(options = {}) {
     addedGroups: [],
     geoJsonLayers: [],
     fitBounds: [],
+    removedLayers: [],
   };
   const apiCalls = [];
   const uiState = {
@@ -366,6 +391,9 @@ function createHarness(options = {}) {
     confirmEnabled: [],
     parcelControlStates: [],
     parcelControlHandlers: null,
+    savedControlVisible: [],
+    temporaryListLengths: [],
+    openedMyParcels: 0,
     messages: [],
   };
   let parcelHandlers = null;
@@ -383,6 +411,9 @@ function createHarness(options = {}) {
       uiState.refreshedOpenLists += 1;
       return options.refreshOpenList || false;
     },
+    openMyParcelsSheet() {
+      uiState.openedMyParcels += 1;
+    },
     renderSaveAction() {},
     getFriendlyError() {
       return "ไม่สามารถโหลดข้อมูลแปลงได้";
@@ -396,6 +427,9 @@ function createHarness(options = {}) {
     },
     getMyParcel: async (id) => {
       apiCalls.push({ method: "getMyParcel", id });
+      if (options.getMyParcelDeferred) {
+        return options.getMyParcelDeferred.promise;
+      }
       return {
         success: true,
         parcel: (options.detailParcels || []).find((item) => item.id === id),
@@ -493,10 +527,15 @@ function createHarness(options = {}) {
       setParcelControlState(state) {
         uiState.parcelControlStates.push({ ...state });
       },
+      setSavedParcelsControlVisible(value) {
+        uiState.savedControlVisible.push(Boolean(value));
+      },
       addParcelDrawControl(map, handlers) {
         uiState.parcelControlHandlers = handlers;
       },
-      renderTemporaryParcelList() {},
+      renderTemporaryParcelList(parcels) {
+        uiState.temporaryListLengths.push(Array.isArray(parcels) ? parcels.length : 0);
+      },
       setResultPanelCloseHandler() {},
       renderSavedParcelDetail(parcel, message) {
         uiState.renderedSavedDetails.push({ parcel, message });
@@ -559,8 +598,10 @@ function createHarness(options = {}) {
     parcelHandlers,
     uiState,
     get savedGroup() {
-      return leafletState.featureGroups.find((group) => group.layers.length > 0) ||
-        leafletState.featureGroups[1];
+      return leafletState.featureGroups[1];
+    },
+    get editGroup() {
+      return leafletState.featureGroups[2];
     },
   };
 }
@@ -583,6 +624,21 @@ test("opening My Parcels renders every returned owned parcel without pressing vi
     [PARCEL_A_ID, PARCEL_B_ID],
   );
   assert.deepEqual(harness.apiCalls, []);
+});
+
+test("saved parcel navigation is controlled by owner-scoped saved availability and opens saved accordion", () => {
+  const harness = createHarness();
+
+  harness.parcelHandlers.onSavedParcelAvailabilityChange(false);
+  harness.parcelHandlers.onSavedParcelAvailabilityChange(true);
+  harness.uiState.parcelControlHandlers.onOpenSavedParcels();
+
+  assert.deepEqual(harness.uiState.savedControlVisible.slice(-2), [false, true]);
+  assert.equal(harness.uiState.openedMyParcels, 1);
+  assert.equal(
+    harness.apiCalls.some((call) => call.method === "listMyParcels"),
+    false,
+  );
 });
 
 test("saved parcel polygon tap opens details without creating or moving the point marker", async () => {
@@ -656,6 +712,33 @@ test("empty map click still creates a point marker and enables point confirmatio
   assert.equal(harness.uiState.mobileStates.at(-1).hasPendingPoint, true);
 });
 
+test("saved boundary edit mode blocks point selection while owner detail loads and clears pending marker", async () => {
+  const parcelA = parcel(PARCEL_A_ID, "เธเนเธฒเธงเธเนเธฒ", polygon(0));
+  const detailDeferred = createDeferred();
+  const harness = createHarness({ getMyParcelDeferred: detailDeferred });
+
+  harness.leafletState.map.fire("click", { latlng: { lat: 19.12, lng: 99.72 } });
+  assert.ok(harness.leafletState.marker);
+
+  const editPromise = harness.parcelHandlers.onEditBoundary({ id: PARCEL_A_ID });
+  assert.equal(harness.leafletState.marker, undefined);
+  assert.equal(harness.leafletState.removedLayers.length, 1);
+  assert.equal(harness.uiState.confirmEnabled.at(-1), false);
+  assert.equal(harness.uiState.mobileStates.at(-1).isBlocked, true);
+  assert.equal(harness.uiState.parcelControlStates.at(-1).hideDraw, true);
+  assert.equal(harness.uiState.parcelControlStates.at(-1).hideParcelList, true);
+
+  harness.leafletState.map.fire("click", { latlng: { lat: 19.33, lng: 99.88 } });
+  assert.equal(harness.leafletState.marker, undefined);
+  assert.equal(harness.uiState.mapReady.length, 1);
+
+  detailDeferred.resolve({ success: true, parcel: parcelA });
+  await editPromise;
+
+  assert.equal(harness.editGroup.layers.length, 1);
+  assert.equal(harness.editGroup.layers[0].editing.enabled, true);
+});
+
 test("selecting saved parcels fits and highlights one without removing the other", async () => {
   const parcelA = parcel(PARCEL_A_ID, "ข้าวจ้า", polygon(0));
   const parcelB = parcel(PARCEL_B_ID, "ข้าวโพดจ้า", polygon(0.002));
@@ -722,16 +805,20 @@ test("saved boundary edit mode edits only the selected parcel and blocks point s
   harness.parcelHandlers.onParcelsLoaded([parcelA, parcelB]);
 
   await harness.parcelHandlers.onEditBoundary(parcelA);
-  const editGroup = harness.leafletState.featureGroups[2];
+  const editGroup = harness.editGroup;
 
   assert.equal(harness.savedGroup.layers.length, 2);
   assert.equal(editGroup.layers.length, 1);
   assert.equal(editGroup.layers[0]._mapPhayaoParcelId, PARCEL_A_ID);
   assert.equal(editGroup.layers[0].editing.enabled, true);
+  assert.equal(editGroup.layers[0]._mapPhayaoSavedBoundaryEdit, true);
   assert.equal(harness.savedGroup.layers.find((layer) => layer._mapPhayaoParcelId === PARCEL_B_ID).style.color, "#166534");
   assert.equal(harness.uiState.parcelControlStates.at(-1).saveText, "บันทึกขอบเขต");
   assert.equal(harness.uiState.parcelControlStates.at(-1).drawDisabled, true);
+  assert.equal(harness.uiState.parcelControlStates.at(-1).hideDraw, true);
+  assert.equal(harness.uiState.parcelControlStates.at(-1).hideParcelList, true);
 
+  editGroup.layers[0].fire("click", { latlng: { lat: 19.11, lng: 99.71 }, originalEvent: {} });
   harness.leafletState.map.fire("click", { latlng: { lat: 19.12, lng: 99.72 } });
   assert.equal(harness.leafletState.marker, undefined);
   assert.equal(harness.uiState.mapReady.length, 0);
@@ -747,7 +834,7 @@ test("saving a saved boundary sends geometry and replaces only that persisted la
 
   await harness.parcelHandlers.onEditBoundary(parcelA);
   await harness.uiState.parcelControlHandlers.onSaveEdit();
-  const editGroup = harness.leafletState.featureGroups[2];
+  const editGroup = harness.editGroup;
   const replacementA = harness.savedGroup.layers.find((layer) => layer._mapPhayaoParcelId === PARCEL_A_ID);
   const untouchedB = harness.savedGroup.layers.find((layer) => layer._mapPhayaoParcelId === PARCEL_B_ID);
 
@@ -761,6 +848,45 @@ test("saving a saved boundary sends geometry and replaces only that persisted la
   assert.deepEqual(replacementA.data.geometry, updatedA.geometry);
   assert.deepEqual(untouchedB.data.geometry, parcelB.geometry);
   assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.areaRai, updatedA.areaRai);
+
+  harness.leafletState.map.fire("click", { latlng: { lat: 19.22, lng: 99.82 } });
+  assert.deepEqual(harness.leafletState.marker.getLatLng(), { lat: 19.22, lng: 99.82 });
+  assert.equal(harness.uiState.mapReady.at(-1).lat, 19.22);
+});
+
+test("saved boundary edit enables every MultiPolygon child and saves reconstructed MultiPolygon geometry", async () => {
+  const parcelA = parcel(PARCEL_A_ID, "เธเนเธฒเธงเธเนเธฒ", multiPolygon(0));
+  const editedGeometry = multiPolygon(0.01);
+  const harness = createHarness();
+  harness.parcelHandlers.onParcelsLoaded([parcelA]);
+
+  await harness.parcelHandlers.onEditBoundary(parcelA);
+
+  assert.equal(harness.editGroup.layers.length, 2);
+  assert.equal(harness.editGroup.layers.every((layer) => layer.editing.enabled), true);
+  assert.deepEqual(
+    harness.editGroup.layers.map((layer) => layer._mapPhayaoSavedBoundaryPartIndex),
+    [0, 1],
+  );
+
+  harness.editGroup.layers[0].setGeometry({
+    type: "Polygon",
+    coordinates: editedGeometry.coordinates[0],
+  });
+  harness.editGroup.layers[1].setGeometry({
+    type: "Polygon",
+    coordinates: editedGeometry.coordinates[1],
+  });
+  assert.deepEqual(harness.savedGroup.layers[0].data.geometry, parcelA.geometry);
+
+  await harness.uiState.parcelControlHandlers.onSaveEdit();
+
+  assert.equal(harness.apiCalls.at(-1).method, "updateMyParcel");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(harness.apiCalls.at(-1).patch.geometry)),
+    editedGeometry,
+  );
+  assert.equal(harness.editGroup.layers.length, 0);
 });
 
 test("canceling saved boundary edit discards the copy without an API request", async () => {
@@ -771,9 +897,13 @@ test("canceling saved boundary edit discards the copy without an API request", a
   await harness.parcelHandlers.onEditBoundary(parcelA);
   harness.uiState.parcelControlHandlers.onCancelEdit();
 
-  assert.equal(harness.leafletState.featureGroups[2].layers.length, 0);
+  assert.equal(harness.editGroup.layers.length, 0);
   assert.equal(harness.apiCalls.some((call) => call.method === "updateMyParcel"), false);
   assert.deepEqual(harness.savedGroup.layers[0].data.geometry, parcelA.geometry);
+
+  harness.leafletState.map.fire("click", { latlng: { lat: 19.44, lng: 99.91 } });
+  assert.deepEqual(harness.leafletState.marker.getLatLng(), { lat: 19.44, lng: 99.91 });
+  assert.equal(harness.uiState.mapReady.at(-1).lat, 19.44);
 });
 
 test("failed saved boundary save keeps editable draft and original persisted layer", async () => {
@@ -784,7 +914,7 @@ test("failed saved boundary save keeps editable draft and original persisted lay
   await harness.parcelHandlers.onEditBoundary(parcelA);
   await harness.uiState.parcelControlHandlers.onSaveEdit();
 
-  assert.equal(harness.leafletState.featureGroups[2].layers.length, 1);
+  assert.equal(harness.editGroup.layers.length, 1);
   assert.deepEqual(harness.savedGroup.layers[0].data.geometry, parcelA.geometry);
   assert.equal(harness.uiState.messages.includes("raw owner detail should not leak"), false);
 });

@@ -81,7 +81,11 @@
     drawButton: null,
     saveButton: null,
     cancelButton: null,
-    parcelButton: null,
+    savedParcelButton: null,
+    temporaryParcelButton: null,
+    hasSavedParcels: false,
+    hasTemporaryParcels: false,
+    hideParcelButtons: false,
     parcelPanel: null,
     parcelList: null,
   };
@@ -1126,27 +1130,30 @@
   }
 
   function openTemporaryParcelPanel() {
-    if (!parcelControlState.parcelPanel || !parcelControlState.parcelButton) {
+    if (!parcelControlState.parcelPanel || !parcelControlState.temporaryParcelButton) {
       return;
     }
 
+    if (window.MapParcelManagement && typeof window.MapParcelManagement.closeMyParcelsSheet === "function") {
+      window.MapParcelManagement.closeMyParcelsSheet();
+    }
     expandedTemporaryParcelId = null;
     collapseRenderedTemporaryParcelCards();
     parcelControlState.parcelPanel.hidden = false;
-    parcelControlState.parcelButton.setAttribute("aria-expanded", "true");
+    parcelControlState.temporaryParcelButton.setAttribute("aria-expanded", "true");
   }
 
   function closeTemporaryParcelPanel() {
-    if (!parcelControlState.parcelPanel || !parcelControlState.parcelButton) {
+    if (!parcelControlState.parcelPanel || !parcelControlState.temporaryParcelButton) {
       return;
     }
 
     expandedTemporaryParcelId = null;
     collapseRenderedTemporaryParcelCards();
     parcelControlState.parcelPanel.hidden = true;
-    parcelControlState.parcelButton.setAttribute("aria-expanded", "false");
-    if (!parcelControlState.parcelButton.hidden) {
-      parcelControlState.parcelButton.focus({ preventScroll: true });
+    parcelControlState.temporaryParcelButton.setAttribute("aria-expanded", "false");
+    if (!parcelControlState.temporaryParcelButton.hidden) {
+      parcelControlState.temporaryParcelButton.focus({ preventScroll: true });
     }
   }
 
@@ -1159,14 +1166,28 @@
     openTemporaryParcelPanel();
   }
 
-  function syncMyParcelsUI(parcelCount) {
-    const hasParcels = parcelCount > 0;
-
-    if (parcelControlState.parcelButton) {
-      parcelControlState.parcelButton.hidden = !hasParcels;
+  function updateParcelButtonVisibility() {
+    const shouldHideControls = Boolean(parcelControlState.hideParcelButtons);
+    if (parcelControlState.savedParcelButton) {
+      parcelControlState.savedParcelButton.hidden =
+        shouldHideControls || !parcelControlState.hasSavedParcels;
     }
+    if (parcelControlState.temporaryParcelButton) {
+      parcelControlState.temporaryParcelButton.hidden =
+        shouldHideControls || !parcelControlState.hasTemporaryParcels;
+    }
+  }
 
-    if (!hasParcels) {
+  function setSavedParcelsControlVisible(hasSavedParcels) {
+    parcelControlState.hasSavedParcels = Boolean(hasSavedParcels);
+    updateParcelButtonVisibility();
+  }
+
+  function syncTemporaryParcelsUI(parcelCount) {
+    parcelControlState.hasTemporaryParcels = parcelCount > 0;
+    updateParcelButtonVisibility();
+
+    if (!parcelControlState.hasTemporaryParcels) {
       closeTemporaryParcelPanel();
     }
   }
@@ -1191,28 +1212,6 @@
     });
   }
 
-  function setParcelControlState(options) {
-    const isEditing = Boolean(options?.isEditing);
-    const drawDisabled = Boolean(options?.drawDisabled);
-    const isSaving = Boolean(options?.isSaving);
-    const saveText = options?.saveText || TEXT.saveEdit;
-    const cancelText = options?.cancelText || TEXT.cancelEdit;
-
-    if (parcelControlState.drawButton) {
-      parcelControlState.drawButton.disabled = drawDisabled;
-    }
-    if (parcelControlState.saveButton) {
-      parcelControlState.saveButton.hidden = !isEditing;
-      parcelControlState.saveButton.disabled = !isEditing || isSaving;
-      parcelControlState.saveButton.textContent = saveText;
-    }
-    if (parcelControlState.cancelButton) {
-      parcelControlState.cancelButton.hidden = !isEditing;
-      parcelControlState.cancelButton.disabled = !isEditing || isSaving;
-      parcelControlState.cancelButton.textContent = cancelText;
-    }
-  }
-
   function renderTemporaryParcelList(parcels, handlers) {
     const container = parcelControlState.parcelList || document.getElementById("temporary-parcel-list");
     if (!container) {
@@ -1220,7 +1219,7 @@
     }
     const parcelCount = Array.isArray(parcels) ? parcels.length : 0;
     const hasParcels = parcelCount > 0;
-    syncMyParcelsUI(parcelCount);
+    syncTemporaryParcelsUI(parcelCount);
     container.replaceChildren();
 
     if (!hasParcels) {
@@ -2186,11 +2185,30 @@
         const cancelButton = createElement("button", "panel-button secondary", TEXT.cancelEdit);
         cancelButton.type = "button";
         cancelButton.hidden = true;
-        const parcelButton = createElement("button", "panel-button secondary my-parcels-button", "แปลงของฉัน");
-        parcelButton.type = "button";
-        parcelButton.hidden = true;
-        parcelButton.setAttribute("aria-controls", "temporary-parcel-panel");
-        parcelButton.setAttribute("aria-expanded", "false");
+        const savedParcelButton = createElement(
+          "button",
+          "panel-button secondary saved-parcels-control-button",
+          "แปลงของฉัน",
+        );
+        savedParcelButton.id = "saved-parcels-control-button";
+        savedParcelButton.type = "button";
+        savedParcelButton.hidden = true;
+        savedParcelButton.setAttribute("aria-controls", "my-parcels-sheet");
+        savedParcelButton.setAttribute("aria-label", "เปิดรายการแปลงที่บันทึกไว้");
+        savedParcelButton.title = "เปิดรายการแปลงที่บันทึกไว้";
+
+        const temporaryParcelButton = createElement(
+          "button",
+          "mobile-temporary-parcels-button",
+          "แปลงชั่วคราว",
+        );
+        temporaryParcelButton.id = "mobile-temporary-parcels-button";
+        temporaryParcelButton.type = "button";
+        temporaryParcelButton.hidden = true;
+        temporaryParcelButton.setAttribute("aria-controls", "temporary-parcel-panel");
+        temporaryParcelButton.setAttribute("aria-expanded", "false");
+        temporaryParcelButton.setAttribute("aria-label", "เปิดรายการแปลงชั่วคราวที่ยังไม่ได้บันทึก");
+        temporaryParcelButton.title = "เปิดรายการแปลงชั่วคราวที่ยังไม่ได้บันทึก";
 
         const parcelPanel = createElement("aside", "temporary-parcel-panel");
         parcelPanel.id = "temporary-parcel-panel";
@@ -2220,18 +2238,24 @@
         drawButton.addEventListener("click", handlers.onDraw);
         saveButton.addEventListener("click", handlers.onSaveEdit);
         cancelButton.addEventListener("click", handlers.onCancelEdit);
-        parcelButton.addEventListener("click", toggleTemporaryParcelPanel);
+        savedParcelButton.addEventListener("click", () => {
+          closeTemporaryParcelPanel();
+          handlers.onOpenSavedParcels?.();
+        });
+        temporaryParcelButton.addEventListener("click", toggleTemporaryParcelPanel);
         closeButton.addEventListener("click", closeTemporaryParcelPanel);
 
-        container.append(drawButton, saveButton, cancelButton, parcelButton, parcelPanel);
+        container.append(drawButton, saveButton, cancelButton, savedParcelButton, parcelPanel);
+        document.body.appendChild(temporaryParcelButton);
 
         parcelControlState.drawButton = drawButton;
         parcelControlState.saveButton = saveButton;
         parcelControlState.cancelButton = cancelButton;
-        parcelControlState.parcelButton = parcelButton;
+        parcelControlState.savedParcelButton = savedParcelButton;
+        parcelControlState.temporaryParcelButton = temporaryParcelButton;
         parcelControlState.parcelPanel = parcelPanel;
         parcelControlState.parcelList = parcelList;
-        syncMyParcelsUI(0);
+        updateParcelButtonVisibility();
 
         return container;
       },
@@ -2245,10 +2269,15 @@
     const drawDisabled = Boolean(options?.drawDisabled);
     const isDrawing = Boolean(options?.isDrawing);
     const isSaving = Boolean(options?.isSaving);
+    const hideDraw = Boolean(options?.hideDraw);
+    const hideParcelList = Boolean(options?.hideParcelList);
     const saveText = options?.saveText || TEXT.saveEdit;
     const cancelText = options?.cancelText || TEXT.cancelEdit;
 
+    parcelControlState.hideParcelButtons = hideParcelList;
+
     if (parcelControlState.drawButton) {
+      parcelControlState.drawButton.hidden = hideDraw;
       parcelControlState.drawButton.disabled = drawDisabled;
       parcelControlState.drawButton.textContent = isDrawing ? "ยกเลิกการวาด" : TEXT.drawParcel;
       parcelControlState.drawButton.classList.toggle("is-active", isDrawing);
@@ -2264,6 +2293,7 @@
       parcelControlState.cancelButton.disabled = !isEditing || isSaving;
       parcelControlState.cancelButton.textContent = cancelText;
     }
+    updateParcelButtonVisibility();
   }
 
   return (window.MapUi = {
@@ -2308,6 +2338,7 @@
     isMobileLayout,
     addParcelDrawControl,
     setParcelControlState,
+    setSavedParcelsControlVisible,
     setupLocationPanel,
     setConfirmEnabled,
     setLocationActionsEnabled,
