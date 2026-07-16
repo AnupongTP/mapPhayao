@@ -2138,6 +2138,31 @@
     openResultPanel(panel);
   }
 
+  function renderSavedParcelDetail(parcel, message) {
+    const panel = ensureResultPanel();
+    setResultPanelTitle(panel, "ข้อมูลแปลงที่บันทึกไว้");
+    const content = panel.querySelector("#result-panel-content");
+    content.replaceChildren();
+    content.scrollTop = 0;
+
+    if (message) {
+      content.appendChild(createElement("p", "result-message", message));
+    }
+
+    appendParcelResultCard(content, "ข้อมูลแปลง", [
+      { label: "ชื่อแปลง", value: parcel?.parcelName || parcel?.parcelCode },
+      { label: "รหัสแปลง", value: parcel?.parcelCode },
+      { label: "ชนิดพืช", value: parcel?.cropType },
+      { label: "พันธุ์ข้าว", value: parcel?.riceVariety },
+      { label: "วันที่ปลูก", value: parcel?.plantingDate },
+      { label: "พื้นที่", value: parcel?.areaSqm, formatter: formatters.formatThaiLandArea },
+      { label: "พื้นที่ไร่", value: parcel?.areaRai, formatter: formatters.formatAreaRai },
+      { label: "อัปเดตล่าสุด", value: parcel?.updatedAt || parcel?.createdAt, formatter: formatCheckedAt },
+    ]);
+
+    openResultPanel(panel);
+  }
+
   function addParcelDrawControl(map, handlers) {
     const ParcelDrawControl = L.Control.extend({
       options: {
@@ -2297,6 +2322,7 @@
     showNoDataResult,
     renderResultPanel,
     renderParcelResult,
+    renderSavedParcelDetail,
     createPopupContent,
     createParcelPopupContent,
     text: TEXT,

@@ -20,9 +20,14 @@
   let editingOriginalGeometry = null;
   let currentDetailParcelId = null;
   let parcelDetailPanelOpen = false;
+  let openedSavedParcelId = null;
+  let pendingSavedParcelId = null;
+  let savedParcelDetailRevision = 0;
+  let currentSavedParcel = null;
 
   const temporaryParcelLayers = new L.FeatureGroup();
   const temporaryParcels = new Map();
+  const savedParcelLayers = new L.FeatureGroup();
 
   const GEOLOCATION_OPTIONS = {
     enableHighAccuracy: true,
@@ -43,6 +48,14 @@
     fillColor: "#67e8f9",
     fillOpacity: 0.18,
     dashArray: "8 6",
+  };
+
+  const SAVED_PARCEL_STYLE = {
+    color: "#166534",
+    weight: 4,
+    fillColor: "#22c55e",
+    fillOpacity: 0.16,
+    dashArray: "10 5",
   };
 
   const POLYGON_ANALYSIS_TIMEOUT_MS = 30000;
@@ -441,6 +454,194 @@
     }
 
     window.MapUi.renderParcelResult(parcel);
+    renderTemporaryParcelSaveAction(parcel);
+  }
+
+  function hasUnsavedAnalyzedTemporaryParcel() {
+    return [...temporaryParcels.values()].some((parcel) => {
+      const persistence = window.MapParcelState.ensurePersistenceState(parcel);
+      return parcel.analysisStatus === "success" && !persistence.savedParcelId;
+    });
+  }
+
+  function renderTemporaryParcelSaveAction(parcel) {
+    if (!window.MapParcelManagement) {
+      return;
+    }
+
+    window.MapParcelManagement.renderSaveAction(parcel, {
+      onSave: (metadata) => saveTemporaryParcel(parcel.id, metadata),
+    });
+  }
+
+  function clearSavedParcelHighlight(options = {}) {
+    savedParcelLayers.clearLayers();
+    currentSavedParcel = null;
+    openedSavedParcelId = null;
+    pendingSavedParcelId = null;
+    if (options.closeResult) {
+      window.MapUi.closeCurrentResultPanel();
+    }
+  }
+
+  function renderSavedParcelLayer(parcel) {
+    if (!window.MapParcelState.isValidGeoJsonGeometry(parcel?.geometry)) {
+      throw new Error("ไม่สามารถแสดงขอบเขตแปลงได้");
+    }
+
+    savedParcelLayers.clearLayers();
+    const layer = L.geoJSON(
+      {
+        type: "Feature",
+        geometry: parcel.geometry,
+        properties: {},
+      },
+      {
+        style: SAVED_PARCEL_STYLE,
+        interactive: true,
+      },
+    );
+    layer.addTo(savedParcelLayers);
+    currentSavedParcel = parcel;
+    openedSavedParcelId = parcel.id;
+
+    const bounds = layer.getBounds();
+    if (bounds && bounds.isValid && bounds.isValid()) {
+      appMap.fitBounds(bounds, {
+        paddingTopLeft: [24, 96],
+        paddingBottomRight: [24, 150],
+        maxZoom: 18,
+      });
+    }
+  }
+
+  async function getOwnedParcelDetail(parcel) {
+    if (window.MapParcelState.isValidGeoJsonGeometry(parcel?.geometry)) {
+      return parcel;
+    }
+
+    const response = await window.MapApi.getMyParcel(parcel.id);
+    return response.parcel;
+  }
+
+  async function openSavedParcel(parcel) {
+    if (!parcel || !parcel.id) {
+      return;
+    }
+
+    if (hasUnsavedAnalyzedTemporaryParcel()) {
+      const shouldOpen = await window.MapParcelManagement.confirmOpenSavedParcel();
+      if (!shouldOpen) {
+        return;
+      }
+    }
+
+    const requestRevision = ++savedParcelDetailRevision;
+    pendingSavedParcelId = parcel.id;
+
+    try {
+      const detail = await getOwnedParcelDetail(parcel);
+      if (
+        !window.MapParcelState.shouldAcceptDetailResponse(
+          parcel.id,
+          pendingSavedParcelId,
+          requestRevision,
+          savedParcelDetailRevision,
+        )
+      ) {
+        return;
+      }
+      renderSavedParcelLayer(detail);
+      window.MapParcelManagement.closeMyParcelsSheet();
+      window.MapUi.renderSavedParcelDetail(detail);
+    } catch (error) {
+      window.MapUi.renderSavedParcelDetail(parcel, window.MapParcelManagement.getFriendlyError(error));
+    }
+  }
+
+  async function analyzeSavedParcel(parcel) {
+    if (!parcel || !parcel.id) {
+      return;
+    }
+
+    try {
+      const detail = await getOwnedParcelDetail(parcel);
+      renderSavedParcelLayer(detail);
+      window.MapParcelManagement.closeMyParcelsSheet();
+      window.MapUi.renderParcelResult({
+        id: detail.id,
+        name: detail.parcelName || detail.parcelCode,
+        analysisStatus: "loading",
+      });
+
+      const analysis = await window.MapApi.analyzeMyParcel(detail.id);
+      if (openedSavedParcelId !== detail.id) {
+        return;
+      }
+      window.MapUi.renderParcelResult({
+        id: detail.id,
+        name: detail.parcelName || detail.parcelCode,
+        analysisStatus: "success",
+        analysis,
+      });
+    } catch (error) {
+      window.MapUi.renderSavedParcelDetail(parcel, window.MapParcelManagement.getFriendlyError(error));
+    }
+  }
+
+  function handleSavedParcelUpdated(parcel) {
+    if (!parcel || parcel.id !== openedSavedParcelId) {
+      return;
+    }
+    currentSavedParcel = {
+      ...currentSavedParcel,
+      ...parcel,
+      geometry: currentSavedParcel?.geometry || parcel.geometry,
+    };
+    window.MapUi.renderSavedParcelDetail(currentSavedParcel);
+  }
+
+  function handleSavedParcelDeleted(parcelId) {
+    if (parcelId !== openedSavedParcelId) {
+      return;
+    }
+    clearSavedParcelHighlight({ closeResult: true });
+  }
+
+  async function saveTemporaryParcel(parcelId, metadata) {
+    const parcel = temporaryParcels.get(parcelId);
+    if (!parcel) {
+      throw new Error("ไม่พบแปลงชั่วคราว");
+    }
+
+    const snapshot = window.MapParcelState.captureSaveSnapshot(parcel);
+    if (!snapshot) {
+      throw new Error("กรุณาวิเคราะห์แปลงก่อนบันทึก");
+    }
+    renderTemporaryParcelSaveAction(parcel);
+
+    try {
+      const result = await window.MapApi.createParcel({
+        parcelName: metadata.parcelName,
+        cropType: metadata.cropType,
+        riceVariety: metadata.riceVariety,
+        plantingDate: metadata.plantingDate,
+        geometry: snapshot.geometry,
+      });
+      const savedParcel = result.parcel;
+      if (!window.MapParcelState.markSaveSucceeded(parcel, snapshot, savedParcel)) {
+        throw new Error("ขอบเขตแปลงเปลี่ยนแล้ว กรุณาวิเคราะห์ใหม่ก่อนบันทึก");
+      }
+      parcel.savedParcelId = savedParcel.id;
+      window.MapParcelManagement.refreshMyParcelsIfOpen();
+      refreshTemporaryParcelList();
+      renderTemporaryParcelSaveAction(parcel);
+      return savedParcel;
+    } catch (error) {
+      window.MapParcelState.markSaveFailed(parcel, snapshot);
+      renderTemporaryParcelSaveAction(parcel);
+      throw error;
+    }
   }
 
   function getCompletedTemporaryParcels() {
@@ -459,6 +660,9 @@
   }
 
   function getParcelStatusText(parcel) {
+    if (window.MapParcelState.ensurePersistenceState(parcel).saveState === "saved") {
+      return `${window.MapFormatters.formatThaiLandArea(parcel.areaSquareMeters)} - บันทึกแล้ว`;
+    }
     if (parcel.analysisStatus === "loading") {
       return window.MapUi.text.parcelLoading;
     }
@@ -618,10 +822,12 @@
 
     currentDetailParcelId = parcelId;
     parcelDetailPanelOpen = true;
+    clearSavedParcelHighlight();
     selectedTemporaryParcelId = parcelId;
     refreshParcelStyles();
     refreshTemporaryParcelList();
     window.MapUi.renderParcelResult(parcel);
+    renderTemporaryParcelSaveAction(parcel);
     if (parcel.layer && parcel.layer.closePopup) {
       parcel.layer.closePopup();
     }
@@ -694,6 +900,7 @@
     parcel.analysis = null;
     parcel.analysisError = null;
     parcel.analysisStatus = "loading";
+    const analysisToken = window.MapParcelState.markAnalysisStarted(parcel);
     parcel.requestController = requestController;
     refreshTemporaryParcelList();
 
@@ -710,9 +917,11 @@
         return;
       }
 
-      parcel.analysis = analysis;
-      parcel.analysisStatus = "success";
-      parcel.analysisError = null;
+      if (window.MapParcelState.markAnalysisSucceeded(parcel, analysisToken, parcel.geometry)) {
+        parcel.analysis = analysis;
+        parcel.analysisStatus = "success";
+        parcel.analysisError = null;
+      }
     } catch (error) {
       if (parcel.requestController !== requestController) {
         return;
@@ -729,6 +938,7 @@
 
       parcel.analysisStatus = "error";
       parcel.analysisError = error.message || window.MapUi.text.parcelAnalyzeError;
+      window.MapParcelState.markAnalysisStale(parcel);
     } finally {
       window.clearTimeout(timeoutId);
       if (parcel.requestController === requestController) {
@@ -754,6 +964,7 @@
       requestController: null,
       createdAt: Date.now(),
     };
+    window.MapParcelState.ensurePersistenceState(parcel);
 
     temporaryParcels.set(parcelId, parcel);
     temporaryParcelLayers.addLayer(layer);
@@ -808,6 +1019,7 @@
     parcel.areaSquareMeters = calculateParcelAreaSquareMeters(parcel.layer);
     parcel.analysis = null;
     parcel.analysisError = null;
+    window.MapParcelState.markGeometryChanged(parcel);
     updateTemporaryParcelPopup(parcel, false);
     editingTemporaryParcelId = null;
     editingOriginalGeometry = null;
@@ -983,6 +1195,7 @@
       return;
     }
 
+    clearSavedParcelHighlight();
     isParcelDrawingActive = true;
     syncLocationActionState();
     window.MapUi.setParcelControlState({
@@ -1025,6 +1238,22 @@
     refreshTemporaryParcelList();
   }
 
+  function initSavedParcels(map) {
+    savedParcelLayers.addTo(map);
+    if (!window.MapParcelManagement) {
+      return;
+    }
+    window.MapParcelManagement.init({
+      onOpenParcel: openSavedParcel,
+      onAnalyzeParcel: analyzeSavedParcel,
+      onParcelUpdated: handleSavedParcelUpdated,
+      onParcelDeleted: handleSavedParcelDeleted,
+    });
+    window.MapParcelManagement.setLiffReady(
+      isLiffModeEnabled() && window.MapLiffMode && window.MapLiffMode.isReady(),
+    );
+  }
+
   function initMap() {
     const mapConfig = window.AppConfig.map;
     const map = L.map("map").setView(mapConfig.center, mapConfig.zoom);
@@ -1040,10 +1269,19 @@
     });
     window.MapUi.setLineSummaryHandler(sendConfirmedPointSummaryToLine);
     syncLineSummaryButtonState();
+    initSavedParcels(map);
     if (isLiffModeEnabled()) {
       window.MapLiffMode.initialize()
-        .then(syncLocationActionState)
+        .then(() => {
+          syncLocationActionState();
+          if (window.MapParcelManagement) {
+            window.MapParcelManagement.setLiffReady(true);
+          }
+        })
         .catch(() => {
+          if (window.MapParcelManagement) {
+            window.MapParcelManagement.setLiffReady(false);
+          }
           window.MapUi.showLocationMessage(getLiffUnavailableMessage());
           syncLocationActionState();
         });

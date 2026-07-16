@@ -7,6 +7,14 @@
   let initializing = null;
   let idToken = "";
   let errorMessage = "";
+  const authUnavailableMessage = "กรุณาเปิดระบบผ่าน LINE ใหม่อีกครั้ง";
+
+  function createAuthError(message) {
+    const error = new Error(message || authUnavailableMessage);
+    error.statusCode = 401;
+    error.code = "LIFF_AUTH_REQUIRED";
+    return error;
+  }
 
   function loadLiffSdk() {
     if (window.liff) {
@@ -57,10 +65,15 @@
         }
 
         await window.liff.init({ liffId });
+        if (typeof window.liff.isLoggedIn === "function" && !window.liff.isLoggedIn()) {
+          errorMessage = authUnavailableMessage;
+          throw createAuthError();
+        }
         idToken = window.liff.getIDToken() || "";
         if (!idToken) {
           errorMessage = "กรุณาเปิดหน้านี้ผ่านแอป LINE แล้วลองใหม่อีกครั้ง";
-          throw new Error(errorMessage);
+          errorMessage = authUnavailableMessage;
+          throw createAuthError();
         }
 
         initialized = true;
@@ -94,6 +107,47 @@
     }
   }
 
+  function isLoggedIn() {
+    try {
+      return Boolean(
+        window.liff &&
+          typeof window.liff.isLoggedIn === "function" &&
+          window.liff.isLoggedIn(),
+      );
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async function getCurrentIdToken() {
+    if (!enabled) {
+      throw createAuthError();
+    }
+
+    await initialize();
+
+    if (window.liff && typeof window.liff.isLoggedIn === "function" && !isLoggedIn()) {
+      idToken = "";
+      errorMessage = authUnavailableMessage;
+      throw createAuthError();
+    }
+
+    const currentToken =
+      window.liff && typeof window.liff.getIDToken === "function"
+        ? window.liff.getIDToken() || ""
+        : idToken;
+
+    if (!currentToken) {
+      idToken = "";
+      errorMessage = authUnavailableMessage;
+      throw createAuthError();
+    }
+
+    idToken = currentToken;
+    errorMessage = "";
+    return currentToken;
+  }
+
   function closeWindow() {
     try {
       if (window.liff && typeof window.liff.closeWindow === "function") {
@@ -118,7 +172,9 @@
     getIdToken: function () {
       return idToken;
     },
+    getCurrentIdToken,
     isInClient,
+    isLoggedIn,
     closeWindow,
     getErrorMessage: function () {
       return errorMessage;

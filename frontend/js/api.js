@@ -1,34 +1,43 @@
-// ไฟล์เรียก API ฝั่ง frontend: ส่งคำขอไป Backend แล้วคืน JSON ให้ UI ใช้
+// Frontend API helpers: one configured API base, safe JSON parsing, and focused request builders.
 (function (window) {
+  const PARCEL_ID_PATTERN =
+    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
+  const AUTH_REQUIRED_MESSAGE = "กรุณาเปิดระบบผ่าน LINE ใหม่อีกครั้ง";
+
   function buildUrl(path) {
-    // ต่อ path ต่อท้าย base URL กลางของระบบ
     return `${window.AppConfig.apiBaseUrl}${path}`;
   }
 
+  async function parseJsonSafely(response) {
+    try {
+      return await response.json();
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function createRequestError(response, body) {
+    const message =
+      body && typeof body.error === "string" && body.error.trim()
+        ? body.error.trim()
+        : `API request failed: ${response.status}`;
+    const requestError = new Error(message);
+    requestError.statusCode = response.status;
+    return requestError;
+  }
+
   async function getJson(path, options) {
-    // helper กลางสำหรับ request ที่คาดหวัง response แบบ JSON
     const response = await fetch(buildUrl(path), options);
+    const body = await parseJsonSafely(response);
 
     if (!response.ok) {
-      let message = `API request failed: ${response.status}`;
-
-      try {
-        const errorBody = await response.json();
-        message = errorBody.error || message;
-      } catch (error) {
-        // Keep the HTTP status message when the response body is not JSON.
-      }
-
-      const requestError = new Error(message);
-      requestError.statusCode = response.status;
-      throw requestError;
+      throw createRequestError(response, body);
     }
 
-    return response.json();
+    return body;
   }
 
   function getRiceSuitabilityAtPoint(lat, lng, options) {
-    // ส่ง longitude ก่อน latitude ตามรูปแบบ ST_MakePoint ของ PostGIS
     const params = new URLSearchParams({
       lat: String(lat),
       lng: String(lng),
@@ -60,7 +69,6 @@
   }
 
   async function sendJson(path, body, method, options) {
-    // request แบบส่ง body JSON ไป Backend
     return getJson(path, {
       ...options,
       method,
@@ -72,8 +80,114 @@
     });
   }
 
+  function assertParcelId(parcelId) {
+    const value = typeof parcelId === "string" ? parcelId.trim() : "";
+    if (!PARCEL_ID_PATTERN.test(value)) {
+      throw new TypeError("parcelId is invalid");
+    }
+    return value;
+  }
+
+  function normalizeString(value) {
+    if (value === null || value === undefined) {
+      return undefined;
+    }
+    const text = String(value).trim();
+    return text === "" ? undefined : text;
+  }
+
+  function cloneGeometry(geometry) {
+    if (!geometry || typeof geometry !== "object") {
+      return undefined;
+    }
+    return JSON.parse(JSON.stringify(geometry));
+  }
+
+  function createParcelBody(payload) {
+    const source = payload && typeof payload === "object" ? payload : {};
+    const body = {};
+    const parcelName = normalizeString(source.parcelName);
+    const cropType = normalizeString(source.cropType);
+    const riceVariety = normalizeString(source.riceVariety);
+    const plantingDate = normalizeString(source.plantingDate);
+    const geometry = cloneGeometry(source.geometry);
+
+    if (parcelName) {
+      body.parcelName = parcelName;
+    }
+    if (cropType) {
+      body.cropType = cropType;
+    }
+    if (riceVariety) {
+      body.riceVariety = riceVariety;
+    }
+    if (plantingDate) {
+      body.plantingDate = plantingDate;
+    }
+    if (geometry) {
+      body.geometry = geometry;
+    }
+
+    return body;
+  }
+
+  function createParcelPatchBody(payload) {
+    const source = payload && typeof payload === "object" ? payload : {};
+    const body = {};
+
+    ["parcelName", "cropType", "riceVariety", "plantingDate"].forEach((key) => {
+      if (!Object.prototype.hasOwnProperty.call(source, key)) {
+        return;
+      }
+      body[key] =
+        source[key] === null || source[key] === undefined
+          ? null
+          : String(source[key]).trim();
+    });
+
+    return body;
+  }
+
+  async function getCurrentLiffIdToken() {
+    if (
+      !window.MapLiffMode ||
+      typeof window.MapLiffMode.getCurrentIdToken !== "function"
+    ) {
+      const error = new Error(AUTH_REQUIRED_MESSAGE);
+      error.statusCode = 401;
+      throw error;
+    }
+
+    return window.MapLiffMode.getCurrentIdToken();
+  }
+
+  async function sendAuthenticatedParcelJson(path, body, method, options) {
+    const idToken = await getCurrentLiffIdToken();
+    const requestOptions = {
+      ...options,
+      method,
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        ...(options && options.headers ? options.headers : {}),
+      },
+    };
+
+    if (body !== undefined) {
+      requestOptions.headers = {
+        ...requestOptions.headers,
+        "Content-Type": "application/json",
+      };
+      requestOptions.body = JSON.stringify(body);
+    }
+
+    return getJson(path, requestOptions);
+  }
+
   window.MapApi = {
     getJson,
+    buildUrl,
+    createParcelBody,
+    createParcelPatchBody,
     getRiceSuitabilityAtPoint,
     getLocationReport,
     getFloodRecurrenceLayer,
@@ -98,6 +212,49 @@
     },
     analyzePolygonArea: function (payload, options) {
       return sendJson("/area-analysis/polygon", payload, "POST", options);
+    },
+    createParcel: function (payload, options) {
+      return sendAuthenticatedParcelJson(
+        "/parcels",
+        createParcelBody(payload),
+        "POST",
+        options,
+      );
+    },
+    listMyParcels: function (options) {
+      return sendAuthenticatedParcelJson("/parcels/mine", undefined, "GET", options);
+    },
+    getMyParcel: function (parcelId, options) {
+      return sendAuthenticatedParcelJson(
+        `/parcels/${encodeURIComponent(assertParcelId(parcelId))}`,
+        undefined,
+        "GET",
+        options,
+      );
+    },
+    updateMyParcel: function (parcelId, patch, options) {
+      return sendAuthenticatedParcelJson(
+        `/parcels/${encodeURIComponent(assertParcelId(parcelId))}`,
+        createParcelPatchBody(patch),
+        "PATCH",
+        options,
+      );
+    },
+    deleteMyParcel: function (parcelId, options) {
+      return sendAuthenticatedParcelJson(
+        `/parcels/${encodeURIComponent(assertParcelId(parcelId))}`,
+        undefined,
+        "DELETE",
+        options,
+      );
+    },
+    analyzeMyParcel: function (parcelId, options) {
+      return sendAuthenticatedParcelJson(
+        `/parcels/${encodeURIComponent(assertParcelId(parcelId))}/analyze`,
+        undefined,
+        "POST",
+        options,
+      );
     },
     getProvinces: function () {
       return getJson("/pgconnect/provinces");

@@ -1,10 +1,13 @@
 // Service จัดการแปลงเกษตร: validate, แปลง geometry, บันทึก, อ่าน, ลบ
 const db = require("../config/database");
+const appUserService = require("./appUserService");
 const createHttpError = require("../utils/httpError");
 
 const MIN_PARCEL_AREA_SQM = 10;
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
+const PARCEL_NOT_FOUND_MESSAGE = "Parcel not found";
+const AUTH_REQUIRED_MESSAGE = "LINE authentication required";
 
 function normalizeText(value) {
   if (value === null || value === undefined) {
@@ -41,6 +44,10 @@ function validateUuid(value) {
   }
 
   return text;
+}
+
+function validateAppUserId(value) {
+  return validateUuid(value);
 }
 
 function validateGeometry(geometry) {
@@ -95,16 +102,21 @@ const PARCEL_SELECT_FIELDS = `
   updated_at
 `;
 
-async function createParcel(payload) {
+async function createParcel(payload, options = {}) {
   // บันทึกแปลงใน transaction เดียว เพื่อไม่ให้รหัสแปลงกับ geometry หลุดจากกัน
   const geometry = validateGeometry(payload.geometry);
   const parcelName = normalizeText(payload.parcelName);
   const cropType = normalizeText(payload.cropType);
   const riceVariety = normalizeText(payload.riceVariety);
   const plantingDate = validateDate(payload.plantingDate);
+  const lineUserId = normalizeText(options.lineUserId);
+  const userService = options.appUserService || appUserService;
 
   if (!cropType) {
     throw createHttpError(400, "กรุณาระบุชนิดพืช");
+  }
+  if (!lineUserId) {
+    throw createHttpError(401, AUTH_REQUIRED_MESSAGE);
   }
 
   const geometryJson = JSON.stringify(geometry);
@@ -112,6 +124,8 @@ async function createParcel(payload) {
 
   try {
     await client.query("BEGIN");
+    const appUser = await userService.findOrCreateLineUser(lineUserId, { client });
+    const ownerUserId = validateAppUserId(appUser?.id);
 
     const result = await client.query(
       `
@@ -144,7 +158,8 @@ async function createParcel(payload) {
           crop_type,
           rice_variety,
           planting_date,
-          geom
+          geom,
+          owner_user_id
         )
         SELECT
           'PY-' ||
@@ -155,7 +170,8 @@ async function createParcel(payload) {
           $3,
           $4,
           $5::date,
-          geom
+          geom,
+          $7::uuid
         FROM checked
         WHERE NOT is_empty
           AND is_valid
@@ -176,6 +192,7 @@ async function createParcel(payload) {
         riceVariety,
         plantingDate,
         MIN_PARCEL_AREA_SQM,
+        ownerUserId,
       ],
     );
 
@@ -241,27 +258,30 @@ async function createParcel(payload) {
   }
 }
 
-async function getParcelById(id) {
+async function getOwnedParcelById(id, appUserId) {
   // UUID ไม่ถูกต้องต้องตัดทิ้งก่อน ไม่ปล่อยให้ PostgreSQL โยน error ดิบ
   const parcelId = validateUuid(id);
+  const ownerUserId = validateAppUserId(appUserId);
   const result = await db.query(
     `
     SELECT ${PARCEL_SELECT_FIELDS}
     FROM app.parcels
-    WHERE id = $1;
+    WHERE id = $1
+      AND owner_user_id = $2;
     `,
-    [parcelId],
+    [parcelId, ownerUserId],
   );
 
   const parcel = mapParcelRow(result.rows[0]);
   if (!parcel) {
-    throw createHttpError(404, "ไม่พบข้อมูลแปลง");
+    throw createHttpError(404, PARCEL_NOT_FOUND_MESSAGE);
   }
 
   return parcel;
 }
 
-async function listParcels({ limit } = {}) {
+async function listOwnedParcels(appUserId, { limit } = {}) {
+  const ownerUserId = validateAppUserId(appUserId);
   const parsedLimit = Number(limit);
   const safeLimit = Number.isInteger(parsedLimit)
     ? Math.min(Math.max(parsedLimit, 1), MAX_LIMIT)
@@ -270,39 +290,43 @@ async function listParcels({ limit } = {}) {
     `
     SELECT ${PARCEL_SELECT_FIELDS}
     FROM app.parcels
-    ORDER BY created_at DESC
-    LIMIT $1;
+    WHERE owner_user_id = $1
+    ORDER BY created_at DESC, id DESC
+    LIMIT $2;
     `,
-    [safeLimit],
+    [ownerUserId, safeLimit],
   );
 
   return result.rows.map(mapParcelRow);
 }
 
-async function deleteParcel(id) {
+async function deleteOwnedParcel(id, appUserId) {
   const parcelId = validateUuid(id);
+  const ownerUserId = validateAppUserId(appUserId);
   const result = await db.query(
     `
     DELETE FROM app.parcels
     WHERE id = $1
+      AND owner_user_id = $2
     RETURNING id;
     `,
-    [parcelId],
+    [parcelId, ownerUserId],
   );
 
   if (result.rows.length === 0) {
-    throw createHttpError(404, "ไม่พบข้อมูลแปลง");
+    throw createHttpError(404, PARCEL_NOT_FOUND_MESSAGE);
   }
 }
 
-async function updateParcel(id, payload) {
+async function updateOwnedParcel(id, payload, appUserId) {
   const parcelId = validateUuid(id);
+  const ownerUserId = validateAppUserId(appUserId);
   const hasParcelName = Object.prototype.hasOwnProperty.call(payload, "parcelName");
   const hasCropType = Object.prototype.hasOwnProperty.call(payload, "cropType");
   const hasRiceVariety = Object.prototype.hasOwnProperty.call(payload, "riceVariety");
   const hasPlantingDate = Object.prototype.hasOwnProperty.call(payload, "plantingDate");
 
-  if (payload.geometry) {
+  if (Object.prototype.hasOwnProperty.call(payload, "geometry")) {
     throw createHttpError(400, "ยังไม่เปิดใช้งานการแก้ไขขอบเขตแปลง");
   }
 
@@ -326,8 +350,10 @@ async function updateParcel(id, payload) {
       parcel_name = CASE WHEN $2 THEN $3 ELSE parcel_name END,
       crop_type = CASE WHEN $4 THEN $5 ELSE crop_type END,
       rice_variety = CASE WHEN $6 THEN $7 ELSE rice_variety END,
-      planting_date = CASE WHEN $8 THEN $9::date ELSE planting_date END
+      planting_date = CASE WHEN $8 THEN $9::date ELSE planting_date END,
+      updated_at = now()
     WHERE id = $1
+      AND owner_user_id = $10
     RETURNING ${PARCEL_SELECT_FIELDS};
     `,
     [
@@ -340,21 +366,58 @@ async function updateParcel(id, payload) {
       riceVariety,
       hasPlantingDate,
       plantingDate,
+      ownerUserId,
     ],
   );
 
   const parcel = mapParcelRow(result.rows[0]);
   if (!parcel) {
-    throw createHttpError(404, "ไม่พบข้อมูลแปลง");
+    throw createHttpError(404, PARCEL_NOT_FOUND_MESSAGE);
   }
 
   return parcel;
 }
 
+async function getOwnedParcelAnalysisInput(id, appUserId) {
+  const parcelId = validateUuid(id);
+  const ownerUserId = validateAppUserId(appUserId);
+  const result = await db.query(
+    `
+    SELECT
+      id,
+      COALESCE(NULLIF(parcel_name, ''), parcel_code) AS analysis_name,
+      ST_AsGeoJSON(ST_Transform(geom, 4326))::json AS geometry
+    FROM app.parcels
+    WHERE id = $1
+      AND owner_user_id = $2;
+    `,
+    [parcelId, ownerUserId],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw createHttpError(404, PARCEL_NOT_FOUND_MESSAGE);
+  }
+
+  return {
+    id: row.id,
+    name: row.analysis_name,
+    geometry: row.geometry,
+  };
+}
+
 module.exports = {
   createParcel,
-  getParcelById,
-  listParcels,
-  updateParcel,
-  deleteParcel,
+  getOwnedParcelById,
+  listOwnedParcels,
+  updateOwnedParcel,
+  deleteOwnedParcel,
+  getOwnedParcelAnalysisInput,
+  _private: {
+    mapParcelRow,
+    normalizeText,
+    validateDate,
+    validateGeometry,
+    validateUuid,
+  },
 };

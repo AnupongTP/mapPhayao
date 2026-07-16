@@ -1493,3 +1493,195 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+.mobile-my-parcels-button {
+  display: none;
+  min-height: 48px;
+  padding: 11px 16px;
+  cursor: pointer;
+  border: 1px solid #0f766e;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.24);
+}
+
+.mobile-parcel-save-action {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid #bbf7d0;
+  border-radius: 10px;
+  background: #f0fdf4;
+}
+
+.mobile-parcel-save-button {
+  width: 100%;
+  min-height: 48px;
+  background: #15803d;
+  border-color: #15803d;
+}
+
+.parcel-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1250;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px 12px calc(16px + env(safe-area-inset-bottom));
+  background: rgba(15, 23, 42, 0.36);
+}
+
+.parcel-sheet {
+  display: flex;
+  flex-direction: column;
+  width: min(430px, calc(100vw - 24px));
+  max-height: min(78dvh, 720px);
+  overflow: hidden;
+  border: 1px solid #d6d9de;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.26);
+}
+
+.parcel-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.parcel-sheet-header h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.parcel-sheet-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.parcel-form {
+  display: grid;
+  gap: 12px;
+}
+
+.parcel-form-field {
+  display: grid;
+  gap: 6px;
+  color: #374151;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.parcel-form-field input,
+.parcel-form-field select {
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111827;
+  font: inherit;
+  font-size: 15px;
+}
+
+.parcel-sheet-status {
+  margin: 0;
+  color: #374151;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.parcel-sheet-status.is-error {
+  color: #b91c1c;
+}
+
+.parcel-sheet-status.is-success {
+  color: #166534;
+  font-weight: 700;
+}
+
+.parcel-sheet-actions,
+.saved-parcel-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.saved-parcel-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #d6d9de;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.saved-parcel-card + .saved-parcel-card {
+  margin-top: 10px;
+}
+
+.saved-parcel-card h3,
+.saved-parcel-summary,
+.saved-parcel-date {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.saved-parcel-card h3 {
+  color: #111827;
+  font-size: 15px;
+}
+
+.saved-parcel-summary,
+.saved-parcel-date {
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.parcel-action.danger,
+.panel-button.danger {
+  border-color: #dc2626;
+  background: #dc2626;
+  color: #ffffff;
+}
+
+@media (max-width: 700px) {
+  .mobile-my-parcels-button:not([hidden]) {
+    position: fixed;
+    bottom: calc(16px + env(safe-area-inset-bottom));
+    left: calc(12px + env(safe-area-inset-left));
+    z-index: 940;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .parcel-sheet-actions,
+  .saved-parcel-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mobile-my-parcels-button:focus-visible,
+.mobile-parcel-save-button:focus-visible,
+.parcel-sheet .panel-button:focus-visible,
+.parcel-form-field input:focus-visible,
+.parcel-form-field select:focus-visible {
+  outline: 3px solid #99f6e4;
+  outline-offset: 2px;
+}
