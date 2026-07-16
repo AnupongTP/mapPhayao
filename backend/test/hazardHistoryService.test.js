@@ -1,11 +1,18 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const gistdaClient = require("../src/services/gistdaClient");
 const hazardHistoryService = require("../src/services/hazardHistoryService");
 const locationReportService = require("../src/services/locationReportService");
 const locationReportController = require("../src/controllers/locationReportController");
 const lineController = require("../src/controllers/lineController");
+
+const hazardHistorySource = fs.readFileSync(
+  path.join(__dirname, "../src/services/hazardHistoryService.js"),
+  "utf8",
+);
 
 function floodFeature(properties = {}, geometry = { type: "Polygon", coordinates: [] }) {
   return {
@@ -15,13 +22,58 @@ function floodFeature(properties = {}, geometry = { type: "Polygon", coordinates
   };
 }
 
-function floodCollection(features, extra = {}) {
+function createMockDb(rows = [], options = {}) {
+  const calls = [];
   return {
-    type: "FeatureCollection",
-    numberMatched: features.length,
-    numberReturned: features.length,
-    features,
-    ...extra,
+    calls,
+    query: async (text, params) => {
+      calls.push({ text, params });
+      if (options.error) {
+        throw options.error;
+      }
+      return { rows };
+    },
+  };
+}
+
+function floodDbRow(overrides = {}) {
+  return {
+    freq: 3,
+    area_rai: 10.5,
+    province_id: 56,
+    province_name: "จ.พะเยา",
+    district_id: 5601,
+    district_name: "อ.เมืองพะเยา",
+    subdistrict_id: 560101,
+    subdistrict_name: "ต.แม่กา",
+    start_year: 2015,
+    end_year: 2024,
+    years_detected: [2020, 2022, 2024],
+    yearly_frequency: [
+      { year: 2020, frequency: 1 },
+      { year: 2022, frequency: 1 },
+      { year: 2024, frequency: 1 },
+    ],
+    ...overrides,
+  };
+}
+
+function droughtDbRow(overrides = {}) {
+  return {
+    tambon_name: "แม่กา",
+    district_name: "เมืองพะเยา",
+    province_name: "พะเยา",
+    total_occurrences: 2,
+    years_detected: [2019, 2023],
+    yearly_frequency: [
+      { year: 2019, frequency: 1 },
+      { year: 2023, frequency: 1 },
+    ],
+    start_year: 2018,
+    end_year: 2024,
+    response_status: "success",
+    source: "GISTDA",
+    ...overrides,
   };
 }
 
@@ -29,88 +81,93 @@ test.beforeEach(() => {
   hazardHistoryService.clearCache();
 });
 
-test("flood empty FeatureCollection returns none_detected", async () => {
+test("flood successful empty database result returns none_detected", async () => {
+  const mockDb = createMockDb([]);
   const result = await hazardHistoryService.getFloodRecurrence(
     { latitude: 19, longitude: 99 },
-    {
-      requestJson: async () => ({ body: floodCollection([]) }),
-    },
+    { db: mockDb },
   );
 
   assert.equal(result.status, "none_detected");
   assert.equal(result.intersects, false);
+  assert.deepEqual(mockDb.calls[0].params, [99, 19, hazardHistoryService.FLOOD_WINDOW_YEARS]);
+  assert.match(mockDb.calls[0].text, /ST_MakePoint\(\$1::double precision, \$2::double precision\)/);
+  assert.match(mockDb.calls[0].text, /ST_SetSRID\(ST_MakePoint\(\$1::double precision, \$2::double precision\), 4326\) AS geom_4326/);
+  assert.match(mockDb.calls[0].text, /ST_Covers\(\s*f\.geom,\s*p\.geom_4326\s*\)/);
+  assert.doesNotMatch(mockDb.calls[0].text, /geom_32647|ST_Transform\([\s\S]*32647/);
+  assert.doesNotMatch(mockDb.calls[0].text, /ST_Area\(/);
 });
 
-test("flood polygon covers point and normalizes dynamic years", async () => {
-  const feature = floodFeature({
-    freq: 2,
-    area_rai: 10.5,
-    pv_idn: 56,
-    pv_tn: "จ.พะเยา",
-    ap_idn: 5601,
-    ap_tn: "อ.เมืองพะเยา",
-    tb_idn: 560101,
-    tb_tn: "ต.แม่กา",
-    y_2020: 1,
-    y_2019: 0,
-    y_2024: 1,
-  });
+test("flood database match returns detected recurrence with safe fields", async () => {
   const result = await hazardHistoryService.getFloodRecurrence(
     { latitude: 19, longitude: 99 },
-    {
-      requestJson: async () => ({ body: floodCollection([feature]) }),
-      coversPoint: async () => true,
-    },
+    { db: createMockDb([floodDbRow()]) },
   );
 
   assert.equal(result.status, "detected");
-  assert.deepEqual(result.yearsDetected, [2020, 2024]);
-  assert.deepEqual(result.yearlyFrequency.map((item) => item.year), [2019, 2020, 2024]);
-  assert.equal(result.frequency, 2);
-  assert.equal(result.dataPeriod.startYear, 2019);
+  assert.deepEqual(result.yearsDetected, [2020, 2022, 2024]);
+  assert.deepEqual(result.yearlyFrequency.map((item) => item.year), [2020, 2022, 2024]);
+  assert.equal(result.frequency, 3);
+  assert.equal(result.dataPeriod.startYear, 2015);
   assert.equal(result.dataPeriod.endYear, 2024);
   assert.equal(result.administrativeArea.subdistrict.name, "ต.แม่กา");
+  assert.equal(result.source, "GISTDA");
+  assert.ok(result.checkedAt);
 });
 
-test("flood bbox candidate outside exact point is not detected", async () => {
-  const result = await hazardHistoryService.getFloodRecurrence(
-    { latitude: 19, longitude: 99 },
-    {
-      requestJson: async () => ({ body: floodCollection([floodFeature({ freq: 5, y_2024: 1 })]) }),
-      coversPoint: async () => false,
-    },
-  );
+test("flood database result is cached by rounded point", async () => {
+  const mockDb = createMockDb([floodDbRow()]);
 
-  assert.equal(result.status, "none_detected");
-  assert.equal(result.intersects, false);
+  await hazardHistoryService.getFloodRecurrence({ latitude: 19, longitude: 99 }, { db: mockDb });
+  await hazardHistoryService.getFloodRecurrence({ latitude: 19, longitude: 99 }, { db: mockDb });
+
+  assert.equal(mockDb.calls.length, 1);
 });
 
-test("flood MultiPolygon boundary match uses coversPoint result", async () => {
-  const feature = floodFeature(
-    { freq: 1, y_2024: 1 },
-    { type: "MultiPolygon", coordinates: [] },
-  );
-  const result = await hazardHistoryService.getFloodRecurrence(
+test("flood database errors return unavailable with safe diagnostics", async () => {
+  const relationMissing = createMockDb([], { error: { code: "42P01", message: "relation missing raw sql" } });
+  const columnMissing = createMockDb([], { error: { code: "42703", message: "column missing raw sql" } });
+  const timeout = createMockDb([], { error: { code: "57014", message: "statement timeout with raw sql" } });
+  const generic = createMockDb([], { error: new Error("database password should not leak") });
+
+  const missingRelation = await hazardHistoryService.getFloodRecurrence(
     { latitude: 19, longitude: 99 },
-    {
-      requestJson: async () => ({ body: floodCollection([feature]) }),
-      coversPoint: async () => true,
-    },
+    { db: relationMissing },
+  );
+  hazardHistoryService.clearCache();
+  const missingColumn = await hazardHistoryService.getFloodRecurrence(
+    { latitude: 19, longitude: 99 },
+    { db: columnMissing },
+  );
+  hazardHistoryService.clearCache();
+  const timedOut = await hazardHistoryService.getFloodRecurrence(
+    { latitude: 19, longitude: 99 },
+    { db: timeout },
+  );
+  hazardHistoryService.clearCache();
+  const queryFailed = await hazardHistoryService.getFloodRecurrence(
+    { latitude: 19, longitude: 99 },
+    { db: generic },
   );
 
-  assert.equal(result.status, "detected");
+  assert.equal(missingRelation.status, "unavailable");
+  assert.deepEqual(missingRelation._warnings, ["flood-db-relation-missing"]);
+  assert.deepEqual(missingColumn._warnings, ["flood-db-column-missing"]);
+  assert.deepEqual(timedOut._warnings, ["flood-db-timeout"]);
+  assert.deepEqual(queryFailed._warnings, ["flood-db-query-failed"]);
+  assert.equal(JSON.stringify(queryFailed).includes("database password"), false);
 });
 
-test("flood point in polygon hole follows exact coversPoint result", async () => {
+test("flood invalid coordinates return unavailable without querying", async () => {
+  const mockDb = createMockDb([floodDbRow()]);
   const result = await hazardHistoryService.getFloodRecurrence(
-    { latitude: 19, longitude: 99 },
-    {
-      requestJson: async () => ({ body: floodCollection([floodFeature({ freq: 1, y_2024: 1 })]) }),
-      coversPoint: async () => false,
-    },
+    { latitude: 91, longitude: 99 },
+    { db: mockDb },
   );
 
-  assert.equal(result.status, "none_detected");
+  assert.equal(result.status, "unavailable");
+  assert.deepEqual(result._warnings, ["INVALID_LOCATION"]);
+  assert.equal(mockDb.calls.length, 0);
 });
 
 test("flood frequency mismatch retains official frequency and warns", () => {
@@ -125,106 +182,61 @@ test("flood frequency mismatch retains official frequency and warns", () => {
   assert.ok(result._warnings.includes("FREQUENCY_MISMATCH"));
 });
 
-test("flood multiple covering features select highest freq", async () => {
-  const result = await hazardHistoryService.getFloodRecurrence(
-    { latitude: 19, longitude: 99 },
-    {
-      requestJson: async () => ({ body: floodCollection([
-        floodFeature({ freq: 1, y_2020: 1 }),
-        floodFeature({ freq: 3, y_2020: 1, y_2021: 1, y_2022: 1 }),
-      ]) }),
-      coversPoint: async () => true,
-    },
-  );
-
-  assert.equal(result.frequency, 3);
-  assert.ok(result._warnings.includes("MULTIPLE_MATCHING_FEATURES"));
-});
-
-test("flood pagination follows numberMatched", async () => {
-  const offsets = [];
-  const result = await hazardHistoryService.getFloodRecurrence(
-    { latitude: 19, longitude: 99 },
-    {
-      requestJson: async (path, options) => {
-        offsets.push(Number(options.query.offset));
-        if (options.query.offset === 0) {
-          return { body: floodCollection([floodFeature({ freq: 1, y_2020: 1 })], { numberMatched: 2, numberReturned: 1 }) };
-        }
-        return { body: floodCollection([floodFeature({ freq: 2, y_2021: 1, y_2022: 1 })], { numberMatched: 2, numberReturned: 1 }) };
-      },
-      coversPoint: async () => true,
-    },
-  );
-
-  assert.deepEqual(offsets, [0, 1]);
-  assert.equal(result.frequency, 2);
-});
-
-test("flood pagination safety cap returns unavailable", async () => {
-  const features = Array.from({ length: 1000 }, () => floodFeature({ freq: 1, y_2020: 1 }));
-  const result = await hazardHistoryService.getFloodRecurrence(
-    { latitude: 19, longitude: 99 },
-    {
-      requestJson: async (path, options) => ({
-        body: floodCollection(features, {
-          numberMatched: hazardHistoryService.FLOOD_FEATURE_CAP + 1,
-          numberReturned: 1000,
-        }),
-      }),
-      coversPoint: async () => true,
-    },
-  );
-
-  assert.equal(result.status, "unavailable");
-});
-
-test("flood invalid GeoJSON and unsupported geometry return unavailable", async () => {
-  const invalid = await hazardHistoryService.getFloodRecurrence(
-    { latitude: 19, longitude: 99 },
-    { requestJson: async () => ({ body: { type: "FeatureCollection", features: null } }) },
-  );
-  hazardHistoryService.clearCache();
-  const unsupported = await hazardHistoryService.getFloodRecurrence(
-    { latitude: 19, longitude: 99 },
-    { requestJson: async () => ({ body: floodCollection([floodFeature({ freq: 1 }, { type: "Point", coordinates: [99, 19] })]) }) },
-  );
-
-  assert.equal(invalid.status, "unavailable");
-  assert.equal(unsupported.status, "unavailable");
-});
-
-test("drought empty array returns none_detected", async () => {
+test("drought successful empty tambon response returns none_detected", async () => {
   const result = await hazardHistoryService.getDroughtRecurrence(
     { latitude: 19, longitude: 99 },
-    { requestJson: async () => ({ body: [] }) },
+    { db: createMockDb([droughtDbRow({
+      response_status: "empty",
+      total_occurrences: null,
+      years_detected: [],
+      yearly_frequency: [],
+      start_year: null,
+      end_year: null,
+    })]) },
   );
 
   assert.equal(result.status, "none_detected");
 });
 
-test("drought valid record maps years and total", async () => {
+test("drought point outside synced tambon coverage returns no_coverage", async () => {
   const result = await hazardHistoryService.getDroughtRecurrence(
     { latitude: 19, longitude: 99 },
-    {
-      requestJson: async () => ({ body: [{
-        province_name: "พะเยา",
-        district_name: "เมืองพะเยา",
-        subdistrict_name: "แม่กา",
-        total: 2,
-        detail: [
-          { year: "2023", freq: 1 },
-          { year: "2019", freq: 1 },
-          { year: "2018", freq: 0 },
-        ],
-      }] }),
-    },
+    { db: createMockDb([]) },
+  );
+
+  assert.equal(result.status, "no_coverage");
+  assert.deepEqual(result._warnings, ["drought-admin-area-not-found"]);
+});
+
+test("drought database match maps years and total", async () => {
+  const mockDb = createMockDb([droughtDbRow()]);
+  const result = await hazardHistoryService.getDroughtRecurrence(
+    { latitude: 19, longitude: 99 },
+    { db: mockDb },
   );
 
   assert.equal(result.status, "detected");
   assert.equal(result.totalOccurrences, 2);
   assert.deepEqual(result.yearsDetected, [2019, 2023]);
   assert.equal(result.dataPeriod.startYear, 2018);
+  assert.equal(result.administrativeArea.subdistrict.name, "แม่กา");
+  assert.equal(result.source, "GISTDA");
+  assert.ok(result.checkedAt);
+  assert.deepEqual(mockDb.calls[0].params, [99, 19]);
+  assert.match(mockDb.calls[0].text, /ST_MakePoint\(\$1::double precision, \$2::double precision\)/);
+  assert.match(mockDb.calls[0].text, /ST_SetSRID\(ST_MakePoint\(\$1::double precision, \$2::double precision\), 4326\) AS geom_4326/);
+  assert.match(mockDb.calls[0].text, /ST_Covers\(\s*d\.geom,\s*p\.geom_4326\s*\)/);
+  assert.doesNotMatch(mockDb.calls[0].text, /geom_32647|ST_Transform\([\s\S]*32647/);
+  assert.doesNotMatch(mockDb.calls[0].text, /ST_Area\(/);
+});
+
+test("drought database result is cached by rounded point", async () => {
+  const mockDb = createMockDb([droughtDbRow()]);
+
+  await hazardHistoryService.getDroughtRecurrence({ latitude: 19, longitude: 99 }, { db: mockDb });
+  await hazardHistoryService.getDroughtRecurrence({ latitude: 19, longitude: 99 }, { db: mockDb });
+
+  assert.equal(mockDb.calls.length, 1);
 });
 
 test("drought total may differ from detected year count", () => {
@@ -247,28 +259,56 @@ test("drought malformed year/freq is skipped and warned", () => {
   assert.ok(result._warnings.includes("MALFORMED_DROUGHT_YEARLY_VALUE"));
 });
 
-test("drought multiple records select highest total", async () => {
+test("drought stored upstream failure remains unavailable", async () => {
   const result = await hazardHistoryService.getDroughtRecurrence(
     { latitude: 19, longitude: 99 },
-    {
-      requestJson: async () => ({ body: [
-        { total: 1, detail: [{ year: "2020", freq: 1 }] },
-        { total: 3, detail: [{ year: "2021", freq: 3 }] },
-      ] }),
-    },
-  );
-
-  assert.equal(result.totalOccurrences, 3);
-  assert.ok(result._warnings.includes("MULTIPLE_DROUGHT_RECORDS"));
-});
-
-test("drought invalid JSON shape returns unavailable", async () => {
-  const result = await hazardHistoryService.getDroughtRecurrence(
-    { latitude: 19, longitude: 99 },
-    { requestJson: async () => ({ body: { total: 1 } }) },
+    { db: createMockDb([droughtDbRow({ response_status: "UPSTREAM_503" })]) },
   );
 
   assert.equal(result.status, "unavailable");
+  assert.deepEqual(result._warnings, ["drought-source-stored-unavailable"]);
+});
+
+test("drought database errors return unavailable with safe diagnostics", async () => {
+  const relationMissing = createMockDb([], { error: { code: "42P01", message: "relation missing raw sql" } });
+  const columnMissing = createMockDb([], { error: { code: "42703", message: "column missing raw sql" } });
+  const timeout = createMockDb([], { error: { code: "57014", message: "statement timeout with raw sql" } });
+  const generic = createMockDb([], { error: new Error("database password should not leak") });
+
+  const missingRelation = await hazardHistoryService.getDroughtRecurrence(
+    { latitude: 19, longitude: 99 },
+    { db: relationMissing },
+  );
+  hazardHistoryService.clearCache();
+  const missingColumn = await hazardHistoryService.getDroughtRecurrence(
+    { latitude: 19, longitude: 99 },
+    { db: columnMissing },
+  );
+  hazardHistoryService.clearCache();
+  const timedOut = await hazardHistoryService.getDroughtRecurrence(
+    { latitude: 19, longitude: 99 },
+    { db: timeout },
+  );
+  hazardHistoryService.clearCache();
+  const queryFailed = await hazardHistoryService.getDroughtRecurrence(
+    { latitude: 19, longitude: 99 },
+    { db: generic },
+  );
+
+  assert.equal(missingRelation.status, "unavailable");
+  assert.deepEqual(missingRelation._warnings, ["drought-db-relation-missing"]);
+  assert.deepEqual(missingColumn._warnings, ["drought-db-column-missing"]);
+  assert.deepEqual(timedOut._warnings, ["drought-db-timeout"]);
+  assert.deepEqual(queryFailed._warnings, ["drought-db-query-failed"]);
+  assert.equal(JSON.stringify(queryFailed).includes("database password"), false);
+});
+
+test("point hazard runtime uses local PostGIS tables instead of the live GISTDA client", () => {
+  assert.doesNotMatch(hazardHistorySource, /require\("\.\/gistdaClient"\)/);
+  assert.doesNotMatch(hazardHistorySource, /requestJson\(/);
+  assert.doesNotMatch(hazardHistorySource, /GISTDA_API_KEY/);
+  assert.match(hazardHistorySource, /gis\.flood_recurrence_pyo/);
+  assert.match(hazardHistorySource, /gis\.drought_recurrence_tambon_pyo/);
 });
 
 test("gistda client handles missing key and upstream errors without exposing secrets", async () => {
@@ -336,7 +376,7 @@ test("gistda client handles missing key and upstream errors without exposing sec
   }
 });
 
-test("combined report keeps suitability when hazards succeed or fail", async () => {
+test("combined report keeps suitability when hazards succeed or fail independently", async () => {
   const baseSuitability = {
     success: true,
     found: true,
@@ -352,6 +392,7 @@ test("combined report keeps suitability when hazards succeed or fail", async () 
         getDroughtRecurrence: async () => hazardHistoryService.buildNoDroughtResult(),
         buildUnavailableResult: hazardHistoryService.buildUnavailableResult,
       },
+      logger: { warn: () => {} },
     },
   );
   const floodFails = await locationReportService.getLocationReport(
@@ -363,6 +404,7 @@ test("combined report keeps suitability when hazards succeed or fail", async () 
         getDroughtRecurrence: async () => hazardHistoryService.buildNoDroughtResult(),
         buildUnavailableResult: hazardHistoryService.buildUnavailableResult,
       },
+      logger: { warn: () => {} },
     },
   );
   const droughtFails = await locationReportService.getLocationReport(
@@ -374,24 +416,74 @@ test("combined report keeps suitability when hazards succeed or fail", async () 
         getDroughtRecurrence: async () => { throw new Error("drought fail"); },
         buildUnavailableResult: hazardHistoryService.buildUnavailableResult,
       },
+      logger: { warn: () => {} },
     },
   );
-  const bothFail = await locationReportService.getLocationReport(
+  const bothEmpty = await locationReportService.getLocationReport(
     { latitude: 19, longitude: 99 },
     {
       riceSuitabilityService: { getPointSummary: async () => baseSuitability },
       hazardHistoryService: {
-        getFloodRecurrence: async () => { throw new Error("flood fail"); },
-        getDroughtRecurrence: async () => { throw new Error("drought fail"); },
+        getFloodRecurrence: async () => hazardHistoryService.buildNoFloodResult(),
+        getDroughtRecurrence: async () => hazardHistoryService.buildNoDroughtResult(),
         buildUnavailableResult: hazardHistoryService.buildUnavailableResult,
       },
+      logger: { warn: () => {} },
     },
   );
 
   assert.equal(success.hazardHistory.floodRecurrence.status, "none_detected");
   assert.equal(floodFails.hazardHistory.floodRecurrence.status, "unavailable");
+  assert.equal(floodFails.hazardHistory.droughtRecurrence.status, "none_detected");
+  assert.equal(droughtFails.hazardHistory.floodRecurrence.status, "none_detected");
   assert.equal(droughtFails.hazardHistory.droughtRecurrence.status, "unavailable");
-  assert.equal(bothFail.found, true);
+  assert.equal(bothEmpty.hazardHistory.floodRecurrence.status, "none_detected");
+  assert.equal(bothEmpty.hazardHistory.droughtRecurrence.status, "none_detected");
+});
+
+test("location report strips internal warnings but keeps sanitized partial error categories", async () => {
+  const warnings = [];
+  const report = await locationReportService.getLocationReport(
+    { latitude: 19, longitude: 99 },
+    {
+      riceSuitabilityService: { getPointSummary: async () => ({ success: true, found: true }) },
+      hazardHistoryService: {
+        getFloodRecurrence: async () => hazardHistoryService.buildUnavailableResult("flood", "flood-db-relation-missing"),
+        getDroughtRecurrence: async () => hazardHistoryService.buildUnavailableResult("drought", "drought-db-timeout"),
+        buildUnavailableResult: hazardHistoryService.buildUnavailableResult,
+      },
+      logger: {
+        warn: (message) => warnings.push(JSON.parse(message)),
+      },
+    },
+  );
+  const serialized = JSON.stringify(report);
+
+  assert.equal(report.hazardHistory.floodRecurrence.status, "unavailable");
+  assert.equal(report.hazardHistory.droughtRecurrence.status, "unavailable");
+  assert.equal(serialized.includes("_warnings"), false);
+  assert.deepEqual(
+    report.partialErrors.map((item) => item.code),
+    ["flood-db-relation-missing", "drought-db-timeout"],
+  );
+  assert.equal(serialized.includes("relation missing raw sql"), false);
+  assert.equal(serialized.includes("statement timeout"), false);
+  assert.deepEqual(warnings, [
+    {
+      event: "hazard-history-diagnostic",
+      source: "GISTDA",
+      dataset: "flood_recurrence",
+      code: "flood-db-relation-missing",
+    },
+    {
+      event: "hazard-history-diagnostic",
+      source: "GISTDA",
+      dataset: "drought_recurrence",
+      code: "drought-db-timeout",
+    },
+  ]);
+  assert.equal(JSON.stringify(warnings).includes("19"), false);
+  assert.equal(JSON.stringify(warnings).includes("99"), false);
 });
 
 test("combined report can retain hazards when suitability fails", async () => {
@@ -404,6 +496,7 @@ test("combined report can retain hazards when suitability fails", async () => {
         getDroughtRecurrence: async () => hazardHistoryService.buildNoDroughtResult(),
         buildUnavailableResult: hazardHistoryService.buildUnavailableResult,
       },
+      logger: { warn: () => {} },
     },
   );
 
@@ -427,7 +520,7 @@ test("LIFF token verification remains required", () => {
   assert.equal(validation.error, "idToken is required and must be a non-empty string");
 });
 
-test("normalized response contains no geometry or secret", async () => {
+test("normalized response contains no geometry, secret, raw error, or exact coordinate log", async () => {
   const report = await locationReportService.getLocationReport(
     { latitude: 19, longitude: 99 },
     {
@@ -444,6 +537,7 @@ test("normalized response contains no geometry or secret", async () => {
         }),
         buildUnavailableResult: hazardHistoryService.buildUnavailableResult,
       },
+      logger: { warn: () => {} },
     },
   );
   const serialized = JSON.stringify(report);
@@ -452,4 +546,6 @@ test("normalized response contains no geometry or secret", async () => {
   assert.ok(!serialized.includes("geometry"));
   assert.ok(!serialized.includes("GISTDA_API_KEY"));
   assert.ok(!serialized.includes("_id"));
+  assert.ok(!serialized.includes("Authorization"));
+  assert.ok(!serialized.includes("LINE"));
 });

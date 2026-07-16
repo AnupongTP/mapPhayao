@@ -34,10 +34,28 @@ function collectWarnings(dataset, result) {
   ));
 }
 
+function logPartialErrors(partialErrors, logger = console) {
+  if (!logger || typeof logger.warn !== "function") {
+    return;
+  }
+
+  partialErrors
+    .filter((item) => item?.source === "GISTDA")
+    .forEach((item) => {
+      logger.warn(JSON.stringify({
+        event: "hazard-history-diagnostic",
+        source: item.source,
+        dataset: item.dataset,
+        code: item.code,
+      }));
+    });
+}
+
 async function getLocationReport({ latitude, longitude }, dependencies = {}) {
   const suitabilityService = dependencies.riceSuitabilityService || riceSuitabilityService;
   const hazardService = dependencies.hazardHistoryService || hazardHistoryService;
   const agriWeatherService = dependencies.weatherService || weatherService;
+  const logger = dependencies.logger || console;
 
   const [suitabilityResult, floodResult, droughtResult, weatherResult] = await Promise.allSettled([
     suitabilityService.getPointSummary({ latitude, longitude }),
@@ -77,6 +95,7 @@ async function getLocationReport({ latitude, longitude }, dependencies = {}) {
 
   partialErrors.push(...collectWarnings("flood_recurrence", flood));
   partialErrors.push(...collectWarnings("drought_recurrence", drought));
+  logPartialErrors(partialErrors, logger);
 
   return {
     ...base,
@@ -98,4 +117,5 @@ async function getLocationReport({ latitude, longitude }, dependencies = {}) {
 
 module.exports = {
   getLocationReport,
+  logPartialErrors,
 };
