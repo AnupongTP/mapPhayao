@@ -10,7 +10,7 @@ const SERVER_DETAIL_URL = "https://example.com/mapphayao1/frontend/index.html";
 const EXPECTED_DETAIL_URL =
   "https://example.com/mapphayao1/frontend/index.html?lat=19.123456&lng=99.123456";
 const LONG_PUBLIC_APP_URL =
-  "https://rapidly-marijuana-harper-partly.trycloudflare.com/mapphayao1/frontend/index.html";
+  "https://dishes-prefix-revised-whom.trycloudflare.com/mapphayao1/frontend/index.html";
 const LONG_EXPECTED_DETAIL_URL =
   `${LONG_PUBLIC_APP_URL}?lat=19.039846300072156&lng=99.94005686022584`;
 const CLIENT_USER_ID = "client-supplied-user";

@@ -325,12 +325,9 @@ async function updateOwnedParcel(id, payload, appUserId) {
   const hasCropType = Object.prototype.hasOwnProperty.call(payload, "cropType");
   const hasRiceVariety = Object.prototype.hasOwnProperty.call(payload, "riceVariety");
   const hasPlantingDate = Object.prototype.hasOwnProperty.call(payload, "plantingDate");
+  const hasGeometry = Object.prototype.hasOwnProperty.call(payload, "geometry");
 
-  if (Object.prototype.hasOwnProperty.call(payload, "geometry")) {
-    throw createHttpError(400, "ยังไม่เปิดใช้งานการแก้ไขขอบเขตแปลง");
-  }
-
-  if (!hasParcelName && !hasCropType && !hasRiceVariety && !hasPlantingDate) {
+  if (!hasParcelName && !hasCropType && !hasRiceVariety && !hasPlantingDate && !hasGeometry) {
     throw createHttpError(400, "ไม่มีข้อมูลสำหรับแก้ไข");
   }
 
@@ -338,9 +335,132 @@ async function updateOwnedParcel(id, payload, appUserId) {
   const cropType = hasCropType ? normalizeText(payload.cropType) : null;
   const riceVariety = hasRiceVariety ? normalizeText(payload.riceVariety) : null;
   const plantingDate = hasPlantingDate ? validateDate(payload.plantingDate) : null;
+  const geometry = hasGeometry ? validateGeometry(payload.geometry) : null;
 
   if (hasCropType && !cropType) {
     throw createHttpError(400, "กรุณาระบุชนิดพืช");
+  }
+
+  if (hasGeometry) {
+    const geometryJson = JSON.stringify(geometry);
+    try {
+      const result = await db.query(
+        `
+        WITH matched AS (
+          SELECT id
+          FROM app.parcels
+          WHERE id = $1
+            AND owner_user_id = $11
+        ),
+        prepared AS (
+          SELECT ST_Multi(
+            ST_CollectionExtract(
+              ST_MakeValid(
+                ST_Transform(
+                  ST_SetSRID(ST_GeomFromGeoJSON($10), 4326),
+                  32647
+                )
+              ),
+              3
+            )
+          )::geometry(MultiPolygon, 32647) AS geom
+        ),
+        checked AS (
+          SELECT
+            geom,
+            ST_IsEmpty(geom) AS is_empty,
+            ST_IsValid(geom) AS is_valid,
+            ST_Area(geom) AS area_sqm
+          FROM prepared
+        ),
+        updated AS (
+          UPDATE app.parcels
+          SET
+            parcel_name = CASE WHEN $2 THEN $3 ELSE parcel_name END,
+            crop_type = CASE WHEN $4 THEN $5 ELSE crop_type END,
+            rice_variety = CASE WHEN $6 THEN $7 ELSE rice_variety END,
+            planting_date = CASE WHEN $8 THEN $9::date ELSE planting_date END,
+            geom = checked.geom,
+            updated_at = now()
+          FROM checked, matched
+          WHERE app.parcels.id = matched.id
+            AND NOT checked.is_empty
+            AND checked.is_valid
+            AND checked.area_sqm >= $12
+          RETURNING app.parcels.id
+        )
+        SELECT
+          app.parcels.id,
+          app.parcels.parcel_code,
+          app.parcels.parcel_name,
+          app.parcels.crop_type,
+          app.parcels.rice_variety,
+          to_char(app.parcels.planting_date, 'YYYY-MM-DD') AS planting_date,
+          ROUND(ST_Area(app.parcels.geom)::numeric, 2) AS area_sqm,
+          ROUND((ST_Area(app.parcels.geom) / 1600.0)::numeric, 2) AS area_rai,
+          ST_AsGeoJSON(ST_Transform(app.parcels.geom, 4326))::json AS geometry,
+          app.parcels.created_at,
+          app.parcels.updated_at,
+          checked.is_empty AS was_empty,
+          checked.is_valid AS was_valid,
+          checked.area_sqm AS checked_area_sqm,
+          (SELECT COUNT(*)::int FROM matched) AS matched_count
+        FROM checked
+        LEFT JOIN updated ON true
+        LEFT JOIN app.parcels ON app.parcels.id = updated.id;
+        `,
+        [
+          parcelId,
+          hasParcelName,
+          parcelName,
+          hasCropType,
+          cropType,
+          hasRiceVariety,
+          riceVariety,
+          hasPlantingDate,
+          plantingDate,
+          geometryJson,
+          ownerUserId,
+          MIN_PARCEL_AREA_SQM,
+        ],
+      );
+
+      const row = result.rows[0];
+      const parcel = row && row.id ? mapParcelRow(row) : null;
+      if (parcel) {
+        return parcel;
+      }
+
+      if (!row || Number(row.matched_count) === 0) {
+        throw createHttpError(404, PARCEL_NOT_FOUND_MESSAGE);
+      }
+
+      if (row.was_empty || !row.was_valid) {
+        throw createHttpError(400, "ขอบเขตแปลงไม่ถูกต้อง กรุณาวาดใหม่");
+      }
+
+      if (Number(row.checked_area_sqm) < MIN_PARCEL_AREA_SQM) {
+        throw createHttpError(400, "พื้นที่แปลงมีขนาดเล็กเกินไป กรุณาวาดขอบเขตใหม่");
+      }
+
+      throw createHttpError(400, "ไม่สามารถบันทึกขอบเขตแปลงได้ กรุณาลองใหม่");
+    } catch (error) {
+      if (error.statusCode) {
+        throw error;
+      }
+
+      if (
+        error.message.includes("invalid GeoJson") ||
+        error.message.includes("Geometry SRID") ||
+        error.message.includes("Invalid coordinate") ||
+        error.message.includes("transform:") ||
+        error.message.includes("parse error")
+      ) {
+        throw createHttpError(400, "ขอบเขตแปลงไม่ถูกต้อง กรุณาวาดใหม่");
+      }
+
+      throw error;
+    }
   }
 
   const result = await db.query(

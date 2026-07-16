@@ -6,9 +6,21 @@ const vm = require("node:vm");
 
 const LOCAL_API_BASE_URL = "http://localhost:3000/api";
 const RENDER_API_BASE_URL = "https://mapphayao-backend.onrender.com/api";
-const CLOUDFLARE_FRONTEND_HOST = "rapidly-marijuana-harper-partly.trycloudflare.com";
+const CLOUDFLARE_FRONTEND_HOST = "dishes-prefix-revised-whom.trycloudflare.com";
+const OLD_CLOUDFLARE_FRONTEND_HOST = [
+  "rapidly-marijuana-harper-partly",
+  "trycloudflare.com",
+].join(".");
 const OBSOLETE_BACKEND_TUNNEL =
   "https://embedded-nextel-reservoir-strike.trycloudflare.com/api";
+const ACTIVE_FRONTEND_RUNTIME_FILES = [
+  "index.html",
+  "js/config.js",
+  "js/api.js",
+  "js/liff-mode.js",
+  "js/map.js",
+  "liff/liff-config.js",
+];
 
 function createFrontendContext(hostname) {
   const calls = [];
@@ -74,6 +86,15 @@ test("active config source does not contain obsolete backend tunnel", () => {
   const configSource = fs.readFileSync(path.join(__dirname, "../js/config.js"), "utf8");
 
   assert.equal(configSource.includes(OBSOLETE_BACKEND_TUNNEL), false);
+  assert.equal(configSource.includes(CLOUDFLARE_FRONTEND_HOST), true);
+});
+
+test("active frontend runtime source does not contain old Cloudflare frontend domain", () => {
+  for (const relativePath of ACTIVE_FRONTEND_RUNTIME_FILES) {
+    const source = fs.readFileSync(path.join(__dirname, "..", relativePath), "utf8");
+
+    assert.equal(source.includes(OLD_CLOUDFLARE_FRONTEND_HOST), false, relativePath);
+  }
 });
 
 test("location-report URL contains exactly one /api segment", async () => {

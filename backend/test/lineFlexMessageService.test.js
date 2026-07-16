@@ -6,8 +6,10 @@ const {
 } = require("../src/services/lineFlexMessageService");
 
 const DETAIL_URL = "https://example.com/map";
+const LONG_PUBLIC_APP_URL =
+  "https://dishes-prefix-revised-whom.trycloudflare.com/mapphayao1/frontend/index.html";
 const LONG_DETAIL_URL =
-  "https://rapidly-marijuana-harper-partly.trycloudflare.com/mapphayao1/frontend/index.html?lat=19.039846300072156&lng=99.94005686022584";
+  `${LONG_PUBLIC_APP_URL}?lat=19.039846300072156&lng=99.94005686022584`;
 
 function sampleAnalysis(overrides = {}) {
   const hasOwn = (key) => Object.prototype.hasOwnProperty.call(overrides, key);
@@ -384,7 +386,7 @@ test("footer URI preserves long map-click detailUrl without text truncation", ()
   assert.equal(actions[0].uri.endsWith("lng=99.94005686022584"), true);
   assert.equal(actions[0].uri.includes("..."), false);
   assert.equal(actions[0].uri.length > 120, true);
-  assert.notEqual(actions[0].uri, "https://rapidly-marijuana-harper-partly.trycloudflare.com/mapphayao1/frontend/index.html");
+  assert.notEqual(actions[0].uri, LONG_PUBLIC_APP_URL);
   assert.equal(actions[0].uri.includes("lat=19.039846300072156"), true);
   assert.equal(actions[0].uri.includes("lng=99.94005686022584"), true);
 });

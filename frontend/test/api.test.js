@@ -208,10 +208,12 @@ test("parcel list, detail, update, delete, and re-analysis use the Phase 4 paths
   assert.equal(calls[2].options.method, "PATCH");
   assert.deepEqual(Object.keys(JSON.parse(calls[2].options.body)).sort(), [
     "cropType",
+    "geometry",
     "parcelName",
     "plantingDate",
     "riceVariety",
   ]);
+  assert.deepEqual(JSON.parse(calls[2].options.body).geometry, sampleGeometry);
   assert.equal(calls[3].options.method, "DELETE");
   assert.equal(calls[3].options.body, undefined);
   assert.equal(calls[4].url, `https://backend.example.test/api/parcels/${PARCEL_ID}/analyze`);

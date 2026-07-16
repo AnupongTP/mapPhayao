@@ -12,7 +12,11 @@ const cssSource = fs.readFileSync(path.join(frontendRoot, "css/map.css"), "utf8"
 
 test("mobile LIFF parcel controls and sheets use stable IDs and active script order", () => {
   assert.match(indexSource, /js\/parcel-state\.js\?v=20260716-liff-my-parcels/);
-  assert.match(indexSource, /js\/parcel-management\.js\?v=20260716-liff-my-parcels/);
+  assert.match(indexSource, /js\/formatters\.js\?v=20260716-my-parcels-display-fix/);
+  assert.match(indexSource, /js\/api\.js\?v=20260716-saved-parcel-interaction-menu/);
+  assert.match(indexSource, /js\/ui\.js\?v=20260716-saved-parcel-interaction-menu/);
+  assert.match(indexSource, /js\/parcel-management\.js\?v=20260716-saved-parcel-interaction-menu/);
+  assert.match(indexSource, /js\/map\.js\?v=20260716-saved-parcel-interaction-menu/);
   assert.ok(indexSource.indexOf("js/parcel-state.js") < indexSource.indexOf("js/parcel-management.js"));
   assert.ok(indexSource.indexOf("js/parcel-management.js") < indexSource.indexOf("js/map.js"));
   assert.match(managementSource, /mobile-my-parcels-button/);
@@ -32,7 +36,8 @@ test("save button is hidden before analysis and shown from successful parcel res
 
 test("my parcels button is visible only after authenticated LIFF readiness", () => {
   assert.match(managementSource, /button\.hidden = !\(isLiffEnabled\(\) && liffReady\)/);
-  assert.match(mapSource, /MapParcelManagement\.setLiffReady\(true\)/);
+  assert.match(mapSource, /MapLiffMode && window\.MapLiffMode\.isReady\(\)/);
+  assert.match(mapSource, /MapParcelManagement\.setLiffReady\(liffReady\)/);
   assert.match(mapSource, /MapParcelManagement\.setLiffReady\(false\)/);
 });
 
@@ -54,6 +59,55 @@ test("saved parcel UI renders safe fields only and never renders owner or LINE I
   assert.match(managementSource, /plantingDate/);
   assert.match(managementSource, /areaRai/);
   assert.doesNotMatch(managementSource, /\b(ownerId|owner_id|ownerUserId|owner_user_id|lineUserId|line_user_id|userId|user_id|appUserId|app_user_id)\b/);
+});
+
+test("saved parcel map layers keep owned collection separate from selected state", () => {
+  assert.match(mapSource, /const savedParcelLayers = new L\.FeatureGroup\(\)/);
+  assert.match(mapSource, /const savedParcelLayerById = new Map\(\)/);
+  assert.match(mapSource, /const savedParcelRecordById = new Map\(\)/);
+  assert.match(mapSource, /const savedBoundaryEditLayers = new L\.FeatureGroup\(\)/);
+  assert.match(mapSource, /let selectedSavedParcelId = null/);
+  assert.match(mapSource, /const SAVED_PARCEL_SELECTED_STYLE =/);
+  assert.match(mapSource, /function renderOwnedParcelLayers\(parcels\)/);
+  assert.match(mapSource, /onParcelsLoaded: renderOwnedParcelLayers/);
+  assert.match(mapSource, /selectedSavedParcelId = parcel\.id/);
+  assert.doesNotMatch(
+    mapSource.match(/function selectSavedParcelLayer\(parcel\) \{[\s\S]*?\n  \}/)[0],
+    /clearLayers\(\)/,
+  );
+});
+
+test("saved parcel cards are accordions with separated metadata and boundary actions", () => {
+  assert.match(managementSource, /let expandedSavedParcelId = null/);
+  assert.match(managementSource, /aria-expanded/);
+  assert.match(managementSource, /aria-controls/);
+  assert.match(managementSource, /actions\.hidden = !isExpanded/);
+  assert.match(managementSource, /expandedSavedParcelId = isExpanded \? null : parcel\.id/);
+  assert.match(managementSource, /handlers\.onEditBoundary\?\.\(parcel\)/);
+  assert.match(managementSource, /formatters\.formatAreaRaiCompact\(parcel\.areaRai\)/);
+  assert.match(managementSource, /formatters\.formatThaiDateOnly\(parcel\.plantingDate\)/);
+  assert.match(managementSource, /formatters\.formatThaiDateTime\(parcel\.updatedAt \|\| parcel\.createdAt\)/);
+  assert.doesNotMatch(managementSource, /innerHTML/);
+});
+
+test("saved boundary edit mode uses a separate editable layer and existing authenticated patch", () => {
+  assert.match(mapSource, /function startSavedBoundaryEdit\(parcel\)/);
+  assert.match(mapSource, /savedBoundaryEditLayers\.addLayer\(editLayer\)/);
+  assert.match(mapSource, /editLayer\.editing\.enable\(\)/);
+  assert.match(mapSource, /window\.MapApi\.updateMyParcel\(state\.parcelId, \{ geometry \}\)/);
+  assert.match(mapSource, /handleSavedParcelUpdated\(updatedParcel\)/);
+  assert.match(mapSource, /savedBoundaryEditLayers\.clearLayers\(\)/);
+  assert.match(mapSource, /getParcelInteractionMode\(\) !== "normal"/);
+  assert.match(uiSource, /saveBoundary: "บันทึกขอบเขต"/);
+});
+
+test("saved parcel create, update, delete, and empty list refresh only persisted layers", () => {
+  assert.match(mapSource, /async function refreshOwnedParcelLayersFromApi\(\)/);
+  assert.match(mapSource, /window\.MapApi\.listMyParcels\(\)/);
+  assert.match(mapSource, /if \(!window\.MapParcelManagement\.refreshMyParcelsIfOpen\(\)\) \{/);
+  assert.match(mapSource, /upsertSavedParcelLayer\(parcel\)/);
+  assert.match(mapSource, /removeSavedParcelLayer\(parcelId\)/);
+  assert.match(mapSource, /renderOwnedParcelLayers\(result\?\.parcels\)/);
 });
 
 test("existing point and transient parcel controls remain present", () => {

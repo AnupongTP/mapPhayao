@@ -184,6 +184,9 @@ function installParcelService(calls) {
     calls.updateInputs.push({ id, payload, appUserId });
     const parcel = findOwned(id, appUserId);
     parcel.parcelName = payload.parcelName || parcel.parcelName;
+    if (payload.geometry) {
+      parcel.geometry = payload.geometry;
+    }
     return toPublicParcel(parcel);
   };
   parcelService.deleteOwnedParcel = async (id, appUserId) => {
@@ -304,6 +307,29 @@ test("parcel routes create, list, read, update, delete, and analyze only the aut
   assert.deepEqual(calls.updateInputs.at(-1), {
     id: PARCEL_A,
     payload: { parcelName: "Updated A" },
+    appUserId: APP_USER_A,
+  });
+
+  const updatedGeometry = {
+    type: "MultiPolygon",
+    coordinates: [[[
+      [99.11, 19.11],
+      [99.21, 19.11],
+      [99.21, 19.21],
+      [99.11, 19.21],
+      [99.11, 19.11],
+    ]]],
+  };
+  response = await request(app, `/api/parcels/${PARCEL_A}`, {
+    method: "PATCH",
+    authorization: "Bearer token-a",
+    body: { geometry: updatedGeometry, owner_user_id: APP_USER_B, lineUserId: LINE_USER_B },
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.parcel.geometry, updatedGeometry);
+  assert.deepEqual(calls.updateInputs.at(-1), {
+    id: PARCEL_A,
+    payload: { geometry: updatedGeometry, owner_user_id: APP_USER_B, lineUserId: LINE_USER_B },
     appUserId: APP_USER_A,
   });
 

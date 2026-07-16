@@ -7,7 +7,7 @@
     hostname === "127.0.0.1";
 
   const isCurrentCloudflareTunnel =
-    hostname === "rapidly-marijuana-harper-partly.trycloudflare.com";
+    hostname === "dishes-prefix-revised-whom.trycloudflare.com";
 
   const localApiBaseUrl = "http://localhost:3000/api";
   const renderApiBaseUrl = "https://mapphayao-backend.onrender.com/api";

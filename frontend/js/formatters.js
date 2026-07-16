@@ -1,6 +1,21 @@
 (function (window) {
   const EMPTY_TEXT = "ไม่มีข้อมูล";
   const NOT_EVALUATED_TEXT = "ยังไม่ได้ประเมิน";
+  const PARCEL_EMPTY_TEXT = "—";
+  const THAI_SHORT_MONTHS = [
+    "ม.ค.",
+    "ก.พ.",
+    "มี.ค.",
+    "เม.ย.",
+    "พ.ค.",
+    "มิ.ย.",
+    "ก.ค.",
+    "ส.ค.",
+    "ก.ย.",
+    "ต.ค.",
+    "พ.ย.",
+    "ธ.ค.",
+  ];
 
   const drainageLabels = {
     "ดีมาก": "ระบายน้ำได้ดีมาก",
@@ -301,9 +316,81 @@
     return `${day} ${monthNames[month - 1]} ${year + 543}`;
   }
 
+  function getCropTypeLabel(value) {
+    if (value === null || value === undefined) {
+      return PARCEL_EMPTY_TEXT;
+    }
+
+    const text = String(value).trim().replace(/\s+/g, " ");
+    if (!text) {
+      return PARCEL_EMPTY_TEXT;
+    }
+
+    const normalized = text.toLowerCase();
+    if (normalized === "rice") {
+      return "ข้าว";
+    }
+    if (normalized === "maize") {
+      return "ข้าวโพด";
+    }
+
+    return text;
+  }
+
+  function formatThaiDateOnly(value) {
+    if (value === null || value === undefined) {
+      return PARCEL_EMPTY_TEXT;
+    }
+
+    const text = String(value).trim();
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+    if (!match) {
+      return PARCEL_EMPTY_TEXT;
+    }
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (
+      !Number.isInteger(year) ||
+      !Number.isInteger(month) ||
+      !Number.isInteger(day) ||
+      date.getUTCFullYear() !== year ||
+      date.getUTCMonth() !== month - 1 ||
+      date.getUTCDate() !== day
+    ) {
+      return PARCEL_EMPTY_TEXT;
+    }
+
+    return `${day} ${THAI_SHORT_MONTHS[month - 1]} ${year + 543}`;
+  }
+
+  function formatThaiDateTime(value) {
+    if (value === null || value === undefined || String(value).trim() === "") {
+      return PARCEL_EMPTY_TEXT;
+    }
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return PARCEL_EMPTY_TEXT;
+    }
+
+    return new Intl.DateTimeFormat("th-TH-u-ca-buddhist-nu-latn", {
+      timeZone: "Asia/Bangkok",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).format(date);
+  }
+
   window.MapFormatters = {
     EMPTY_TEXT,
     NOT_EVALUATED_TEXT,
+    PARCEL_EMPTY_TEXT,
     formatValue,
     formatCoordinate,
     formatDistance,
@@ -323,5 +410,8 @@
     formatAreaPercentLine,
     formatAreaDetail,
     formatThaiDate,
+    getCropTypeLabel,
+    formatThaiDateOnly,
+    formatThaiDateTime,
   };
 })(window);

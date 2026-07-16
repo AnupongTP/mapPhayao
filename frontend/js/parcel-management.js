@@ -1,10 +1,11 @@
 (function (window, document) {
+  const formatters = window.MapFormatters;
   const TEXT = {
     saveParcel: "บันทึกแปลง",
     myParcels: "แปลงของฉัน",
     parcelName: "ชื่อแปลง",
     cropType: "ชนิดพืช",
-    riceVariety: "พันธุ์ข้าว",
+    riceVariety: "พันธุ์",
     plantingDate: "วันที่ปลูก",
     cancel: "ยกเลิก",
     saving: "กำลังบันทึก...",
@@ -13,11 +14,13 @@
     loading: "กำลังโหลดแปลง...",
     empty: "ยังไม่มีแปลงที่บันทึก",
     loadFailed: "ไม่สามารถโหลดข้อมูลแปลงได้",
+    partialMapLoad: "บางแปลงไม่สามารถแสดงบนแผนที่ได้",
     analyzing: "กำลังวิเคราะห์...",
     authRequired: "กรุณาเปิดระบบผ่าน LINE ใหม่อีกครั้ง",
     notFound: "ไม่พบแปลงนี้หรือไม่มีสิทธิ์เข้าถึง",
     lineOnly: "ฟังก์ชันบันทึกแปลงใช้งานผ่าน LINE เท่านั้น",
     edit: "แก้ไขข้อมูล",
+    editBoundary: "แก้ไขขอบเขต",
     update: "บันทึกแก้ไข",
     updating: "กำลังบันทึก...",
     updated: "บันทึกข้อมูลแปลงเรียบร้อย",
@@ -39,6 +42,7 @@
   let listRevision = 0;
   let lastFocusedElement = null;
   let cachedParcels = [];
+  let expandedSavedParcelId = null;
 
   function createElement(tagName, className, text) {
     const element = document.createElement(tagName);
@@ -334,18 +338,49 @@
   function createParcelSummary(parcel) {
     const summary = [];
     if (parcel.cropType) {
-      summary.push(parcel.cropType === "maize" ? "ข้าวโพด" : "ข้าว");
+      summary.push(formatters.getCropTypeLabel(parcel.cropType));
     }
     if (parcel.riceVariety) {
       summary.push(parcel.riceVariety);
     }
     if (parcel.plantingDate) {
-      summary.push(parcel.plantingDate);
+      summary.push(formatters.formatThaiDateOnly(parcel.plantingDate));
     }
     if (parcel.areaRai !== null && parcel.areaRai !== undefined) {
-      summary.push(`${parcel.areaRai} ไร่`);
+      summary.push(formatters.formatAreaRaiCompact(parcel.areaRai));
     }
     return summary.join(" · ");
+  }
+
+  function getParcelDisplayName(parcel) {
+    return parcel.parcelName || parcel.parcelCode || "แปลง";
+  }
+
+  function createSavedParcelHeader(parcel, isExpanded, actionsId, onToggle) {
+    const header = createElement("button", "saved-parcel-header saved-parcel-toggle");
+    header.type = "button";
+    header.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+    header.setAttribute("aria-controls", actionsId);
+    header.addEventListener("click", onToggle);
+
+    const titleWrap = createElement("span", "saved-parcel-title");
+    const title = createElement("span", "saved-parcel-name", getParcelDisplayName(parcel));
+    const summary = createElement("span", "saved-parcel-summary", createParcelSummary(parcel));
+    const dateValue = parcel.plantingDate
+      ? `ปลูก ${formatters.formatThaiDateOnly(parcel.plantingDate)}`
+      : formatters.formatThaiDateTime(parcel.updatedAt || parcel.createdAt);
+    const date = createElement("span", "saved-parcel-date", dateValue);
+    const chevron = createElement("span", "saved-parcel-chevron", isExpanded ? "⌃" : "⌄");
+
+    titleWrap.append(title);
+    if (summary.textContent) {
+      titleWrap.appendChild(summary);
+    }
+    if (date.textContent) {
+      titleWrap.appendChild(date);
+    }
+    header.append(titleWrap, chevron);
+    return header;
   }
 
   function renderParcelCards(container, parcels) {
@@ -355,20 +390,31 @@
       return;
     }
 
+    if (expandedSavedParcelId && !parcels.some((parcel) => parcel.id === expandedSavedParcelId)) {
+      expandedSavedParcelId = null;
+    }
+
     parcels.forEach((parcel) => {
-      const card = createElement("article", "saved-parcel-card");
-      const title = createElement("h3", null, parcel.parcelName || parcel.parcelCode || "แปลง");
-      const summary = createElement("p", "saved-parcel-summary", createParcelSummary(parcel));
-      const updated = createElement(
-        "p",
-        "saved-parcel-date",
-        parcel.updatedAt || parcel.createdAt || "",
+      const isExpanded = parcel.id === expandedSavedParcelId;
+      const card = createElement(
+        "article",
+        `saved-parcel-card${isExpanded ? " is-expanded" : ""}`,
       );
+      const actionsId = `saved-parcel-actions-${parcel.id}`;
+      const header = createSavedParcelHeader(parcel, isExpanded, actionsId, () => {
+        expandedSavedParcelId = isExpanded ? null : parcel.id;
+        renderParcelCards(container, parcels);
+      });
       const actions = createElement("div", "saved-parcel-actions");
+      actions.id = actionsId;
+      actions.hidden = !isExpanded;
       const makeButton = (label, onClick, className = "parcel-action") => {
         const button = createElement("button", className, label);
         button.type = "button";
-        button.addEventListener("click", onClick);
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          onClick();
+        });
         return button;
       };
 
@@ -395,17 +441,11 @@
             handlers.onParcelUpdated?.(updatedParcel);
           });
         }),
-        makeButton("ลบ", () => openDeleteDialog(parcel, container), "parcel-action danger"),
+        makeButton(TEXT.editBoundary, () => handlers.onEditBoundary?.(parcel)),
+        makeButton("ลบ", () => openDeleteDialog(parcel, container), "parcel-action danger full-width"),
       );
 
-      card.append(title);
-      if (summary.textContent) {
-        card.appendChild(summary);
-      }
-      if (updated.textContent) {
-        card.appendChild(updated);
-      }
-      card.appendChild(actions);
+      card.append(header, actions);
       container.appendChild(card);
     });
   }
@@ -421,7 +461,17 @@
         return;
       }
       cachedParcels = Array.isArray(result?.parcels) ? result.parcels : [];
-      setStatus(status, "");
+      let layerResult = null;
+      try {
+        layerResult = handlers.onParcelsLoaded?.(cachedParcels) || null;
+      } catch (error) {
+        layerResult = { skipped: cachedParcels.length };
+      }
+      setStatus(
+        status,
+        layerResult && layerResult.skipped > 0 ? TEXT.partialMapLoad : "",
+        layerResult && layerResult.skipped > 0 ? "error" : undefined,
+      );
       renderParcelCards(container, cachedParcels);
     } catch (error) {
       if (!window.MapParcelState.shouldAcceptListResponse(requestRevision, listRevision)) {
@@ -472,6 +522,9 @@
       try {
         await window.MapApi.deleteMyParcel(parcel.id);
         cachedParcels = cachedParcels.filter((item) => item.id !== parcel.id);
+        if (expandedSavedParcelId === parcel.id) {
+          expandedSavedParcelId = null;
+        }
         if (listContainer) {
           renderParcelCards(listContainer, cachedParcels);
         }
@@ -491,13 +544,15 @@
   function refreshMyParcelsIfOpen() {
     const sheet = document.getElementById("my-parcels-sheet");
     if (!sheet) {
-      return;
+      return false;
     }
     const list = document.getElementById("my-parcels-list");
     const status = document.getElementById("my-parcels-status");
     if (list && status) {
       loadMyParcels(list, status);
+      return true;
     }
+    return false;
   }
 
   function confirmOpenSavedParcel() {
@@ -529,6 +584,17 @@
     }
   }
 
+  function replaceCachedParcel(parcel) {
+    if (!parcel || !parcel.id) {
+      return;
+    }
+    cachedParcels = cachedParcels.map((item) => (item.id === parcel.id ? parcel : item));
+    const list = document.getElementById("my-parcels-list");
+    if (list) {
+      renderParcelCards(list, cachedParcels);
+    }
+  }
+
   function init(options = {}) {
     handlers = options;
     ensureMyParcelsButton();
@@ -546,6 +612,7 @@
     openEditSheet,
     openMyParcelsSheet,
     closeMyParcelsSheet,
+    replaceCachedParcel,
     refreshMyParcelsIfOpen,
     confirmOpenSavedParcel,
     getFriendlyError,

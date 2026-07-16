@@ -145,6 +145,13 @@
           : String(source[key]).trim();
     });
 
+    if (Object.prototype.hasOwnProperty.call(source, "geometry")) {
+      const geometry = cloneGeometry(source.geometry);
+      if (geometry) {
+        body.geometry = geometry;
+      }
+    }
+
     return body;
   }
 

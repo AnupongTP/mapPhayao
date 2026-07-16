@@ -6,7 +6,7 @@ const lineMessagingService = require("../src/services/lineMessagingService");
 const FAKE_TOKEN = "test-channel-access-token";
 const FAKE_USER_ID = "U00000000000000000000000000000000";
 const LONG_DETAIL_URL =
-  "https://rapidly-marijuana-harper-partly.trycloudflare.com/mapphayao1/frontend/index.html?lat=19.039846300072156&lng=99.94005686022584";
+  "https://dishes-prefix-revised-whom.trycloudflare.com/mapphayao1/frontend/index.html?lat=19.039846300072156&lng=99.94005686022584";
 
 function createFlexMessage(overrides = {}) {
   return {

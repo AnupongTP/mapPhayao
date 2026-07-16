@@ -40,7 +40,9 @@
     temporaryParcelTitle: "พื้นที่แปลงชั่วคราว",
     drawParcel: "วาดพื้นที่แปลง",
     saveEdit: "บันทึกแก้ไข",
+    saveBoundary: "บันทึกขอบเขต",
     cancelEdit: "ยกเลิกแก้ไข",
+    cancel: "ยกเลิก",
     parcelLoading: "กำลังวิเคราะห์พื้นที่แปลง...",
     parcelAnalyzeError: "ไม่สามารถวิเคราะห์พื้นที่แปลงได้ กรุณาลองใหม่",
     parcelNameRequired: "ชื่อพื้นที่แปลงต้องไม่เป็นค่าว่าง",
@@ -1192,17 +1194,22 @@
   function setParcelControlState(options) {
     const isEditing = Boolean(options?.isEditing);
     const drawDisabled = Boolean(options?.drawDisabled);
+    const isSaving = Boolean(options?.isSaving);
+    const saveText = options?.saveText || TEXT.saveEdit;
+    const cancelText = options?.cancelText || TEXT.cancelEdit;
 
     if (parcelControlState.drawButton) {
       parcelControlState.drawButton.disabled = drawDisabled;
     }
     if (parcelControlState.saveButton) {
       parcelControlState.saveButton.hidden = !isEditing;
-      parcelControlState.saveButton.disabled = !isEditing;
+      parcelControlState.saveButton.disabled = !isEditing || isSaving;
+      parcelControlState.saveButton.textContent = saveText;
     }
     if (parcelControlState.cancelButton) {
       parcelControlState.cancelButton.hidden = !isEditing;
-      parcelControlState.cancelButton.disabled = !isEditing;
+      parcelControlState.cancelButton.disabled = !isEditing || isSaving;
+      parcelControlState.cancelButton.textContent = cancelText;
     }
   }
 
@@ -2152,12 +2159,12 @@
     appendParcelResultCard(content, "ข้อมูลแปลง", [
       { label: "ชื่อแปลง", value: parcel?.parcelName || parcel?.parcelCode },
       { label: "รหัสแปลง", value: parcel?.parcelCode },
-      { label: "ชนิดพืช", value: parcel?.cropType },
-      { label: "พันธุ์ข้าว", value: parcel?.riceVariety },
-      { label: "วันที่ปลูก", value: parcel?.plantingDate },
+      { label: "ชนิดพืช", value: parcel?.cropType, formatter: formatters.getCropTypeLabel },
+      { label: "พันธุ์", value: parcel?.riceVariety },
+      { label: "วันที่ปลูก", value: parcel?.plantingDate, formatter: formatters.formatThaiDateOnly },
       { label: "พื้นที่", value: parcel?.areaSqm, formatter: formatters.formatThaiLandArea },
       { label: "พื้นที่ไร่", value: parcel?.areaRai, formatter: formatters.formatAreaRai },
-      { label: "อัปเดตล่าสุด", value: parcel?.updatedAt || parcel?.createdAt, formatter: formatCheckedAt },
+      { label: "อัปเดตล่าสุด", value: parcel?.updatedAt || parcel?.createdAt, formatter: formatters.formatThaiDateTime },
     ]);
 
     openResultPanel(panel);
@@ -2237,6 +2244,9 @@
     const isEditing = Boolean(options?.isEditing);
     const drawDisabled = Boolean(options?.drawDisabled);
     const isDrawing = Boolean(options?.isDrawing);
+    const isSaving = Boolean(options?.isSaving);
+    const saveText = options?.saveText || TEXT.saveEdit;
+    const cancelText = options?.cancelText || TEXT.cancelEdit;
 
     if (parcelControlState.drawButton) {
       parcelControlState.drawButton.disabled = drawDisabled;
@@ -2246,11 +2256,13 @@
     }
     if (parcelControlState.saveButton) {
       parcelControlState.saveButton.hidden = !isEditing;
-      parcelControlState.saveButton.disabled = !isEditing;
+      parcelControlState.saveButton.disabled = !isEditing || isSaving;
+      parcelControlState.saveButton.textContent = saveText;
     }
     if (parcelControlState.cancelButton) {
       parcelControlState.cancelButton.hidden = !isEditing;
-      parcelControlState.cancelButton.disabled = !isEditing;
+      parcelControlState.cancelButton.disabled = !isEditing || isSaving;
+      parcelControlState.cancelButton.textContent = cancelText;
     }
   }
 

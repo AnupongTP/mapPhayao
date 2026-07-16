@@ -241,7 +241,7 @@ test("owned parcel operations use the same not-found response for missing and ot
   );
 });
 
-test("owned parcel operations reject invalid ids and geometry update attempts before SQL", async () => {
+test("owned parcel operations reject invalid ids before SQL", async () => {
   const calls = installDbQuery(async () => {
     throw new Error("database should not be touched");
   });
@@ -254,9 +254,75 @@ test("owned parcel operations reject invalid ids and geometry update attempts be
     () => parcelService.listOwnedParcels("not-a-uuid"),
     { statusCode: 400 },
   );
+  assert.equal(calls.length, 0);
+});
+
+test("owned parcel geometry update is owner scoped and recalculates area from transformed geometry", async () => {
+  const updatedGeometry = {
+    type: "MultiPolygon",
+    coordinates: [[sampleGeometry.coordinates[0]]],
+  };
+  const calls = installDbQuery(async () => ({
+    rows: [{
+      ...sampleRow,
+      area_sqm: "3200.50",
+      area_rai: "2.00",
+      geometry: updatedGeometry,
+      updated_at: "2026-07-16T01:00:00.000Z",
+      was_empty: false,
+      was_valid: true,
+      checked_area_sqm: "3200.50",
+      matched_count: 1,
+    }],
+  }));
+
+  const parcel = await parcelService.updateOwnedParcel(
+    PARCEL_ID,
+    { geometry: updatedGeometry },
+    OWNER_USER_ID,
+  );
+
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].text, /WITH matched AS/i);
+  assert.match(calls[0].text, /ST_GeomFromGeoJSON\(\$10\)/i);
+  assert.match(calls[0].text, /ST_Transform\([\s\S]*32647/i);
+  assert.match(calls[0].text, /owner_user_id = \$11/i);
+  assert.match(calls[0].text, /ST_Area\(app\.parcels\.geom\)/i);
+  assert.equal(calls[0].params[0], PARCEL_ID);
+  assert.equal(calls[0].params[9], JSON.stringify(updatedGeometry));
+  assert.equal(calls[0].params[10], OWNER_USER_ID);
+  assert.equal(parcel.areaSqm, 3200.5);
+  assert.equal(parcel.areaRai, 2);
+  assert.deepEqual(parcel.geometry, updatedGeometry);
+  assertNoOwnerLeak(parcel);
+});
+
+test("owned parcel geometry update rejects invalid, missing, and other-user geometry safely", async () => {
+  let calls = installDbQuery(async () => {
+    throw new Error("database should not be touched");
+  });
+
   await assert.rejects(
-    () => parcelService.updateOwnedParcel(PARCEL_ID, { geometry: sampleGeometry }, OWNER_USER_ID),
+    () => parcelService.updateOwnedParcel(PARCEL_ID, { geometry: { type: "Point", coordinates: [99, 19] } }, OWNER_USER_ID),
+    { statusCode: 400 },
+  );
+  await assert.rejects(
+    () => parcelService.updateOwnedParcel(PARCEL_ID, { geometry: { type: "Polygon", coordinates: [] } }, OWNER_USER_ID),
     { statusCode: 400 },
   );
   assert.equal(calls.length, 0);
+
+  calls = installDbQuery(async () => ({
+    rows: [{
+      was_empty: false,
+      was_valid: true,
+      checked_area_sqm: "1600",
+      matched_count: 0,
+    }],
+  }));
+  await assert.rejects(
+    () => parcelService.updateOwnedParcel(PARCEL_ID, { geometry: sampleGeometry }, OWNER_USER_ID),
+    { statusCode: 404, message: "Parcel not found" },
+  );
+  assert.equal(calls.length, 1);
 });
