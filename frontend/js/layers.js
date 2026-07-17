@@ -381,12 +381,15 @@
       onEachFeature: bindFloodPopup,
     });
     const state = {
-      abortController: null,
       enabled: false,
-      requestId: 0,
       timer: null,
-      lastKey: "",
+      status: "idle",
+      promise: null,
+      data: null,
+      dataKey: "",
+      preparedKey: "",
       loadingKey: "",
+      error: null,
       cache: new Map(),
       metadata: null,
     };
@@ -397,19 +400,117 @@
       }
     }
 
+    function getLayerRequest() {
+      const bbox = getCurrentBbox(map);
+      const zoom = map.getZoom();
+      return {
+        bbox,
+        zoom,
+        key: `${bbox}:${zoom}`,
+      };
+    }
+
     function rememberGeojson(key, geojson) {
       state.cache.set(key, geojson);
       if (state.cache.size > 20) {
         state.cache.delete(state.cache.keys().next().value);
       }
+      state.data = geojson;
+      state.dataKey = key;
+      state.error = null;
+      state.status = "ready";
     }
 
-    function renderGeojson(key, geojson) {
+    function prepareLayer(key, geojson) {
+      if (state.preparedKey === key && layer.getLayers().length) {
+        return;
+      }
       layer.clearLayers();
       layer.addData(geojson);
-      state.lastKey = key;
+      state.preparedKey = key;
       state.metadata = getFloodLayerMetadata(geojson);
       publishMetadata();
+    }
+
+    function getCachedGeojson(key) {
+      return state.cache.get(key) || null;
+    }
+
+    function shouldSkipPrefetch() {
+      const connection = window.navigator?.connection;
+      if (!connection) {
+        return false;
+      }
+      if (connection.saveData === true) {
+        return true;
+      }
+      return ["slow-2g", "2g"].includes(String(connection.effectiveType || "").toLowerCase());
+    }
+
+    async function requestGeojson(request, options = {}) {
+      const cached = getCachedGeojson(request.key);
+      if (cached) {
+        prepareLayer(request.key, cached);
+        return cached;
+      }
+
+      if (state.promise) {
+        if (state.loadingKey === request.key) {
+          return state.promise;
+        }
+        await state.promise.catch(() => null);
+        const laterCached = getCachedGeojson(request.key);
+        if (laterCached) {
+          prepareLayer(request.key, laterCached);
+          return laterCached;
+        }
+      }
+
+      const controller = new AbortController();
+      state.status = options.prefetch ? "prefetching" : "loading";
+      state.loadingKey = request.key;
+      state.error = null;
+      state.promise = window.MapApi.getFloodRecurrenceLayer(
+        request.bbox,
+        request.zoom,
+        { signal: controller.signal },
+      )
+        .then((geojson) => {
+          rememberGeojson(request.key, geojson);
+          prepareLayer(request.key, geojson);
+          return geojson;
+        })
+        .catch((error) => {
+          state.status = "failed";
+          state.error = error;
+          if (error.name !== "AbortError") {
+            console.error("[Hazard layer] Failed to load flood recurrence", {
+              statusCode: error.statusCode || null,
+              message: error.message,
+            });
+          }
+          throw error;
+        })
+        .finally(() => {
+          if (state.loadingKey === request.key) {
+            state.promise = null;
+            state.loadingKey = "";
+          }
+        });
+
+      return state.promise;
+    }
+
+    async function prefetch() {
+      if (shouldSkipPrefetch()) {
+        return null;
+      }
+      const request = getLayerRequest();
+      try {
+        return await requestGeojson(request, { prefetch: true });
+      } catch (error) {
+        return null;
+      }
     }
 
     async function load() {
@@ -417,60 +518,55 @@
         return;
       }
 
-      const bbox = getCurrentBbox(map);
-      const zoom = map.getZoom();
-      const key = `${bbox}:${zoom}`;
-      if (key === state.lastKey && layer.getLayers().length) {
-        return;
-      }
-      if (state.cache.has(key)) {
-        renderGeojson(key, state.cache.get(key));
-        return;
-      }
-      if (state.loadingKey === key) {
+      const request = getLayerRequest();
+      if (state.preparedKey === request.key && layer.getLayers().length) {
+        notifyHazardLayer("");
         return;
       }
 
-      state.requestId += 1;
-      const currentRequestId = state.requestId;
-      if (state.abortController) {
-        state.abortController.abort();
+      const cached = getCachedGeojson(request.key);
+      if (cached) {
+        prepareLayer(request.key, cached);
+        notifyHazardLayer("");
+        return;
       }
-      const controller = new AbortController();
-      state.abortController = controller;
-      state.loadingKey = key;
+
       notifyHazardLayer(FLOOD_LOADING_MESSAGE);
 
+      const waitingForPrefetch =
+        state.status === "prefetching" && state.loadingKey === request.key;
       try {
-        const geojson = await window.MapApi.getFloodRecurrenceLayer(
-          bbox,
-          zoom,
-          { signal: controller.signal },
-        );
-        if (
-          !controller.signal.aborted
-          && currentRequestId === state.requestId
-          && state.enabled
-          && map.hasLayer(layer)
-        ) {
-          rememberGeojson(key, geojson);
-          renderGeojson(key, geojson);
-          notifyHazardLayer("");
-        }
+        await requestGeojson(request, { userInitiated: true });
       } catch (error) {
-        if (error.name !== "AbortError") {
-          console.error("[Hazard layer] Failed to load flood recurrence", {
-            statusCode: error.statusCode || null,
-            message: error.message,
-          });
-          layer.clearLayers();
-          notifyHazardLayer(FLOOD_FAILURE_MESSAGE);
+        if (!state.enabled || !map.hasLayer(layer)) {
+          return;
         }
-      } finally {
-        if (currentRequestId === state.requestId) {
-          state.abortController = null;
-          state.loadingKey = "";
+        if (!waitingForPrefetch) {
+          if (error.name !== "AbortError") {
+            layer.clearLayers();
+            state.preparedKey = "";
+            notifyHazardLayer(FLOOD_FAILURE_MESSAGE);
+          }
+          return;
         }
+        try {
+          await requestGeojson(request, { userInitiated: true });
+        } catch (retryError) {
+          if (retryError.name !== "AbortError") {
+            layer.clearLayers();
+            state.preparedKey = "";
+            notifyHazardLayer(FLOOD_FAILURE_MESSAGE);
+          }
+          return;
+        }
+      }
+
+      if (state.enabled && map.hasLayer(layer)) {
+        const latest = getCachedGeojson(request.key);
+        if (latest) {
+          prepareLayer(request.key, latest);
+        }
+        notifyHazardLayer("");
       }
     }
 
@@ -492,27 +588,29 @@
 
     function unload() {
       state.enabled = false;
-      state.requestId += 1;
-      state.lastKey = "";
       map.off("moveend", scheduleLoad);
       if (state.timer) {
         window.clearTimeout(state.timer);
         state.timer = null;
       }
-      if (state.abortController) {
-        state.abortController.abort();
-      }
-      state.abortController = null;
-      state.loadingKey = "";
       notifyHazardLayer("");
-      layer.clearLayers();
     }
 
     return {
       layer,
       load: enable,
       unload,
+      prefetch,
       getMetadata: () => state.metadata,
+      getState: () => ({
+        status: state.status,
+        loadingKey: state.loadingKey,
+        dataKey: state.dataKey,
+        preparedKey: state.preparedKey,
+        hasPromise: Boolean(state.promise),
+        hasData: Boolean(state.data),
+        featureCount: layer.getLayers().length,
+      }),
     };
   }
 
@@ -843,6 +941,7 @@
       maizePotentialAllLayer,
       floodRecurrenceLayer: floodRecurrenceController.layer,
       droughtRecurrenceLayer: droughtRecurrenceController.layer,
+      prefetchFloodRecurrenceLayer: floodRecurrenceController.prefetch,
       lazyLayerControllers,
     };
   }

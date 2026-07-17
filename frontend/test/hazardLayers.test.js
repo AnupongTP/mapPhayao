@@ -6,6 +6,7 @@ const vm = require("node:vm");
 
 const frontendRoot = path.resolve(__dirname, "..");
 const layersSource = fs.readFileSync(path.join(frontendRoot, "js/layers.js"), "utf8");
+const mapSource = fs.readFileSync(path.join(frontendRoot, "js/map.js"), "utf8");
 
 function createDeferred() {
   let resolve;
@@ -22,6 +23,10 @@ function nextTick() {
 }
 
 async function flushAsync() {
+  await nextTick();
+  await nextTick();
+  await nextTick();
+  await nextTick();
   await nextTick();
   await nextTick();
   await nextTick();
@@ -279,6 +284,7 @@ function createMapStub(state) {
 function createHarness(options = {}) {
   const state = {
     apiCalls: [],
+    droughtCalls: [],
     canvasOptions: [],
     controls: [],
     geoJsonLayers: [],
@@ -315,7 +321,10 @@ function createHarness(options = {}) {
         }
         return next || floodResponse();
       },
-      getDroughtRecurrenceLayer: async () => floodResponse([]),
+      getDroughtRecurrenceLayer: async () => {
+        state.droughtCalls.push({});
+        return floodResponse([]);
+      },
     },
     MapUi: {
       showLocationMessage(message) {
@@ -324,6 +333,9 @@ function createHarness(options = {}) {
     },
     setTimeout,
     clearTimeout,
+    navigator: {
+      connection: options.connection,
+    },
     console: {
       error() {},
     },
@@ -378,6 +390,137 @@ test("flood recurrence layer is lazy and uses approved blue classes", async () =
   assert.deepEqual(styles.map((style) => style.color), ["#7CB9DE", "#3B82C4", "#0F4FA8"]);
   assert.ok(harness.floodLayer.options.renderer);
   assert.equal(harness.floodLayer.getLayers().length, 3);
+});
+
+test("flood prefetch starts in the background without displaying layer or legend", async () => {
+  const harness = createHarness();
+
+  const result = await harness.floodController.prefetch();
+  await flushAsync();
+
+  assert.equal(harness.state.apiCalls.length, 1);
+  assert.ok(result);
+  assert.equal(harness.map.hasLayer(harness.floodLayer), false);
+  assert.equal(harness.legend.hidden, true);
+  assert.equal(harness.floodLayer.getLayers().length, 1);
+  assert.equal(harness.state.messages.length, 0);
+});
+
+test("map startup schedules flood prefetch after map readiness and idle time", () => {
+  assert.match(mapSource, /scheduleFloodRecurrencePrefetch/);
+  assert.match(mapSource, /map\.whenReady\(scheduleIdle\)/);
+  assert.match(mapSource, /requestIdleCallback\(startPrefetch, \{ timeout: 2000 \}\)/);
+  assert.match(mapSource, /setTimeout\(startPrefetch, 750\)/);
+});
+
+test("flood enable after completed prefetch uses prepared cache without another request", async () => {
+  const harness = createHarness();
+
+  await harness.floodController.prefetch();
+  await flushAsync();
+  assert.equal(harness.state.apiCalls.length, 1);
+
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+
+  assert.equal(harness.state.apiCalls.length, 1);
+  assert.equal(harness.floodLayer.getLayers().length, 1);
+  assert.equal(harness.legend.hidden, false);
+  assert.match(collectText(harness.legend), /2020–2024/);
+});
+
+test("flood enable while prefetching waits for the same request", async () => {
+  const pending = createDeferred();
+  const harness = createHarness({ responses: [pending.promise] });
+
+  const prefetchPromise = harness.floodController.prefetch();
+  await flushAsync();
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+
+  assert.equal(harness.state.apiCalls.length, 1);
+  assert.equal(harness.state.messages[0], "กำลังโหลดข้อมูลน้ำท่วมซ้ำซาก…");
+  pending.resolve(floodResponse());
+  await prefetchPromise;
+  await flushAsync();
+
+  assert.equal(harness.state.apiCalls.length, 1);
+  assert.equal(harness.floodLayer.getLayers().length, 1);
+  assert.equal(harness.map.hasLayer(harness.floodLayer), true);
+});
+
+test("flood disable before prefetch completion prevents late display but keeps cache", async () => {
+  const pending = createDeferred();
+  const harness = createHarness({ responses: [pending.promise] });
+
+  const prefetchPromise = harness.floodController.prefetch();
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+  harness.map.removeOverlay(harness.floodLayer);
+  pending.resolve(floodResponse());
+  await prefetchPromise;
+  await flushAsync();
+
+  assert.equal(harness.state.apiCalls.length, 1);
+  assert.equal(harness.map.hasLayer(harness.floodLayer), false);
+  assert.equal(harness.legend.hidden, true);
+
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+  assert.equal(harness.state.apiCalls.length, 1);
+  assert.equal(harness.floodLayer.getLayers().length, 1);
+});
+
+test("flood prefetch failures are silent and user-triggered retries remain possible", async () => {
+  const harness = createHarness({
+    responses: [new Error("prefetch failed"), new Error("user failed"), floodResponse()],
+  });
+
+  await harness.floodController.prefetch();
+  await flushAsync();
+  assert.equal(harness.state.apiCalls.length, 1);
+  assert.equal(harness.state.messages.length, 0);
+
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+  assert.equal(harness.state.apiCalls.length, 2);
+  assert.equal(
+    harness.state.messages.includes("ไม่สามารถโหลดข้อมูลน้ำท่วมซ้ำซากได้ในขณะนี้"),
+    true,
+  );
+
+  harness.map.removeOverlay(harness.floodLayer);
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+  assert.equal(harness.state.apiCalls.length, 3);
+  assert.equal(harness.floodLayer.getLayers().length, 1);
+});
+
+test("flood prefetch respects save-data and slow connection hints", async () => {
+  const saveData = createHarness({ connection: { saveData: true } });
+  await saveData.floodController.prefetch();
+  assert.equal(saveData.state.apiCalls.length, 0);
+
+  const slow = createHarness({ connection: { effectiveType: "2g" } });
+  await slow.floodController.prefetch();
+  assert.equal(slow.state.apiCalls.length, 0);
+
+  slow.map.addOverlay(slow.floodLayer);
+  await flushAsync();
+  assert.equal(slow.state.apiCalls.length, 1);
+  assert.equal(slow.floodLayer.getLayers().length, 1);
+});
+
+test("flood prefetch does not change drought layer lifecycle", async () => {
+  const harness = createHarness();
+
+  await harness.floodController.prefetch();
+  await flushAsync();
+  assert.equal(harness.state.droughtCalls.length, 0);
+
+  harness.map.addOverlay(harness.overlays.droughtRecurrenceLayer);
+  await flushAsync();
+  assert.equal(harness.state.droughtCalls.length, 1);
 });
 
 test("flood legend uses five-year blue classes and dynamic period", async () => {
@@ -446,7 +589,7 @@ test("flood layer reuses successful session cache and does not duplicate legend"
   assert.equal(harness.state.apiCalls.length, 1);
 
   harness.map.removeOverlay(harness.floodLayer);
-  assert.equal(harness.floodLayer.getLayers().length, 0);
+  assert.equal(harness.floodLayer.getLayers().length, 1);
   harness.map.addOverlay(harness.floodLayer);
   await flushAsync();
 
@@ -464,11 +607,13 @@ test("flood layer avoids duplicate in-flight requests and failed loads can retry
 
   harness.map.addOverlay(harness.floodLayer);
   await flushAsync();
-  await harness.floodController.load();
+  const sharedLoad = harness.floodController.load();
+  await flushAsync();
   assert.equal(harness.state.apiCalls.length, 1);
   assert.equal(harness.state.messages[0], "กำลังโหลดข้อมูลน้ำท่วมซ้ำซาก…");
 
   pending.resolve(floodResponse());
+  await sharedLoad;
   await flushAsync();
   assert.equal(harness.state.apiCalls.length, 1);
   assert.equal(harness.state.messages.includes(""), true);

@@ -111,7 +111,7 @@ test("mobile LIFF parcel controls and sheets use stable IDs and active script or
   assert.match(indexSource, /js\/api\.js\?v=20260716-saved-parcel-interaction-menu/);
   assert.match(indexSource, /js\/ui\.js\?v=20260716-parcel-button-state-separation/);
   assert.match(indexSource, /js\/parcel-management\.js\?v=20260716-parcel-button-state-separation/);
-  assert.match(indexSource, /js\/map\.js\?v=20260716-parcel-button-state-separation/);
+  assert.match(indexSource, /js\/map\.js\?v=20260717-flood-background-prefetch/);
   assert.ok(indexSource.indexOf("js/parcel-state.js") < indexSource.indexOf("js/parcel-management.js"));
   assert.ok(indexSource.indexOf("js/parcel-management.js") < indexSource.indexOf("js/map.js"));
   assert.match(managementSource, /mobile-parcel-save-button/);

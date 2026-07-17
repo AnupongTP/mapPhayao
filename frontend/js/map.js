@@ -1837,6 +1837,32 @@
     }
   }
 
+  function scheduleFloodRecurrencePrefetch(map, overlayLayers) {
+    if (
+      !overlayLayers
+      || typeof overlayLayers.prefetchFloodRecurrenceLayer !== "function"
+    ) {
+      return;
+    }
+
+    const startPrefetch = () => {
+      overlayLayers.prefetchFloodRecurrenceLayer();
+    };
+    const scheduleIdle = () => {
+      if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(startPrefetch, { timeout: 2000 });
+        return;
+      }
+      window.setTimeout(startPrefetch, 750);
+    };
+
+    if (map && typeof map.whenReady === "function") {
+      map.whenReady(scheduleIdle);
+      return;
+    }
+    window.setTimeout(scheduleIdle, 0);
+  }
+
   function initMap() {
     const mapConfig = window.AppConfig.map;
     const map = L.map("map").setView(mapConfig.center, mapConfig.zoom);
@@ -1883,6 +1909,7 @@
     map.on("click", handleMapClick);
 
     window.appMap = map;
+    scheduleFloodRecurrencePrefetch(map, overlayLayers);
     processDetailLinkLocation().catch(() => {
       window.MapUi.showLocationMessage(window.MapUi.text.apiError);
     });
