@@ -42,8 +42,15 @@ function createMockQuery({ latestYear = 2024, floodYears = [2015, 2024], floodAr
       };
     }
 
-    if (/MAX\(\(item ->> 'year'\)::int\) AS latest_year/.test(sql)) {
-      return { rows: [{ latest_year: latestYear }] };
+    if (/latest_years/.test(sql) && /array_agg\(year ORDER BY year\)/.test(sql)) {
+      const years = Array.from({ length: 10 }, (_, index) => latestYear - 9 + index);
+      return {
+        rows: [{
+          start_year: years[0],
+          end_year: years[years.length - 1],
+          years,
+        }],
+      };
     }
 
     if (/FROM gis\.flood_recurrence_pyo/.test(sql) && /affected_area_square_meters/.test(sql)) {

@@ -4,7 +4,8 @@ const FLOOD_FEATURE_LIMIT = 5000;
 const FLOOD_CACHE_TTL_MS = 5 * 60 * 1000;
 const DROUGHT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const FLOOD_WINDOW_YEARS = 10;
-const FLOOD_CACHE_VERSION = "latest10-v1";
+const FLOOD_LAYER_WINDOW_YEARS = 5;
+const FLOOD_CACHE_VERSION = "latest5-v1";
 
 const cache = new Map();
 
@@ -68,9 +69,10 @@ function setCache(key, value, ttlMs) {
   }
 }
 
-function featureCollection(features) {
+function featureCollection(features, properties) {
   return {
     type: "FeatureCollection",
+    ...(properties ? { properties } : {}),
     features,
   };
 }
@@ -79,24 +81,46 @@ function parseGeometry(geometryText) {
   return geometryText ? JSON.parse(geometryText) : null;
 }
 
-async function getFloodYearWindow() {
+async function getFloodYearWindow(windowYears = FLOOD_WINDOW_YEARS) {
   const result = await db.query(
     `
-    SELECT MAX((item ->> 'year')::int) AS latest_year
-    FROM gis.flood_recurrence_pyo f
-    CROSS JOIN LATERAL jsonb_array_elements(f.yearly_frequency) AS item
-    WHERE jsonb_typeof(f.yearly_frequency) = 'array'
-      AND (item ->> 'year') ~ '^\\d{4}$';
+    WITH available_years AS (
+      SELECT DISTINCT (item ->> 'year')::int AS year
+      FROM gis.flood_recurrence_pyo f
+      CROSS JOIN LATERAL jsonb_array_elements(
+        CASE
+          WHEN jsonb_typeof(f.yearly_frequency) = 'array'
+          THEN f.yearly_frequency
+          ELSE '[]'::jsonb
+        END
+      ) AS item
+      WHERE (item ->> 'year') ~ '^\\d{4}$'
+    ),
+    latest_years AS (
+      SELECT year
+      FROM available_years
+      ORDER BY year DESC
+      LIMIT $1
+    )
+    SELECT
+      MIN(year)::int AS start_year,
+      MAX(year)::int AS end_year,
+      COALESCE(array_agg(year ORDER BY year), '{}'::integer[]) AS years
+    FROM latest_years;
     `,
+    [windowYears],
   );
-  const latestYear = toNumber(result.rows[0]?.latest_year);
-  if (!latestYear) {
+  const years = Array.isArray(result.rows[0]?.years)
+    ? result.rows[0].years.map(toNumber).filter((year) => Number.isInteger(year))
+    : [];
+  if (!years.length) {
     return null;
   }
 
   return {
-    startYear: latestYear - (FLOOD_WINDOW_YEARS - 1),
-    endYear: latestYear,
+    startYear: toNumber(result.rows[0]?.start_year),
+    endYear: toNumber(result.rows[0]?.end_year),
+    years,
   };
 }
 
@@ -115,7 +139,7 @@ async function getFloodRecurrenceLayer({ bbox, zoom }) {
     parsed.bbox.maxLng,
     parsed.bbox.maxLat,
   ].map((value) => value.toFixed(5)).join(",");
-  const yearWindow = await getFloodYearWindow();
+  const yearWindow = await getFloodYearWindow(FLOOD_LAYER_WINDOW_YEARS);
   if (!yearWindow) {
     return featureCollection([]);
   }
@@ -123,8 +147,7 @@ async function getFloodRecurrenceLayer({ bbox, zoom }) {
   const cacheKey = [
     "flood",
     FLOOD_CACHE_VERSION,
-    yearWindow.startYear,
-    yearWindow.endYear,
+    yearWindow.years.join(","),
     roundedBbox,
     Math.round(numericZoom),
   ].join(":");
@@ -146,7 +169,7 @@ async function getFloodRecurrenceLayer({ bbox, zoom }) {
         SELECT 1
         FROM jsonb_array_elements(f.yearly_frequency) AS item
         WHERE (item ->> 'year') ~ '^\\d{4}$'
-          AND (item ->> 'year')::int BETWEEN $5 AND $6
+          AND (item ->> 'year')::int = ANY($5::int[])
           AND CASE
             WHEN (item ->> 'frequency') ~ '^-?\\d+(\\.\\d+)?$'
             THEN (item ->> 'frequency')::numeric
@@ -159,8 +182,7 @@ async function getFloodRecurrenceLayer({ bbox, zoom }) {
       parsed.bbox.minLat,
       parsed.bbox.maxLng,
       parsed.bbox.maxLat,
-      yearWindow.startYear,
-      yearWindow.endYear,
+      yearWindow.years,
     ],
   );
   const count = countResult.rows[0]?.count || 0;
@@ -177,7 +199,10 @@ async function getFloodRecurrenceLayer({ bbox, zoom }) {
       SELECT ST_MakeEnvelope($1, $2, $3, $4, 4326) AS geom
     ),
     flood_window AS (
-      SELECT $5::int AS start_year, $6::int AS end_year
+      SELECT
+        $5::int[] AS years,
+        $6::int AS start_year,
+        $7::int AS end_year
     )
     SELECT
       jsonb_build_object(
@@ -193,8 +218,8 @@ async function getFloodRecurrenceLayer({ bbox, zoom }) {
       ) AS properties,
       ST_AsGeoJSON(
         CASE
-          WHEN $7::double precision > 0
-          THEN ST_SimplifyPreserveTopology(ST_Intersection(f.geom, b.geom), $7::double precision)
+          WHEN $8::double precision > 0
+          THEN ST_SimplifyPreserveTopology(ST_Intersection(f.geom, b.geom), $8::double precision)
           ELSE ST_Intersection(f.geom, b.geom)
         END
       ) AS geometry
@@ -209,7 +234,7 @@ async function getFloodRecurrenceLayer({ bbox, zoom }) {
         SELECT (item ->> 'year')::int AS year_value
         FROM jsonb_array_elements(f.yearly_frequency) AS item
         WHERE (item ->> 'year') ~ '^\\d{4}$'
-          AND (item ->> 'year')::int BETWEEN flood_window.start_year AND flood_window.end_year
+          AND (item ->> 'year')::int = ANY(flood_window.years)
           AND CASE
             WHEN (item ->> 'frequency') ~ '^-?\\d+(\\.\\d+)?$'
             THEN (item ->> 'frequency')::numeric
@@ -220,13 +245,14 @@ async function getFloodRecurrenceLayer({ bbox, zoom }) {
     WHERE f.geom && b.geom
       AND ST_Intersects(f.geom, b.geom)
       AND w.frequency > 0
-    LIMIT $8;
+    LIMIT $9;
     `,
     [
       parsed.bbox.minLng,
       parsed.bbox.minLat,
       parsed.bbox.maxLng,
       parsed.bbox.maxLat,
+      yearWindow.years,
       yearWindow.startYear,
       yearWindow.endYear,
       tolerance,
@@ -238,7 +264,12 @@ async function getFloodRecurrenceLayer({ bbox, zoom }) {
     type: "Feature",
     properties: row.properties,
     geometry: parseGeometry(row.geometry),
-  })));
+  })), {
+    startYear: yearWindow.startYear,
+    endYear: yearWindow.endYear,
+    years: yearWindow.years,
+    yearCount: yearWindow.years.length,
+  });
   setCache(cacheKey, response, FLOOD_CACHE_TTL_MS);
   return response;
 }

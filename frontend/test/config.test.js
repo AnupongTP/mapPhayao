@@ -82,11 +82,11 @@ test("other production host resolves to Render backend API", () => {
   assert.equal(AppConfig.apiBaseUrl, RENDER_API_BASE_URL);
 });
 
-test("active config source does not contain obsolete backend tunnel", () => {
+test("active config source does not hardcode obsolete tunnels", () => {
   const configSource = fs.readFileSync(path.join(__dirname, "../js/config.js"), "utf8");
 
   assert.equal(configSource.includes(OBSOLETE_BACKEND_TUNNEL), false);
-  assert.equal(configSource.includes(CLOUDFLARE_FRONTEND_HOST), true);
+  assert.equal(configSource.includes(".trycloudflare.com"), false);
 });
 
 test("active frontend runtime source does not contain old Cloudflare frontend domain", () => {

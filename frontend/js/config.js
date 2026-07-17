@@ -6,18 +6,13 @@
     hostname === "localhost" ||
     hostname === "127.0.0.1";
 
-  const isCurrentCloudflareTunnel =
-    hostname === "https://foreign-copper-provision-constitute.trycloudflare.com";
-
   const localApiBaseUrl = "http://localhost:3000/api";
   const renderApiBaseUrl = "https://mapphayao-backend.onrender.com/api";
 
   window.AppConfig = {
     apiBaseUrl: isLocal
       ? localApiBaseUrl
-      : isCurrentCloudflareTunnel
-        ? renderApiBaseUrl
-        : renderApiBaseUrl,
+      : renderApiBaseUrl,
 
     map: {
       center: [19.0290389, 99.8906438],

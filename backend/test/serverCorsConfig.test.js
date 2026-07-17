@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const NEW_FRONTEND_ORIGIN = "https://dishes-prefix-revised-whom.trycloudflare.com";
+const NEW_FRONTEND_ORIGIN = "https://foreign-copper-provision-constitute.trycloudflare.com";
 const OLD_FRONTEND_ORIGIN = `https://${[
   "rapidly-marijuana-harper-partly",
   "trycloudflare.com",

@@ -12,6 +12,33 @@
     drought: "droughtRecurrence",
   };
 
+  const FLOOD_RECURRENCE_CLASSES = [
+    {
+      min: 1,
+      max: 1,
+      label: "1 ปี",
+      fillColor: "#D9F0FF",
+      color: "#7CB9DE",
+    },
+    {
+      min: 2,
+      max: 3,
+      label: "2–3 ปี",
+      fillColor: "#7EC3F7",
+      color: "#3B82C4",
+    },
+    {
+      min: 4,
+      max: 5,
+      label: "4–5 ปี",
+      fillColor: "#1F6FD6",
+      color: "#0F4FA8",
+    },
+  ];
+
+  const FLOOD_LOADING_MESSAGE = "กำลังโหลดข้อมูลน้ำท่วมซ้ำซาก…";
+  const FLOOD_FAILURE_MESSAGE = "ไม่สามารถโหลดข้อมูลน้ำท่วมซ้ำซากได้ในขณะนี้";
+
   function createBaseLayers() {
     const maxZoom = window.AppConfig.map.maxZoom;
     const openStreetMap = L.tileLayer(
@@ -169,28 +196,31 @@
   }
 
   function getYearsCount(feature) {
+    const frequency = Number(feature?.properties?.frequency);
+    if (Number.isInteger(frequency) && frequency >= 0) {
+      return frequency;
+    }
     const years = feature?.properties?.yearsDetected;
     return Array.isArray(years) ? years.length : 0;
   }
 
+  function getFloodClass(count) {
+    return FLOOD_RECURRENCE_CLASSES.find(
+      (item) => count >= item.min && count <= item.max,
+    ) || null;
+  }
+
   function getFloodStyle(feature) {
     const count = getYearsCount(feature);
-    let fillColor = "#fee8c8";
-    if (count >= 7) {
-      fillColor = "#b30000";
-    } else if (count >= 4) {
-      fillColor = "#e34a33";
-    } else if (count >= 2) {
-      fillColor = "#fc8d59";
-    }
+    const floodClass = getFloodClass(count);
 
     return {
       pane: "hazardPane",
-      color: "#7f1d1d",
+      color: floodClass?.color || "#7CB9DE",
       weight: 1,
       opacity: 0.85,
-      fillColor,
-      fillOpacity: 0.52,
+      fillColor: floodClass?.fillColor || "#D9F0FF",
+      fillOpacity: floodClass ? 0.54 : 0,
     };
   }
 
@@ -228,22 +258,79 @@
     return Array.isArray(years) && years.length ? years.join(", ") : "-";
   }
 
+  function formatPeriod(startYear, endYear) {
+    return startYear && endYear ? `${startYear}–${endYear}` : "-";
+  }
+
+  function formatThaiAdminName(value, prefix) {
+    const text = String(value || "").trim();
+    if (!text) {
+      return "-";
+    }
+    const stripped = text
+      .replace(/^(ต\.|ตำบล)\s*/u, "")
+      .replace(/^(อ\.|อำเภอ)\s*/u, "")
+      .trim();
+    return stripped ? `${prefix}${stripped}` : "-";
+  }
+
+  function stopLayerClickPropagation(event) {
+    if (
+      event?.originalEvent
+      && L.DomEvent
+      && typeof L.DomEvent.stopPropagation === "function"
+    ) {
+      L.DomEvent.stopPropagation(event.originalEvent);
+    }
+    if (event && typeof event.stopPropagation === "function") {
+      event.stopPropagation();
+    }
+  }
+
+  function getFloodLayerMetadata(geojson) {
+    const collectionProperties = geojson?.properties || {};
+    const firstFeatureProperties = geojson?.features?.[0]?.properties || {};
+    const startYear = collectionProperties.startYear || firstFeatureProperties.startYear || null;
+    const endYear = collectionProperties.endYear || firstFeatureProperties.endYear || null;
+    const years = Array.isArray(collectionProperties.years)
+      ? collectionProperties.years
+      : [];
+    return {
+      startYear,
+      endYear,
+      yearCount: Number(collectionProperties.yearCount) || years.length || null,
+    };
+  }
+
+  function notifyHazardLayer(message) {
+    if (
+      window.MapUi
+      && typeof window.MapUi.showLocationMessage === "function"
+    ) {
+      window.MapUi.showLocationMessage(message);
+    }
+  }
+
   function bindFloodPopup(feature, layer) {
     const properties = feature.properties || {};
     const years = Array.isArray(properties.yearsDetected)
       ? properties.yearsDetected
       : [];
-    const period = properties.startYear && properties.endYear
-      ? `${properties.startYear}–${properties.endYear}`
-      : "-";
+    const frequency = Number.isInteger(Number(properties.frequency))
+      ? Number(properties.frequency)
+      : years.length;
+    const period = formatPeriod(properties.startYear, properties.endYear);
+    if (layer && typeof layer.on === "function") {
+      layer.on("click", stopLayerClickPropagation);
+    }
     layer.bindPopup(
       `<div class="map-popup hazard-popup">`
         + `<h3>พื้นที่น้ำท่วมซ้ำซาก</h3>`
         + `<p><strong>ช่วงข้อมูล:</strong> ${escapeHtml(period)}</p>`
-        + `<p><strong>จำนวนปีที่พบ:</strong> ${properties.frequency ?? years.length}</p>`
+        + `<p><strong>จำนวนปีที่พบ:</strong> ${frequency}</p>`
         + `<p><strong>ปีที่พบ:</strong> ${escapeHtml(formatYears(years))}</p>`
-        + `<p><strong>ตำบล:</strong> ${escapeHtml(properties.subdistrict || "-")}</p>`
-        + `<p><strong>อำเภอ:</strong> ${escapeHtml(properties.district || "-")}</p>`
+        + `<p><strong>ตำบล:</strong> ${escapeHtml(formatThaiAdminName(properties.subdistrict, "ต."))}</p>`
+        + `<p><strong>อำเภอ:</strong> ${escapeHtml(formatThaiAdminName(properties.district, "อ."))}</p>`
         + `<p><strong>แหล่งข้อมูล:</strong> GISTDA</p>`
         + `</div>`,
     );
@@ -281,9 +368,15 @@
     ].map((value) => value.toFixed(6)).join(",");
   }
 
-  function createFloodRecurrenceController(map) {
+  function createFloodRecurrenceController(map, onMetadataChange) {
+    const floodRenderer = typeof L.canvas === "function"
+      ? L.canvas({ padding: 0.2 })
+      : null;
     const layer = L.geoJSON(null, {
       pane: "hazardPane",
+      ...(floodRenderer ? { renderer: floodRenderer } : {}),
+      bubblingMouseEvents: false,
+      filter: (feature) => getYearsCount(feature) > 0,
       style: getFloodStyle,
       onEachFeature: bindFloodPopup,
     });
@@ -293,7 +386,31 @@
       requestId: 0,
       timer: null,
       lastKey: "",
+      loadingKey: "",
+      cache: new Map(),
+      metadata: null,
     };
+
+    function publishMetadata() {
+      if (typeof onMetadataChange === "function") {
+        onMetadataChange(state.metadata);
+      }
+    }
+
+    function rememberGeojson(key, geojson) {
+      state.cache.set(key, geojson);
+      if (state.cache.size > 20) {
+        state.cache.delete(state.cache.keys().next().value);
+      }
+    }
+
+    function renderGeojson(key, geojson) {
+      layer.clearLayers();
+      layer.addData(geojson);
+      state.lastKey = key;
+      state.metadata = getFloodLayerMetadata(geojson);
+      publishMetadata();
+    }
 
     async function load() {
       if (!state.enabled || !map.hasLayer(layer)) {
@@ -306,6 +423,13 @@
       if (key === state.lastKey && layer.getLayers().length) {
         return;
       }
+      if (state.cache.has(key)) {
+        renderGeojson(key, state.cache.get(key));
+        return;
+      }
+      if (state.loadingKey === key) {
+        return;
+      }
 
       state.requestId += 1;
       const currentRequestId = state.requestId;
@@ -314,6 +438,8 @@
       }
       const controller = new AbortController();
       state.abortController = controller;
+      state.loadingKey = key;
+      notifyHazardLayer(FLOOD_LOADING_MESSAGE);
 
       try {
         const geojson = await window.MapApi.getFloodRecurrenceLayer(
@@ -327,9 +453,9 @@
           && state.enabled
           && map.hasLayer(layer)
         ) {
-          layer.clearLayers();
-          layer.addData(geojson);
-          state.lastKey = key;
+          rememberGeojson(key, geojson);
+          renderGeojson(key, geojson);
+          notifyHazardLayer("");
         }
       } catch (error) {
         if (error.name !== "AbortError") {
@@ -338,10 +464,12 @@
             message: error.message,
           });
           layer.clearLayers();
+          notifyHazardLayer(FLOOD_FAILURE_MESSAGE);
         }
       } finally {
         if (currentRequestId === state.requestId) {
           state.abortController = null;
+          state.loadingKey = "";
         }
       }
     }
@@ -354,9 +482,12 @@
     }
 
     function enable() {
+      const wasEnabled = state.enabled;
       state.enabled = true;
-      map.on("moveend", scheduleLoad);
-      load();
+      if (!wasEnabled) {
+        map.on("moveend", scheduleLoad);
+      }
+      return load();
     }
 
     function unload() {
@@ -372,6 +503,8 @@
         state.abortController.abort();
       }
       state.abortController = null;
+      state.loadingKey = "";
+      notifyHazardLayer("");
       layer.clearLayers();
     }
 
@@ -379,6 +512,7 @@
       layer,
       load: enable,
       unload,
+      getMetadata: () => state.metadata,
     };
   }
 
@@ -488,12 +622,23 @@
       const showDrought = activeLayers.has(HAZARD_LAYER_KEYS.drought);
       container.hidden = !showFlood && !showDrought;
       if (showFlood) {
-        addSection("จำนวนปีที่พบประวัติน้ำท่วมใน 10 ปีล่าสุด", [
-          { color: "#fee8c8", label: "1 ปี" },
-          { color: "#fc8d59", label: "2–3 ปี" },
-          { color: "#e34a33", label: "4–6 ปี" },
-          { color: "#b30000", label: "7 ปีขึ้นไป" },
-        ]);
+        const floodMetadata = activeLayers
+          .get(HAZARD_LAYER_KEYS.flood)
+          ?.getMetadata?.();
+        const floodTitle = floodMetadata?.yearCount && floodMetadata.yearCount < 5
+          ? `จำนวนปีที่พบประวัติน้ำท่วมใน ${floodMetadata.yearCount} ปีล่าสุดที่มีข้อมูล`
+          : "จำนวนปีที่พบประวัติน้ำท่วมใน 5 ปีล่าสุด";
+        const floodNote = floodMetadata?.startYear && floodMetadata?.endYear
+          ? `ช่วงข้อมูล: ${formatPeriod(floodMetadata.startYear, floodMetadata.endYear)}`
+          : null;
+        addSection(
+          floodTitle,
+          FLOOD_RECURRENCE_CLASSES.map((item) => ({
+            color: item.fillColor,
+            label: item.label,
+          })),
+          floodNote,
+        );
       }
       if (showDrought) {
         addSection("จำนวนปีที่พบประวัติภัยแล้ง", [
@@ -519,18 +664,22 @@
   }
 
   function bindLazyLayerEvents(map, registry) {
-    const activeHazardLayers = new Set();
+    const activeHazardLayers = new Map();
     const hazardLegend = createHazardLegendControl(map, activeHazardLayers);
 
     map.on("overlayadd", (event) => {
       const controller = registry.get(event.layer);
+      let loadPromise = null;
       if (controller) {
-        controller.load();
+        loadPromise = controller.load();
       }
       const hazardKey = event.layer?.options?.hazardLayerKey;
       if (hazardKey) {
-        activeHazardLayers.add(hazardKey);
+        activeHazardLayers.set(hazardKey, controller || null);
         hazardLegend.update();
+      }
+      if (loadPromise && typeof loadPromise.finally === "function") {
+        loadPromise.finally(() => hazardLegend.update());
       }
     });
 

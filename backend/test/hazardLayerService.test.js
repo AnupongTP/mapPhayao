@@ -11,12 +11,26 @@ test.afterEach(() => {
   hazardLayerService.clearCache();
 });
 
-function mockFloodQueries({ latestYear = 2024, count = 1, rows = [] } = {}) {
+function mockFloodQueries({
+  latestYear = 2024,
+  years,
+  count = 1,
+  rows = [],
+} = {}) {
   const calls = [];
+  const selectedYears = Array.isArray(years)
+    ? years
+    : Array.from({ length: 5 }, (_, index) => latestYear - 4 + index);
   db.query = async (sql, params) => {
     calls.push({ sql, params });
     if (calls.length === 1) {
-      return { rows: [{ latest_year: latestYear }] };
+      return {
+        rows: [{
+          start_year: selectedYears[0],
+          end_year: selectedYears[selectedYears.length - 1],
+          years: selectedYears,
+        }],
+      };
     }
     if (calls.length === 2) {
       return { rows: [{ count }] };
@@ -67,30 +81,62 @@ test("flood layer validates bbox before querying database", async () => {
   assert.equal(queried, false);
 });
 
-test("flood latest available year is detected dynamically", async () => {
-  db.query = async () => ({ rows: [{ latest_year: 2024 }] });
+test("flood latest five available years are detected dynamically", async () => {
+  db.query = async (sql, params) => {
+    assert.deepEqual(params, [5]);
+    return { rows: [{ start_year: 2020, end_year: 2024, years: [2020, 2021, 2022, 2023, 2024] }] };
+  };
+
+  const result = await hazardLayerService.getFloodYearWindow(5);
+
+  assert.deepEqual(result, {
+    startYear: 2020,
+    endYear: 2024,
+    years: [2020, 2021, 2022, 2023, 2024],
+  });
+});
+
+test("flood latest five-year window uses available source years, not current calendar", async () => {
+  db.query = async () => ({
+    rows: [{ start_year: 2019, end_year: 2025, years: [2019, 2021, 2022, 2024, 2025] }],
+  });
+
+  const result = await hazardLayerService.getFloodYearWindow(5);
+
+  assert.deepEqual(result, {
+    startYear: 2019,
+    endYear: 2025,
+    years: [2019, 2021, 2022, 2024, 2025],
+  });
+});
+
+test("shared flood year-window helper keeps the 10-year default for non-layer consumers", async () => {
+  db.query = async (sql, params) => {
+    assert.deepEqual(params, [10]);
+    return {
+      rows: [{
+        start_year: 2015,
+        end_year: 2024,
+        years: [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
+      }],
+    };
+  };
 
   const result = await hazardLayerService.getFloodYearWindow();
 
-  assert.deepEqual(result, { startYear: 2015, endYear: 2024 });
+  assert.equal(result.startYear, 2015);
+  assert.equal(result.endYear, 2024);
+  assert.equal(result.years.length, 10);
 });
 
-test("flood latest 10-year window moves when newer data exists", async () => {
-  db.query = async () => ({ rows: [{ latest_year: 2025 }] });
-
-  const result = await hazardLayerService.getFloodYearWindow();
-
-  assert.deepEqual(result, { startYear: 2016, endYear: 2025 });
-});
-
-test("flood layer returns latest-10-year safe display properties without raw metadata", async () => {
+test("flood layer returns latest-five-year safe display properties without raw metadata", async () => {
   const calls = mockFloodQueries({
     latestYear: 2024,
     count: 1,
     rows: [floodRow({
-      frequency: 2,
-      yearsDetected: [2015, 2024],
-      startYear: 2015,
+      frequency: 1,
+      yearsDetected: [2024],
+      startYear: 2020,
       endYear: 2024,
       areaRai: 10.5,
       province: "Phayao",
@@ -106,10 +152,16 @@ test("flood layer returns latest-10-year safe display properties without raw met
   });
 
   assert.equal(result.type, "FeatureCollection");
+  assert.deepEqual(result.properties, {
+    startYear: 2020,
+    endYear: 2024,
+    years: [2020, 2021, 2022, 2023, 2024],
+    yearCount: 5,
+  });
   assert.equal(result.features.length, 1);
-  assert.equal(result.features[0].properties.startYear, 2015);
+  assert.equal(result.features[0].properties.startYear, 2020);
   assert.equal(result.features[0].properties.endYear, 2024);
-  assert.deepEqual(result.features[0].properties.yearsDetected, [2015, 2024]);
+  assert.deepEqual(result.features[0].properties.yearsDetected, [2024]);
   assert.equal(
     result.features[0].properties.frequency,
     result.features[0].properties.yearsDetected.length,
@@ -127,11 +179,15 @@ test("flood layer returns latest-10-year safe display properties without raw met
   ]);
   assert.equal(result.features[0].properties._id, undefined);
   assert.equal(result.features[0].properties.shape_area, undefined);
-  assert.deepEqual(calls[1].params.slice(4, 6), [2015, 2024]);
-  assert.deepEqual(calls[2].params.slice(4, 6), [2015, 2024]);
+  assert.deepEqual(calls[1].params[4], [2020, 2021, 2022, 2023, 2024]);
+  assert.deepEqual(calls[2].params.slice(4, 7), [
+    [2020, 2021, 2022, 2023, 2024],
+    2020,
+    2024,
+  ]);
 });
 
-test("flood layer uses future dynamic latest-10-year query parameters", async () => {
+test("flood layer uses future dynamic latest-five-year query parameters", async () => {
   const calls = mockFloodQueries({ latestYear: 2025, count: 0, rows: [] });
 
   const result = await hazardLayerService.getFloodRecurrenceLayer({
@@ -140,8 +196,12 @@ test("flood layer uses future dynamic latest-10-year query parameters", async ()
   });
 
   assert.equal(result.features.length, 0);
-  assert.deepEqual(calls[1].params.slice(4, 6), [2016, 2025]);
-  assert.deepEqual(calls[2].params.slice(4, 6), [2016, 2025]);
+  assert.deepEqual(calls[1].params[4], [2021, 2022, 2023, 2024, 2025]);
+  assert.deepEqual(calls[2].params.slice(4, 7), [
+    [2021, 2022, 2023, 2024, 2025],
+    2021,
+    2025,
+  ]);
 });
 
 test("flood layer excludes records without latest-window detections", async () => {
@@ -153,7 +213,7 @@ test("flood layer excludes records without latest-window detections", async () =
   });
 
   assert.equal(result.features.length, 0);
-  assert.match(calls[1].sql, /BETWEEN \$5 AND \$6/);
+  assert.match(calls[1].sql, /= ANY\(\$5::int\[\]\)/);
   assert.match(calls[2].sql, /w\.frequency > 0/);
 });
 
@@ -163,8 +223,8 @@ test("flood layer includes only detected years inside the latest window", async 
     count: 1,
     rows: [floodRow({
       frequency: 1,
-      yearsDetected: [2015],
-      startYear: 2015,
+      yearsDetected: [2024],
+      startYear: 2020,
       endYear: 2024,
       areaRai: null,
       province: null,
@@ -179,9 +239,10 @@ test("flood layer includes only detected years inside the latest window", async 
     zoom: 12,
   });
 
-  assert.deepEqual(result.features[0].properties.yearsDetected, [2015]);
+  assert.deepEqual(result.features[0].properties.yearsDetected, [2024]);
   assert.equal(result.features[0].properties.frequency, 1);
   assert.match(calls[2].sql, /COUNT\(DISTINCT year_value\)::int AS frequency/);
+  assert.match(calls[2].sql, /= ANY\(flood_window\.years\)/);
   assert.match(calls[2].sql, /CASE[\s\S]+frequency[\s\S]+ELSE 0/);
 });
 
@@ -191,8 +252,8 @@ test("flood layer keeps returned years numeric unique and sorted", async () => {
     count: 1,
     rows: [floodRow({
       frequency: 2,
-      yearsDetected: [2015, 2024],
-      startYear: 2015,
+      yearsDetected: [2020, 2024],
+      startYear: 2020,
       endYear: 2024,
       areaRai: null,
       province: null,
@@ -208,7 +269,7 @@ test("flood layer keeps returned years numeric unique and sorted", async () => {
   });
 
   const years = result.features[0].properties.yearsDetected;
-  assert.deepEqual(years, [2015, 2024]);
+  assert.deepEqual(years, [2020, 2024]);
   assert.equal(new Set(years).size, years.length);
   assert.ok(years.every((year) => Number.isInteger(year)));
 });
