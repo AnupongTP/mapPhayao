@@ -26,6 +26,23 @@ Web GIS สำหรับตรวจสอบข้อมูลพื้นท
 
 `http://localhost/mapphayao1/frontend/index.html`
 
+Production frontend:
+
+`https://mapphayaoliff.netlify.app/`
+
+Netlify static hosting:
+
+- Publish directory: `frontend`
+- Build command: none
+
+LINE Developers LIFF Endpoint URL:
+
+`https://mapphayaoliff.netlify.app/?liff=1`
+
+LIFF ID:
+
+`2010690813-INkgQOS1`
+
 ## Backend
 
 ```bash
@@ -37,6 +54,10 @@ npm run dev
 Backend default:
 
 `http://localhost:3000`
+
+Production Backend API:
+
+`https://mapphayao-backend.onrender.com/api`
 
 ## Environment
 
@@ -50,6 +71,13 @@ backend/.env.example
 
 ```text
 backend/.env
+```
+
+Production Render values:
+
+```text
+PUBLIC_APP_URL=https://mapphayaoliff.netlify.app
+CORS_ORIGINS=https://mapphayaoliff.netlify.app
 ```
 
 แล้วกำหนดค่าการเชื่อม PostgreSQL/PostGIS

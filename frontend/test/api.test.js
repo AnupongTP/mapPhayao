@@ -233,7 +233,7 @@ test("parcel API rejects invalid IDs before fetch and handles non-JSON errors sa
   );
 });
 
-test("parcel API base keeps one /api and current routing for localhost and Cloudflare", async () => {
+test("parcel API base keeps one /api and current routing for localhost and production frontend", async () => {
   const local = createApiHarness({ success: true }, { apiBaseUrl: "http://localhost:3000/api" });
   await local.MapApi.listMyParcels();
   assert.equal(local.calls[0].url, "http://localhost:3000/api/parcels/mine");

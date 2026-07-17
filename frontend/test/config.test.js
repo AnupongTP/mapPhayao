@@ -6,11 +6,12 @@ const vm = require("node:vm");
 
 const LOCAL_API_BASE_URL = "http://localhost:3000/api";
 const RENDER_API_BASE_URL = "https://mapphayao-backend.onrender.com/api";
-const CLOUDFLARE_FRONTEND_HOST = "dishes-prefix-revised-whom.trycloudflare.com";
+const NETLIFY_FRONTEND_HOST = "mapphayaoliff.netlify.app";
 const OLD_CLOUDFLARE_FRONTEND_HOST = [
   "rapidly-marijuana-harper-partly",
   "trycloudflare.com",
 ].join(".");
+const OLD_CURRENT_CLOUDFLARE_FRONTEND_HOST = "dishes-prefix-revised-whom.trycloudflare.com";
 const OBSOLETE_BACKEND_TUNNEL =
   "https://embedded-nextel-reservoir-strike.trycloudflare.com/api";
 const ACTIVE_FRONTEND_RUNTIME_FILES = [
@@ -70,8 +71,8 @@ test("127.0.0.1 resolves to local backend API", () => {
   assert.equal(AppConfig.apiBaseUrl, LOCAL_API_BASE_URL);
 });
 
-test("current Cloudflare frontend resolves to Render backend API", () => {
-  const { AppConfig } = createFrontendContext(CLOUDFLARE_FRONTEND_HOST);
+test("production Netlify frontend resolves to Render backend API", () => {
+  const { AppConfig } = createFrontendContext(NETLIFY_FRONTEND_HOST);
 
   assert.equal(AppConfig.apiBaseUrl, RENDER_API_BASE_URL);
 });
@@ -94,11 +95,12 @@ test("active frontend runtime source does not contain old Cloudflare frontend do
     const source = fs.readFileSync(path.join(__dirname, "..", relativePath), "utf8");
 
     assert.equal(source.includes(OLD_CLOUDFLARE_FRONTEND_HOST), false, relativePath);
+    assert.equal(source.includes(OLD_CURRENT_CLOUDFLARE_FRONTEND_HOST), false, relativePath);
   }
 });
 
 test("location-report URL contains exactly one /api segment", async () => {
-  const { calls, MapApi } = createFrontendContext(CLOUDFLARE_FRONTEND_HOST);
+  const { calls, MapApi } = createFrontendContext(NETLIFY_FRONTEND_HOST);
 
   await MapApi.getLocationReport(19.04212, 99.891977);
 
@@ -109,4 +111,16 @@ test("location-report URL contains exactly one /api segment", async () => {
   );
   assert.equal((calls[0].url.match(/\/api/g) || []).length, 1);
   assert.equal(calls[0].url.includes("/api/api/"), false);
+});
+
+test("Netlify config publishes only the active static frontend directory without a build command", () => {
+  const netlifySource = fs.readFileSync(
+    path.join(__dirname, "../../netlify.toml"),
+    "utf8",
+  );
+
+  assert.match(netlifySource, /\[build\]/);
+  assert.match(netlifySource, /publish\s*=\s*"frontend"/);
+  assert.doesNotMatch(netlifySource, /command\s*=/);
+  assert.doesNotMatch(netlifySource, /backend|database|db_export|backups|\.env/);
 });

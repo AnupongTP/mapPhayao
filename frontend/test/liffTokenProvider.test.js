@@ -6,9 +6,8 @@ const vm = require("node:vm");
 
 const CORRECT_LIFF_ID = "2010690813-INkgQOS1";
 const CORRECT_LIFF_URL = "https://liff.line.me/2010690813-INkgQOS1";
-const NEW_FRONTEND_ORIGIN = "https://dishes-prefix-revised-whom.trycloudflare.com";
-const CORRECT_LIFF_ENDPOINT_URL =
-  `${NEW_FRONTEND_ORIGIN}/mapphayao1/frontend/index.html?liff=1`;
+const PRODUCTION_FRONTEND_ORIGIN = "https://mapphayaoliff.netlify.app";
+const CORRECT_LIFF_ENDPOINT_URL = `${PRODUCTION_FRONTEND_ORIGIN}/?liff=1`;
 const INCORRECT_LIFF_ID = "2010690813-INkqOQS1";
 const EXPECTED_INIT_OPTIONS = {
   liffId: CORRECT_LIFF_ID,
@@ -150,8 +149,8 @@ function createHarness(options = {}) {
   const window = {
     location: {
       search,
-      origin: NEW_FRONTEND_ORIGIN,
-      pathname: "/mapphayao1/frontend/index.html",
+      origin: PRODUCTION_FRONTEND_ORIGIN,
+      pathname: "/",
       hash: "#secret-fragment",
       replace: (value) => navigationCalls.push({ method: "location.replace", value }),
       assign: (value) => navigationCalls.push({ method: "location.assign", value }),
@@ -434,10 +433,10 @@ test("debug output is sanitized and copies no token, user ID, Authorization, or 
   const snapshot = MapLiffMode.getDebugSnapshot();
   assert.equal(snapshot.currentApplicationLiffState, "ready-external-authenticated");
   assert.equal(snapshot.authenticatedFeatureReady, true);
-  assert.equal(snapshot.origin, NEW_FRONTEND_ORIGIN);
-  assert.equal(snapshot.pathname, "/mapphayao1/frontend/index.html");
-  assert.equal(serialized.includes(NEW_FRONTEND_ORIGIN), true);
-  assert.equal(serialized.includes("/mapphayao1/frontend/index.html"), true);
+  assert.equal(snapshot.origin, PRODUCTION_FRONTEND_ORIGIN);
+  assert.equal(snapshot.pathname, "/");
+  assert.equal(serialized.includes(PRODUCTION_FRONTEND_ORIGIN), true);
+  assert.equal(serialized.includes("/mapphayao1/frontend/index.html"), false);
   assert.equal(serialized.includes("secret-id-token"), false);
   assert.equal(serialized.includes("U00000000000000000000000000000000"), false);
   assert.equal(serialized.includes("Authorization"), false);
@@ -445,8 +444,8 @@ test("debug output is sanitized and copies no token, user ID, Authorization, or 
   assert.equal(serialized.includes("#secret-fragment"), false);
   assert.equal(serialized.includes("Secret User"), false);
   assert.equal(clipboardWrites.length, 1);
-  assert.equal(clipboardWrites[0].includes(NEW_FRONTEND_ORIGIN), true);
-  assert.equal(clipboardWrites[0].includes("/mapphayao1/frontend/index.html"), true);
+  assert.equal(clipboardWrites[0].includes(PRODUCTION_FRONTEND_ORIGIN), true);
+  assert.equal(clipboardWrites[0].includes("/mapphayao1/frontend/index.html"), false);
   assert.equal(clipboardWrites[0].includes("secret-id-token"), false);
 });
 

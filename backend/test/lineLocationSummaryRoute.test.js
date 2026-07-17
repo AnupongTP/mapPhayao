@@ -9,10 +9,9 @@ const FAKE_USER_ID = "U00000000000000000000000000000000";
 const SERVER_DETAIL_URL = "https://example.com/mapphayao1/frontend/index.html";
 const EXPECTED_DETAIL_URL =
   "https://example.com/mapphayao1/frontend/index.html?lat=19.123456&lng=99.123456";
-const LONG_PUBLIC_APP_URL =
-  "https://dishes-prefix-revised-whom.trycloudflare.com/mapphayao1/frontend/index.html";
+const LONG_PUBLIC_APP_URL = "https://mapphayaoliff.netlify.app";
 const LONG_EXPECTED_DETAIL_URL =
-  `${LONG_PUBLIC_APP_URL}?lat=19.039846300072156&lng=99.94005686022584`;
+  `${LONG_PUBLIC_APP_URL}/?lat=19.039846300072156&lng=99.94005686022584`;
 const CLIENT_USER_ID = "client-supplied-user";
 const CLIENT_DETAIL_URL = "https://client.example.com/ignored";
 
@@ -347,7 +346,7 @@ test("location-summary passes long validated coordinates into the real Flex foot
   assert.equal(detailActions[0].type, "uri");
   assert.equal(detailActions[0].uri, LONG_EXPECTED_DETAIL_URL);
   assert.equal(detailActions[0].uri.includes("..."), false);
-  assert.equal(detailActions[0].uri.length > 120, true);
+  assert.equal(detailActions[0].uri.length > LONG_PUBLIC_APP_URL.length, true);
   assert.notEqual(detailActions[0].uri, LONG_PUBLIC_APP_URL);
 
   const parsed = new URL(detailActions[0].uri);
@@ -356,6 +355,7 @@ test("location-summary passes long validated coordinates into the real Flex foot
   assert.equal(parsed.searchParams.get("lat"), "19.039846300072156");
   assert.equal(parsed.searchParams.get("lng"), "99.94005686022584");
   assert.equal(detailActions[0].uri.includes(CLIENT_DETAIL_URL), false);
+  assert.equal(detailActions[0].uri.includes("trycloudflare.com"), false);
 });
 
 test("buildLocationDetailUrl creates a safe HTTPS detail link for the validated point", () => {

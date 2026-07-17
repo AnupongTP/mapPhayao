@@ -24,23 +24,17 @@ const developmentOrigins = [
   "http://127.0.0.1:5500",
   "http://localhost:5500",
 ];
-const temporaryTunnelOrigins = [
-  "https://foreign-copper-provision-constitute.trycloudflare.com",
+const productionOrigins = [
+  "https://mapphayaoliff.netlify.app",
 ];
-const temporaryTunnelOriginSet = new Set(temporaryTunnelOrigins);
 const configuredOrigins = String(process.env.CORS_ORIGINS || "")
   .split(",")
   .map((value) => value.trim())
-  .filter(Boolean)
-  .filter(
-    (value) =>
-      !value.endsWith(".trycloudflare.com") ||
-      temporaryTunnelOriginSet.has(value),
-  );
+  .filter(Boolean);
 // อนุญาตเฉพาะ origin ที่ตั้งใจใช้กับงานพัฒนา และ origin จาก CORS_ORIGINS
 const allowedOrigins = new Set([
   ...(process.env.NODE_ENV === "production" ? [] : developmentOrigins),
-  ...temporaryTunnelOrigins,
+  ...productionOrigins,
   ...configuredOrigins,
 ]);
 
