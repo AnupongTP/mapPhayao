@@ -15,6 +15,7 @@ function mockFloodQueries({
   latestYear = 2024,
   years,
   count = 1,
+  latestSyncedAt = "2026-07-17T00:00:00.000Z",
   rows = [],
 } = {}) {
   const calls = [];
@@ -33,7 +34,7 @@ function mockFloodQueries({
       };
     }
     if (calls.length === 2) {
-      return { rows: [{ count }] };
+      return { rows: [{ count, latest_synced_at: latestSyncedAt }] };
     }
     return { rows };
   };
@@ -185,6 +186,11 @@ test("flood layer returns latest-five-year safe display properties without raw m
     2020,
     2024,
   ]);
+  assert.match(calls[2].sql, /ST_UnaryUnion\(ST_Collect\(geom\)\)/);
+  assert.match(calls[2].sql, /\(ST_Dump\(geom\)\)\.geom AS geom/);
+  assert.match(calls[2].sql, /ST_SimplifyPreserveTopology/);
+  assert.match(calls[2].sql, /ST_Transform\(geom, 32647\)/);
+  assert.match(calls[2].sql, /GROUP BY[\s\S]+subdistrict_id[\s\S]+frequency[\s\S]+years_detected/);
 });
 
 test("flood layer uses future dynamic latest-five-year query parameters", async () => {
@@ -244,6 +250,174 @@ test("flood layer includes only detected years inside the latest window", async 
   assert.match(calls[2].sql, /COUNT\(DISTINCT year_value\)::int AS frequency/);
   assert.match(calls[2].sql, /= ANY\(flood_window\.years\)/);
   assert.match(calls[2].sql, /CASE[\s\S]+frequency[\s\S]+ELSE 0/);
+  assert.match(calls[2].sql, /GROUP BY[\s\S]+frequency[\s\S]+years_detected/);
+});
+
+test("flood layer dissolves only semantic-safe groups and dumps connected parts", async () => {
+  const calls = mockFloodQueries({
+    rows: [
+      floodRow({
+        frequency: 1,
+        yearsDetected: [2020],
+        startYear: 2020,
+        endYear: 2024,
+        areaRai: 1.25,
+        province: "Phayao",
+        district: "Mueang Phayao",
+        subdistrict: "Mae Ka",
+        source: "GISTDA",
+      }),
+      floodRow({
+        frequency: 1,
+        yearsDetected: [2024],
+        startYear: 2020,
+        endYear: 2024,
+        areaRai: 1.5,
+        province: "Phayao",
+        district: "Mueang Phayao",
+        subdistrict: "Mae Ka",
+        source: "GISTDA",
+      }),
+    ],
+  });
+
+  const result = await hazardLayerService.getFloodRecurrenceLayer({
+    bbox: "99.9,19.0,100.0,19.1",
+    zoom: 12,
+  });
+
+  assert.equal(result.features.length, 2);
+  assert.deepEqual(result.features.map((feature) => feature.properties.yearsDetected), [
+    [2020],
+    [2024],
+  ]);
+  assert.match(calls[2].sql, /ST_CollectionExtract\(\s*ST_MakeValid\(ST_Intersection\(f\.geom, b\.geom\)\),\s*3\s*\)/);
+  assert.match(calls[2].sql, /ST_UnaryUnion\(ST_Collect\(geom\)\)/);
+  assert.match(calls[2].sql, /GROUP BY[\s\S]+province_id[\s\S]+district_id[\s\S]+subdistrict_id[\s\S]+frequency[\s\S]+years_detected/);
+  assert.match(calls[2].sql, /\(ST_Dump\(geom\)\)\.geom AS geom/);
+});
+
+test("flood layer simplification uses a metric CRS and passes metre tolerance", async () => {
+  const calls = mockFloodQueries({
+    rows: [floodRow({
+      frequency: 1,
+      yearsDetected: [2024],
+      startYear: 2020,
+      endYear: 2024,
+      areaRai: 1,
+      source: "GISTDA",
+    })],
+  });
+
+  await hazardLayerService.getFloodRecurrenceLayer({
+    bbox: "99.9,19.0,100.0,19.1",
+    zoom: 12,
+  });
+
+  assert.equal(calls[2].params[7], 5);
+  assert.match(calls[2].sql, /ST_Transform\(\s*ST_SimplifyPreserveTopology\(\s*ST_Transform\(geom, 32647\),\s*\$8::double precision\s*\),\s*4326\s*\)/);
+  assert.match(calls[2].sql, /ST_AsGeoJSON\(geom\) AS geometry/);
+});
+
+test("flood layer cache reuses successful builds and includes source version", async () => {
+  let sourceVersion = "2026-07-17T00:00:00.000Z";
+  let buildCount = 0;
+  const calls = [];
+  db.query = async (sql, params) => {
+    calls.push({ sql, params });
+    if (/latest_years/.test(sql)) {
+      return { rows: [{ start_year: 2020, end_year: 2024, years: [2020, 2021, 2022, 2023, 2024] }] };
+    }
+    if (/latest_synced_at/.test(sql)) {
+      return { rows: [{ count: 1, latest_synced_at: sourceVersion }] };
+    }
+    buildCount += 1;
+    return { rows: [floodRow({
+      frequency: 1,
+      yearsDetected: [2024],
+      startYear: 2020,
+      endYear: 2024,
+      source: "GISTDA",
+    })] };
+  };
+
+  await hazardLayerService.getFloodRecurrenceLayer({ bbox: "99.9,19.0,100.0,19.1", zoom: 12 });
+  await hazardLayerService.getFloodRecurrenceLayer({ bbox: "99.9,19.0,100.0,19.1", zoom: 12 });
+  assert.equal(buildCount, 1);
+
+  sourceVersion = "2026-07-18T00:00:00.000Z";
+  await hazardLayerService.getFloodRecurrenceLayer({ bbox: "99.9,19.0,100.0,19.1", zoom: 12 });
+  assert.equal(buildCount, 2);
+  assert.ok(calls.some((call) => /MAX\(f\.synced_at\)::text/.test(call.sql)));
+});
+
+test("flood layer concurrent requests share one in-flight dissolve build", async () => {
+  let buildCount = 0;
+  let releaseBuild;
+  const buildStarted = new Promise((resolve) => {
+    releaseBuild = resolve;
+  });
+  db.query = async (sql) => {
+    if (/latest_years/.test(sql)) {
+      return { rows: [{ start_year: 2020, end_year: 2024, years: [2020, 2021, 2022, 2023, 2024] }] };
+    }
+    if (/latest_synced_at/.test(sql)) {
+      return { rows: [{ count: 1, latest_synced_at: "2026-07-17T00:00:00.000Z" }] };
+    }
+    buildCount += 1;
+    await buildStarted;
+    return { rows: [floodRow({
+      frequency: 1,
+      yearsDetected: [2024],
+      startYear: 2020,
+      endYear: 2024,
+      source: "GISTDA",
+    })] };
+  };
+
+  const first = hazardLayerService.getFloodRecurrenceLayer({ bbox: "99.9,19.0,100.0,19.1", zoom: 12 });
+  const second = hazardLayerService.getFloodRecurrenceLayer({ bbox: "99.9,19.0,100.0,19.1", zoom: 12 });
+  await Promise.resolve();
+  releaseBuild();
+  const results = await Promise.all([first, second]);
+
+  assert.equal(buildCount, 1);
+  assert.equal(results[0], results[1]);
+});
+
+test("flood layer failed dissolve builds are not permanently cached", async () => {
+  let buildCount = 0;
+  db.query = async (sql) => {
+    if (/latest_years/.test(sql)) {
+      return { rows: [{ start_year: 2020, end_year: 2024, years: [2020, 2021, 2022, 2023, 2024] }] };
+    }
+    if (/latest_synced_at/.test(sql)) {
+      return { rows: [{ count: 1, latest_synced_at: "2026-07-17T00:00:00.000Z" }] };
+    }
+    buildCount += 1;
+    if (buildCount === 1) {
+      throw new Error("temporary dissolve failure");
+    }
+    return { rows: [floodRow({
+      frequency: 1,
+      yearsDetected: [2024],
+      startYear: 2020,
+      endYear: 2024,
+      source: "GISTDA",
+    })] };
+  };
+
+  await assert.rejects(
+    () => hazardLayerService.getFloodRecurrenceLayer({ bbox: "99.9,19.0,100.0,19.1", zoom: 12 }),
+    /temporary dissolve failure/,
+  );
+  const result = await hazardLayerService.getFloodRecurrenceLayer({
+    bbox: "99.9,19.0,100.0,19.1",
+    zoom: 12,
+  });
+
+  assert.equal(buildCount, 2);
+  assert.equal(result.features.length, 1);
 });
 
 test("flood layer keeps returned years numeric unique and sorted", async () => {
@@ -318,5 +492,8 @@ test("drought layer returns tambon-level safe properties", async () => {
 
 test("flood simplification tolerance decreases at higher zoom", () => {
   assert.equal(hazardLayerService.getFloodTolerance(15), 0);
+  assert.equal(hazardLayerService.getFloodTolerance(12), 5);
+  assert.equal(hazardLayerService.getFloodTolerance(9), 10);
+  assert.equal(hazardLayerService.getFloodTolerance(8), 20);
   assert.ok(hazardLayerService.getFloodTolerance(8) > hazardLayerService.getFloodTolerance(12));
 });
