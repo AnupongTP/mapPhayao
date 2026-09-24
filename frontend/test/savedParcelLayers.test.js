@@ -45,6 +45,7 @@ function parcel(id, name, geometry = polygon(0)) {
     areaSqm: id === PARCEL_A_ID ? 801.09 : 772.4,
     areaRai: id === PARCEL_A_ID ? 0.5 : 0.48,
     geometry,
+    images: [],
     updatedAt: id === PARCEL_A_ID
       ? "2026-07-16T09:40:56.527Z"
       : "2026-07-16T09:41:26.085Z",
@@ -52,7 +53,7 @@ function parcel(id, name, geometry = polygon(0)) {
 }
 
 function nextTick() {
-  return Promise.resolve();
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 function createDeferred() {

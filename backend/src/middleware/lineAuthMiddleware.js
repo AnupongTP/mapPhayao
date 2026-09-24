@@ -50,6 +50,9 @@ function createLineAuthMiddleware(dependencies = {}) {
 
       req.lineIdentity = {
         lineUserId,
+        displayName: typeof verifiedToken.displayName === "string"
+          ? verifiedToken.displayName.trim()
+          : "",
       };
 
       return next();

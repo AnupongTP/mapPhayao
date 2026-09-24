@@ -11,6 +11,7 @@ function createApiHarness(responseBody = { ok: true, status: "SENT" }, harnessOp
   const tokenCalls = [];
   const context = {
     URLSearchParams,
+    FormData,
     JSON,
     Error,
     TypeError,
@@ -40,6 +41,7 @@ function createApiHarness(responseBody = { ok: true, status: "SENT" }, harnessOp
           }
           return responseBody;
         },
+        blob: async () => new Blob(["webp"], { type: "image/webp" }),
       };
     },
   };
@@ -52,6 +54,29 @@ function createApiHarness(responseBody = { ok: true, status: "SENT" }, harnessOp
     MapApi: context.window.MapApi,
   };
 }
+
+test("parcel photo upload uses authenticated multipart without client owner fields", async () => {
+  const { calls, MapApi } = createApiHarness({ image: { id: "image-id" } });
+  const parcelId = "11111111-1111-4111-8111-111111111111";
+  const file = new Blob(["fixture"], { type: "image/png" });
+  const result = await MapApi.uploadParcelImage(parcelId, file);
+  assert.equal(result.id, "image-id");
+  assert.equal(calls[0].url, `https://backend.example.test/api/parcels/${parcelId}/images`);
+  assert.equal(calls[0].options.headers.Authorization, "Bearer test-id-token");
+  assert.equal(calls[0].options.headers["Content-Type"], undefined);
+  assert.deepEqual([...calls[0].options.body.keys()], ["image"]);
+});
+
+test("saved photo content uses authenticated backend proxy", async () => {
+  const { calls, MapApi } = createApiHarness();
+  const parcelId = "11111111-1111-4111-8111-111111111111";
+  const imageId = "22222222-2222-4222-8222-222222222222";
+  const blob = await MapApi.getParcelImageBlob(parcelId, imageId);
+  assert.equal(blob.type, "image/webp");
+  assert.equal(calls[0].url,
+    `https://backend.example.test/api/parcels/${parcelId}/images/${imageId}/content`);
+  assert.equal(calls[0].options.headers.Authorization, "Bearer test-id-token");
+});
 
 test("sendLineLocationSummary posts map-click coordinates to the summary endpoint", async () => {
   const { calls, MapApi } = createApiHarness();

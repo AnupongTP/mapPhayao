@@ -9,6 +9,7 @@ body {
 #map {
   width: 100%;
   height: 100%;
+  font-family: "Sarabun", sans-serif;
 }
 
 /* Leaflet control ต้องอยู่เหนือ tile แต่ไม่ควรทับ panel ฝั่งขวา */
@@ -42,6 +43,11 @@ body {
   max-width: min(280px, calc(100vw - 24px));
   max-height: 60vh;
   overflow-y: auto;
+}
+
+.mobile-layer-drawer-header,
+.mobile-layer-drawer-scrim {
+  display: none;
 }
 
 .location-panel,
@@ -91,18 +97,8 @@ body {
   font-weight: 700;
 }
 
-.panel-close,
-.panel-button {
-  cursor: pointer;
-  border: 1px solid #0f766e;
-  border-radius: 6px;
-  background: #0f766e;
-  color: #ffffff;
-  font: inherit;
-}
-
 .mobile-location-launcher {
-  display: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
@@ -154,23 +150,7 @@ body {
 
 .mobile-line-summary-button {
   min-width: 0;
-  border-color: #0d9488;
-  background: #0f766e;
-  color: #ffffff;
   white-space: normal;
-}
-
-.mobile-line-summary-button:hover,
-.mobile-line-summary-button:active {
-  border-color: #0f766e;
-  background: #115e59;
-}
-
-.mobile-line-summary-button:disabled {
-  cursor: not-allowed;
-  border-color: #cbd5e1;
-  background: #e5e7eb;
-  color: #64748b;
 }
 
 .mobile-line-summary-button[aria-busy="true"] {
@@ -198,56 +178,8 @@ body {
   color: #b91c1c;
 }
 
-.mobile-point-confirm:hover,
-.mobile-point-confirm:active {
-  border-color: #0f766e;
-  background: #115e59;
-}
-
-.mobile-point-confirm:disabled {
-  cursor: wait;
-  border-color: #64748b;
-  background: #475569;
-  color: #ffffff;
-}
-
-.panel-close-danger {
-  border-color: #dc2626;
-  background: #dc2626;
-  color: #ffffff;
-}
-
-.panel-close-danger:hover,
-.panel-close-danger:active {
-  border-color: #991b1b;
-  background: #b91c1c;
-}
-
 .location-panel-close {
   display: none;
-}
-
-.panel-close {
-  min-height: 44px;
-  padding: 7px 12px;
-}
-
-.panel-button {
-  min-height: 44px;
-  padding: 9px 12px;
-  font-weight: 700;
-}
-
-.panel-button.secondary {
-  background: #ffffff;
-  color: #0f766e;
-}
-
-.panel-button:disabled {
-  cursor: not-allowed;
-  border-color: #cbd5e1;
-  background: #e5e7eb;
-  color: #64748b;
 }
 
 .panel-content {
@@ -275,7 +207,7 @@ body {
 
 .location-actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -743,7 +675,16 @@ body {
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
   color: #111827;
-  font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 13px/1.4 "Sarabun", sans-serif;
+}
+
+.hazard-legend-content {
+  display: grid;
+  gap: 10px;
+}
+
+.hazard-legend-mobile-toggle {
+  display: none;
 }
 
 .hazard-legend-section {
@@ -818,6 +759,10 @@ body {
 
 .parcel-draw-control .panel-button {
   min-height: 38px;
+}
+
+.mobile-parcel-draw-hud {
+  display: none;
 }
 
 .temporary-parcel-panel[hidden],
@@ -1047,6 +992,8 @@ body {
 
 .parcel-modal {
   width: min(420px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
   padding: 18px;
   background: #ffffff;
   border-radius: 10px;
@@ -1067,6 +1014,9 @@ body {
 }
 
 .parcel-modal input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   min-height: 42px;
   padding: 8px 10px;
   border: 1px solid #cbd5e1;
@@ -1175,7 +1125,33 @@ body {
     grid-template-columns: 1fr;
   }
 
-  .mobile-location-launcher:not([hidden]) {
+  button.mobile-location-launcher {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    border-color: rgba(15, 118, 110, 0.28);
+    box-shadow: 0 3px 12px rgba(15, 23, 42, 0.16);
+  }
+
+  .mobile-location-launcher .mobile-location-launcher-icon {
+    width: 24px;
+    height: 24px;
+    background: transparent;
+    color: #0f766e;
+    font-size: 20px;
+  }
+
+  .mobile-location-launcher-text {
+    display: none;
+  }
+
+  .location-actions .mobile-location-launcher {
+    justify-self: start;
+  }
+
+  body > .mobile-location-launcher:not([hidden]) {
     position: fixed;
     top: calc(12px + env(safe-area-inset-top));
     right: calc(12px + env(safe-area-inset-right));
@@ -1532,6 +1508,84 @@ body {
   }
 }
 
+.parcel-photo-picker h4 {
+  margin: 16px 0 8px;
+  font-size: 15px;
+}
+
+.parcel-photo-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.parcel-modal input.parcel-photo-file-input {
+  display: none;
+}
+
+.parcel-photo-strip {
+  display: flex;
+  gap: 8px;
+  max-width: 100%;
+  margin-top: 10px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  padding: 2px 2px 8px;
+}
+
+.parcel-photo-item {
+  position: relative;
+  flex: 0 0 120px;
+  width: 120px;
+  height: 90px;
+  border-radius: 6px;
+  object-fit: cover;
+  overflow: hidden;
+}
+
+.parcel-photo-item img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.parcel-photo-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 32px;
+  height: 32px;
+  cursor: pointer;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.93);
+  color: #dc2626;
+}
+
+.parcel-photo-remove:focus-visible {
+  outline: 3px solid #fecaca;
+}
+
+.parcel-photo-count,
+.parcel-photo-empty {
+  margin: 4px 0;
+  color: #475569;
+  font-size: 13px;
+}
+
+.parcel-photo-load-error {
+  flex: 0 0 120px;
+  margin: 0;
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.parcel-photo-section {
+  padding: 12px 14px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
 .mobile-temporary-parcels-button {
   display: none;
   min-height: 48px;
@@ -1547,21 +1601,62 @@ body {
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.24);
 }
 
-.mobile-parcel-save-action {
-  display: grid;
-  gap: 8px;
-  margin: 0 0 12px;
-  padding: 12px;
-  border: 1px solid #bbf7d0;
-  border-radius: 10px;
-  background: #f0fdf4;
+.result-panel .panel-header h2 {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.mobile-parcel-save-button {
-  width: 100%;
-  min-height: 48px;
-  background: #15803d;
-  border-color: #15803d;
+button.panel-icon-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  color: #0f766e;
+  font-size: 21px;
+}
+
+button.panel-icon-action:hover:not(:disabled) {
+  background: rgba(15, 118, 110, 0.08);
+  color: #115e59;
+}
+
+button.panel-icon-action:active:not(:disabled) {
+  background: rgba(15, 118, 110, 0.14);
+}
+
+button.panel-icon-action:focus-visible {
+  outline: 3px solid #99f6e4;
+  outline-offset: 2px;
+}
+
+button.panel-icon-action.panel-close-icon {
+  color: #dc2626;
+}
+
+button.panel-icon-action.panel-close-icon:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.08);
+  color: #b91c1c;
+}
+
+button.panel-icon-action.panel-close-icon:active:not(:disabled) {
+  background: rgba(220, 38, 38, 0.14);
+}
+
+button.panel-icon-action.panel-close-icon:focus-visible {
+  outline-color: #fecaca;
+}
+
+button.panel-icon-action[hidden] {
+  display: none;
 }
 
 .parcel-sheet-backdrop {
@@ -1610,14 +1705,94 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
+#my-parcels-sheet .parcel-sheet-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#my-parcels-status {
+  flex: 0 0 auto;
+}
+
+.my-parcels-search-row {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.my-parcels-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.my-parcels-search-clear {
+  flex: 0 0 44px;
+  min-height: 44px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.my-parcels-search-clear[hidden] {
+  display: none;
+}
+
+#my-parcels-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.parcel-sheet-body.parcel-form-body {
+  display: flex;
+  flex: 1 1 auto;
+  overflow: hidden;
+  padding: 0;
+}
+
 .parcel-form {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.parcel-form-fields {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.parcel-form-footer {
+  flex: 0 0 auto;
+  padding: 12px 14px calc(14px + env(safe-area-inset-bottom));
+  border-top: 1px solid #e5e7eb;
+}
+
+.parcel-form-footer .parcel-sheet-status:not([hidden]) {
+  margin-bottom: 8px;
 }
 
 .parcel-form-field {
   display: grid;
   gap: 6px;
+  min-width: 0;
   color: #374151;
   font-size: 14px;
   font-weight: 700;
@@ -1625,6 +1800,9 @@ body {
 
 .parcel-form-field input,
 .parcel-form-field select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   min-height: 44px;
   padding: 8px 10px;
   border: 1px solid #cbd5e1;
@@ -1670,6 +1848,11 @@ body {
   border-color: #0f766e;
   box-shadow: inset 0 0 0 1px #0f766e;
   background: #f0fdfa;
+}
+
+.saved-parcel-card.is-focused {
+  outline: 2px solid #0f766e;
+  outline-offset: -2px;
 }
 
 .saved-parcel-card + .saved-parcel-card {
@@ -1767,6 +1950,333 @@ body {
 
   .parcel-sheet-actions {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .leaflet-control-layers:not(.is-mobile-drawer-open).leaflet-control-layers-expanded {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .leaflet-control-layers:not(.is-mobile-drawer-open).leaflet-control-layers-expanded
+    .leaflet-control-layers-toggle {
+    display: block;
+  }
+
+  .leaflet-control-layers:not(.is-mobile-drawer-open).leaflet-control-layers-expanded
+    .leaflet-control-layers-list {
+    display: none;
+  }
+
+  .mobile-layer-drawer-scrim:not([hidden]) {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: var(--mobile-layer-drawer-bottom, calc(96px + env(safe-area-inset-bottom)));
+    left: min(310px, calc(100vw - 56px));
+    z-index: 990;
+    display: block;
+    background: rgba(15, 23, 42, 0.34);
+  }
+
+  .leaflet-control-layers.is-mobile-drawer-open {
+    position: fixed;
+    top: calc(84px + env(safe-area-inset-top));
+    right: auto;
+    bottom: var(--mobile-layer-drawer-bottom, calc(96px + env(safe-area-inset-bottom)));
+    left: 0;
+    z-index: 1010;
+    box-sizing: border-box;
+    width: min(310px, calc(100vw - 56px));
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    overflow: hidden;
+    border: 0;
+    border-radius: 0 14px 14px 0;
+    background: #ffffff;
+    box-shadow: 12px 0 30px rgba(15, 23, 42, 0.28);
+  }
+
+  .leaflet-control-layers.is-mobile-drawer-open .leaflet-control-layers-toggle {
+    display: none;
+  }
+
+  .leaflet-control-layers.is-mobile-drawer-open .leaflet-control-layers-list {
+    box-sizing: border-box;
+    display: block;
+    height: 100%;
+    max-height: 100%;
+    margin: 0;
+    padding: 0 14px 16px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .leaflet-control-layers.is-mobile-drawer-open .leaflet-control-layers-separator {
+    margin: 10px 0;
+  }
+
+  .leaflet-control-layers.is-mobile-drawer-open label {
+    position: relative;
+    display: flex;
+    width: 100%;
+    min-height: 38px;
+    align-items: center;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1.35;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-tap-highlight-color: rgba(15, 118, 110, 0.14);
+  }
+
+  .leaflet-control-layers.is-mobile-drawer-open label > span {
+    display: flex;
+    width: 100%;
+    min-height: inherit;
+    align-items: center;
+  }
+
+  .leaflet-control-layers.is-mobile-drawer-open .leaflet-control-layers-selector {
+    position: relative;
+    z-index: 1;
+    flex: 0 0 20px;
+    width: 20px;
+    height: 20px;
+    margin: 0 9px 0 0;
+    pointer-events: auto;
+    cursor: pointer;
+    accent-color: #0f766e;
+    touch-action: manipulation;
+  }
+
+  .mobile-layer-drawer-header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    min-height: 60px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 -14px 8px;
+    padding: 8px 10px 8px 14px;
+    border-bottom: 1px solid #e5e7eb;
+    background: #ffffff;
+  }
+
+  .mobile-layer-drawer-header h2 {
+    margin: 0;
+    color: #111827;
+    font-size: 17px;
+    font-weight: 700;
+  }
+
+  .mobile-layer-drawer-close {
+    min-width: 56px;
+    min-height: 44px;
+    cursor: pointer;
+    border: 0;
+    border-radius: 8px;
+    background: #dc2626;
+    color: #ffffff;
+    font: inherit;
+    font-weight: 700;
+  }
+
+  .mobile-layer-drawer-open .mobile-location-launcher,
+  .mobile-layer-drawer-open .mobile-temporary-parcels-button,
+  .mobile-layer-drawer-open .parcel-draw-control,
+  .mobile-layer-drawer-open .hazard-legend {
+    visibility: hidden !important;
+    pointer-events: none !important;
+  }
+
+  .hazard-legend {
+    position: relative;
+    bottom: calc(142px + env(safe-area-inset-bottom));
+    display: block;
+    max-width: min(260px, calc(100vw - 32px));
+    max-height: none;
+    padding: 0;
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .hazard-legend-mobile-toggle {
+    display: inline-flex;
+    min-height: 42px;
+    align-items: center;
+    justify-content: center;
+    padding: 9px 13px;
+    cursor: pointer;
+    border: 1px solid #d6d9de;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.97);
+    color: #0f172a;
+    font: inherit;
+    font-weight: 700;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.2);
+  }
+
+  .hazard-legend-content {
+    display: none;
+  }
+
+  .hazard-legend.is-mobile-expanded .hazard-legend-content {
+    display: grid;
+    max-height: min(34dvh, 300px);
+    margin-top: 8px;
+    padding: 10px 12px;
+    overflow-y: auto;
+    border: 1px solid #d6d9de;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.97);
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.2);
+  }
+
+  .mobile-parcel-draw-hud:not([hidden]) {
+    position: fixed;
+    inset: 0;
+    z-index: 1050;
+    display: block;
+    pointer-events: none;
+  }
+
+  .mobile-parcel-draw-hint {
+    position: absolute;
+    top: calc(82px + env(safe-area-inset-top));
+    left: 50%;
+    box-sizing: border-box;
+    width: max-content;
+    max-width: calc(100vw - 32px);
+    margin: 0;
+    padding: 9px 13px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.9);
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.35;
+    text-align: center;
+    transform: translateX(-50%);
+  }
+
+  .mobile-parcel-draw-reticle {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 34px;
+    height: 34px;
+    border: 3px solid #ffffff;
+    border-radius: 999px;
+    box-shadow: 0 0 0 3px #0f766e, 0 4px 14px rgba(15, 23, 42, 0.4);
+    transform: translate(-50%, -50%);
+  }
+
+  .mobile-parcel-draw-reticle::before,
+  .mobile-parcel-draw-reticle::after {
+    position: absolute;
+    content: "";
+    background: #0f766e;
+  }
+
+  .mobile-parcel-draw-reticle::before {
+    top: 50%;
+    left: 50%;
+    width: 2px;
+    height: 48px;
+    transform: translate(-50%, -50%);
+  }
+
+  .mobile-parcel-draw-reticle::after {
+    top: 50%;
+    left: 50%;
+    width: 48px;
+    height: 2px;
+    transform: translate(-50%, -50%);
+  }
+
+  .mobile-parcel-draw-cancel {
+    position: absolute;
+    right: calc(12px + env(safe-area-inset-right));
+    bottom: calc(88px + env(safe-area-inset-bottom));
+    min-height: 42px;
+    padding: 8px 13px;
+    pointer-events: auto;
+    cursor: pointer;
+    border: 0;
+    border-radius: 10px;
+    background: #be123c;
+    color: #ffffff;
+    font: inherit;
+    font-weight: 700;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.24);
+  }
+
+  .mobile-parcel-draw-actions {
+    position: absolute;
+    right: calc(12px + env(safe-area-inset-right));
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: calc(12px + env(safe-area-inset-left));
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 1fr);
+    gap: 8px;
+    padding: 9px;
+    pointer-events: auto;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.97);
+    box-shadow: 0 8px 26px rgba(15, 23, 42, 0.3);
+  }
+
+  .mobile-parcel-draw-action {
+    min-width: 0;
+    min-height: 52px;
+    padding: 8px 6px;
+    cursor: pointer;
+    border: 1px solid #cbd5e1;
+    border-radius: 11px;
+    background: #ffffff;
+    color: #334155;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.25;
+  }
+
+  .mobile-parcel-draw-add {
+    border-color: #0f766e;
+    background: #0f766e;
+    color: #ffffff;
+  }
+
+  .mobile-parcel-draw-finish:not(:disabled) {
+    border-color: #15803d;
+    color: #166534;
+  }
+
+  .mobile-parcel-draw-action:disabled {
+    cursor: not-allowed;
+    border-color: #e2e8f0;
+    background: #e5e7eb;
+    color: #64748b;
+  }
+
+  .mobile-parcel-drawing .leaflet-control-layers,
+  .mobile-parcel-drawing .hazard-legend,
+  .mobile-parcel-drawing .mobile-location-launcher,
+  .mobile-parcel-drawing .mobile-point-actions,
+  .mobile-parcel-drawing .mobile-temporary-parcels-button,
+  .mobile-parcel-drawing .parcel-draw-control,
+  .mobile-parcel-drawing .leaflet-draw-tooltip {
+    visibility: hidden !important;
+    pointer-events: none !important;
   }
 }
 

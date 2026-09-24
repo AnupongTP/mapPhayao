@@ -228,6 +228,27 @@
         options,
       );
     },
+    uploadParcelImage: async function (parcelId, file) {
+      const idToken = await getCurrentLiffIdToken();
+      const body = new FormData();
+      body.append("image", file);
+      const response = await fetch(buildUrl(`/parcels/${encodeURIComponent(assertParcelId(parcelId))}/images`), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${idToken}` },
+        body,
+      });
+      const result = await parseJsonSafely(response);
+      if (!response.ok) throw createRequestError(response, result);
+      return result.image;
+    },
+    getParcelImageBlob: async function (parcelId, imageId) {
+      const idToken = await getCurrentLiffIdToken();
+      const response = await fetch(buildUrl(
+        `/parcels/${encodeURIComponent(assertParcelId(parcelId))}/images/${encodeURIComponent(assertParcelId(imageId))}/content`,
+      ), { headers: { Authorization: `Bearer ${idToken}` } });
+      if (!response.ok) throw createRequestError(response, await parseJsonSafely(response));
+      return response.blob();
+    },
     listMyParcels: function (options) {
       return sendAuthenticatedParcelJson("/parcels/mine", undefined, "GET", options);
     },

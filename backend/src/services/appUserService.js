@@ -60,8 +60,18 @@ async function findOrCreateLineUser(lineUserId, options = {}) {
   return existingUser;
 }
 
+async function updateVerifiedDisplayName(userId, displayName) {
+  const name = typeof displayName === "string" ? displayName.trim().slice(0, 255) : "";
+  if (!name) return;
+  await db.query(`
+    UPDATE app.users SET display_name = $2
+    WHERE id = $1 AND display_name IS DISTINCT FROM $2;
+  `, [userId, name]);
+}
+
 module.exports = {
   findOrCreateLineUser,
+  updateVerifiedDisplayName,
   _private: {
     normalizeLineUserId,
     mapAppUserRow,

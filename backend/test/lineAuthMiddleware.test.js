@@ -97,7 +97,7 @@ test("LINE auth middleware attaches only the verified LINE subject from token ve
   assert.equal(res.statusCode, null);
   assert.equal(nextCalls, 1);
   assert.equal(nextError, null);
-  assert.deepEqual(req.lineIdentity, { lineUserId: "verified-line-subject" });
+  assert.deepEqual(req.lineIdentity, { lineUserId: "verified-line-subject", displayName: "" });
   assert.equal(JSON.stringify(req.lineIdentity).includes("signed-id-token"), false);
   assert.equal(JSON.stringify(req.lineIdentity).includes("should-not-be-copied"), false);
 });
@@ -113,7 +113,17 @@ test("LINE auth middleware accepts existing verified userId adapter output witho
   });
 
   assert.equal(nextCalls, 1);
-  assert.deepEqual(req.lineIdentity, { lineUserId: "verified-line-user" });
+  assert.deepEqual(req.lineIdentity, { lineUserId: "verified-line-user", displayName: "" });
+});
+
+test("LINE auth middleware copies only verified top-level displayName", async () => {
+  const tokenService = {
+    verifyIdToken: async () => ({ sub: "verified-line-user", displayName: " Verified name ",
+      profile: { displayName: "untrusted profile" } }),
+  };
+  const { req, nextCalls } = await runMiddleware({ authorization: "Bearer signed-id-token", tokenService });
+  assert.equal(nextCalls, 1);
+  assert.deepEqual(req.lineIdentity, { lineUserId: "verified-line-user", displayName: "Verified name" });
 });
 
 test("LINE auth middleware sanitizes invalid, expired, and missing-subject token results", async () => {

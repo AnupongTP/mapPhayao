@@ -18,3 +18,8 @@ backend/.env
 
 db_export/
 *.dump
+# Local Netlify folder
+.netlify
+playwright-report/
+test-results/
+.sandbox/

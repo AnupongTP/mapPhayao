@@ -10,6 +10,14 @@ const managementSource = fs.readFileSync(path.join(frontendRoot, "js/parcel-mana
 const mapSource = fs.readFileSync(path.join(frontendRoot, "js/map.js"), "utf8");
 const uiSource = fs.readFileSync(path.join(frontendRoot, "js/ui.js"), "utf8");
 const cssSource = fs.readFileSync(path.join(frontendRoot, "css/map.css"), "utf8");
+const tailwindSource = fs.readFileSync(
+  path.join(frontendRoot, "css/tailwind.input.css"),
+  "utf8",
+);
+const generatedUiCss = fs.readFileSync(
+  path.join(frontendRoot, "css/ui.generated.css"),
+  "utf8",
+);
 
 function createDeferred() {
   let resolve;
@@ -105,20 +113,34 @@ function createManagementHarness(options = {}) {
 }
 
 test("mobile LIFF parcel controls and sheets use stable IDs and active script order", () => {
-  assert.match(indexSource, /css\/map\.css\?v=20260716-parcel-name-bottom-sheet/);
+  assert.match(indexSource, /css\/map\.css\?v=20260823-layer-touch-fix/);
+  assert.match(indexSource, /vendor\/fontawesome\/css\/fontawesome\.min\.css/);
+  assert.match(indexSource, /vendor\/fontawesome\/css\/solid\.min\.css/);
+  assert.match(indexSource, /css\/ui\.generated\.css\?v=20260823-tailwind-ui-v2/);
+  assert.match(indexSource, /js\/ui-icons\.js\?v=20260823-tailwind-ui/);
   assert.match(indexSource, /js\/parcel-state\.js\?v=20260716-liff-my-parcels/);
   assert.match(indexSource, /js\/formatters\.js\?v=20260716-my-parcels-display-fix/);
   assert.match(indexSource, /js\/api\.js\?v=20260716-saved-parcel-interaction-menu/);
-  assert.match(indexSource, /js\/ui\.js\?v=20260716-parcel-button-state-separation/);
-  assert.match(indexSource, /js\/parcel-management\.js\?v=20260716-parcel-button-state-separation/);
-  assert.match(indexSource, /js\/map\.js\?v=20260717-flood-background-prefetch/);
+  assert.match(indexSource, /js\/ui\.js\?v=20260823-tailwind-ui/);
+  assert.match(indexSource, /js\/parcel-management\.js\?v=20260823-tailwind-ui/);
+  assert.match(indexSource, /js\/map\.js\?v=20260823-mobile-side-drawer-v2/);
   assert.ok(indexSource.indexOf("js/parcel-state.js") < indexSource.indexOf("js/parcel-management.js"));
   assert.ok(indexSource.indexOf("js/parcel-management.js") < indexSource.indexOf("js/map.js"));
+  assert.ok(indexSource.indexOf("js/ui-icons.js") < indexSource.indexOf("js/ui.js"));
   assert.match(managementSource, /mobile-parcel-save-button/);
   assert.match(managementSource, /parcel-save-sheet/);
   assert.match(managementSource, /my-parcels-sheet/);
   assert.match(managementSource, /idPrefix: "parcel-edit"/);
   assert.match(managementSource, /parcel-delete-dialog/);
+});
+
+test("Tailwind UI keeps the existing map theme and excludes Preflight resets", () => {
+  assert.match(tailwindSource, /--color-map-primary:\s*#0f766e/);
+  assert.match(tailwindSource, /--color-map-primary-hover:\s*#115e59/);
+  assert.match(tailwindSource, /--color-map-accent:\s*#0d9488/);
+  assert.doesNotMatch(tailwindSource, /preflight\.css/);
+  assert.match(generatedUiCss, /tailwindcss v4/);
+  assert.match(generatedUiCss, /--color-map-primary:#0f766e/);
 });
 
 test("save button is hidden before analysis and shown from successful parcel result wiring", () => {

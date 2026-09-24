@@ -8,10 +8,15 @@
 
   const localApiBaseUrl = "http://localhost:3000/api";
   const renderApiBaseUrl = "https://mapphayao-backend.onrender.com/api";
+  const e2eApiBaseUrl = isLocal && window.__MAP_PHAYAO_E2E_CONFIG__?.apiBaseUrl;
+  const safeE2eApiBaseUrl = typeof e2eApiBaseUrl === "string"
+    && /^http:\/\/127\.0\.0\.1:\d+\/api$/.test(e2eApiBaseUrl)
+    ? e2eApiBaseUrl
+    : null;
 
   window.AppConfig = {
     apiBaseUrl: isLocal
-      ? localApiBaseUrl
+      ? (safeE2eApiBaseUrl || localApiBaseUrl)
       : renderApiBaseUrl,
 
     map: {

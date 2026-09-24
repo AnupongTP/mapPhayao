@@ -1,0 +1,25 @@
+{
+  "name": "mapphayao-frontend-build",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build-frontend.mjs",
+    "build:css:watch": "tailwindcss -i frontend/css/tailwind.input.css -o frontend/css/ui.generated.css --watch",
+    "test:frontend": "node --test frontend/test/*.test.js",
+    "test:backend": "node --test backend/test/*.test.js",
+    "test:e2e": "node scripts/run-e2e.mjs",
+    "test:e2e:headed": "node scripts/run-e2e.mjs --headed",
+    "test:e2e:ui": "node scripts/run-e2e.mjs --ui",
+    "sandbox:start": "node scripts/manual-sandbox.mjs start",
+    "sandbox:stop": "node scripts/manual-sandbox.mjs stop",
+    "sandbox:reset": "node scripts/manual-sandbox.mjs reset"
+  },
+  "devDependencies": {
+    "@fortawesome/fontawesome-free": "^7.3.1",
+    "@playwright/test": "^1.62.1",
+    "@tailwindcss/cli": "^4.3.3",
+    "leaflet": "^1.9.4",
+    "leaflet-draw": "^1.0.4",
+    "tailwindcss": "^4.3.3"
+  }
+}

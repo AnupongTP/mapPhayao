@@ -6,6 +6,7 @@ const parcelRoutes = require("../src/routes/parcelRoutes");
 const lineTokenService = require("../src/services/lineTokenService");
 const appUserService = require("../src/services/appUserService");
 const parcelService = require("../src/services/parcelService");
+const parcelImageService = require("../src/services/parcelImageService");
 const areaAnalysisService = require("../src/services/areaAnalysisService");
 
 const LINE_USER_A = "U-line-user-a";
@@ -26,12 +27,14 @@ const originalParcelService = {
   getOwnedParcelAnalysisInput: parcelService.getOwnedParcelAnalysisInput,
 };
 const originalAnalyzePolygon = areaAnalysisService.analyzePolygon;
+const originalListOwnedImages = parcelImageService.listOwnedImages;
 
 test.afterEach(() => {
   lineTokenService.verifyIdToken = originalVerifyIdToken;
   appUserService.findOrCreateLineUser = originalFindOrCreateLineUser;
   Object.assign(parcelService, originalParcelService);
   areaAnalysisService.analyzePolygon = originalAnalyzePolygon;
+  parcelImageService.listOwnedImages = originalListOwnedImages;
 });
 
 function createApp() {
@@ -255,6 +258,7 @@ test("parcel routes create, list, read, update, delete, and analyze only the aut
   installAuthAndUsers();
   const calls = makeCalls();
   installParcelService(calls);
+  parcelImageService.listOwnedImages = async () => [];
   installAreaAnalysis(calls);
 
   let response = await request(app, "/api/parcels", {

@@ -1,5 +1,24 @@
 ﻿(function (window) {
   const formatters = window.MapFormatters;
+  const uiIcons = window.MapUiIcons || {
+    create() {
+      const icon = document.createElement("span");
+      icon.setAttribute?.("aria-hidden", "true");
+      return icon;
+    },
+    setLabel(element, iconName, text) {
+      element.textContent = text;
+      return element;
+    },
+    setActionLabel(element, text) {
+      element.textContent = text;
+      return element;
+    },
+    setChevron(element, isExpanded) {
+      element.textContent = isExpanded ? "⌃" : "⌄";
+      return element;
+    },
+  };
   const TEXT = {
     empty: formatters.EMPTY_TEXT,
     notEvaluated: formatters.NOT_EVALUATED_TEXT,
@@ -8,7 +27,7 @@
     noSelection: "ยังไม่ได้เลือกตำแหน่ง",
     mapReady: "เลือกตำแหน่งแล้ว กรุณาตรวจสอบหมุดและกดยืนยันตำแหน่ง",
     dragReady: "อัปเดตตำแหน่งแล้ว กรุณาตรวจสอบหมุดและกดยืนยันตำแหน่ง",
-    locate: "หาตำแหน่งปัจจุบัน",
+    locate: "ตำแหน่งของฉัน",
     confirm: "ยืนยันตำแหน่ง",
     lineSummary: "รับสรุปข้อมูลทาง LINE",
     lineSummarySendingShort: "กำลังส่ง...",
@@ -88,6 +107,19 @@
     hideParcelButtons: false,
     parcelPanel: null,
     parcelList: null,
+    mobileDrawHud: null,
+    mobileDrawHint: null,
+    mobileDrawUndoButton: null,
+    mobileDrawAddButton: null,
+    mobileDrawFinishButton: null,
+    mobileDrawCancelButton: null,
+  };
+  const mobileLayerDrawerState = {
+    control: null,
+    container: null,
+    toggle: null,
+    scrim: null,
+    open: false,
   };
   const mobileLayoutMediaQuery = window.matchMedia
     ? window.matchMedia("(max-width: 700px)")
@@ -95,6 +127,9 @@
   let mobileLocationLauncherAction = null;
   let expandedTemporaryParcelId = null;
   let resultPanelCloseHandler = null;
+  let locationActionsEnabled = true;
+  let savedParcelPanelActions = {};
+  let savedParcelPanelParcel = null;
   let lineSummaryClickHandler = null;
   let latestLineSummaryButtonState = {
     visible: false,
@@ -121,8 +156,191 @@
     return element;
   }
 
+  function setCloseIcon(button, label) {
+    button.replaceChildren(uiIcons.create("close"));
+    button.setAttribute("aria-label", label);
+    button.title = label;
+  }
+
   function isMobileLayout() {
     return mobileLayoutMediaQuery ? mobileLayoutMediaQuery.matches : window.innerWidth <= 700;
+  }
+
+  function setBodyClass(className, enabled) {
+    if (document.body && document.body.classList) {
+      document.body.classList.toggle(className, Boolean(enabled));
+    }
+  }
+
+  function syncMobileLayerDrawerBottom() {
+    const state = mobileLayerDrawerState;
+    if (!state.container || !state.scrim) {
+      return;
+    }
+
+    const actionBar = document.getElementById("mobile-point-actions");
+    const viewportHeight = Number(window.innerHeight);
+    let reservedBottom = 96;
+    if (
+      actionBar
+      && !actionBar.hidden
+      && typeof actionBar.getBoundingClientRect === "function"
+      && Number.isFinite(viewportHeight)
+    ) {
+      const actionBarRect = actionBar.getBoundingClientRect();
+      if (Number.isFinite(actionBarRect.top) && actionBarRect.top >= 0) {
+        reservedBottom = Math.max(reservedBottom, viewportHeight - actionBarRect.top + 12);
+      }
+    }
+
+    const bottomValue = `${Math.ceil(reservedBottom)}px`;
+    state.container.style?.setProperty?.("--mobile-layer-drawer-bottom", bottomValue);
+    state.scrim.style?.setProperty?.("--mobile-layer-drawer-bottom", bottomValue);
+  }
+
+  function closeMobileLayerDrawer() {
+    const state = mobileLayerDrawerState;
+    state.open = false;
+    if (state.control && typeof state.control.collapse === "function") {
+      state.control.collapse();
+    }
+    if (state.container && state.container.classList) {
+      state.container.classList.remove("is-mobile-drawer-open");
+    }
+    if (state.toggle) {
+      state.toggle.setAttribute("aria-expanded", "false");
+    }
+    if (state.scrim) {
+      state.scrim.hidden = true;
+    }
+    setBodyClass("mobile-layer-drawer-open", false);
+  }
+
+  function openMobileLayerDrawer() {
+    const state = mobileLayerDrawerState;
+    if (!isMobileLayout() || !state.container) {
+      return;
+    }
+    closeTemporaryParcelPanel();
+    syncMobileLayerDrawerBottom();
+    state.open = true;
+    if (state.control && typeof state.control.expand === "function") {
+      state.control.expand();
+    }
+    if (state.container.classList) {
+      state.container.classList.add("is-mobile-drawer-open");
+    }
+    if (state.toggle) {
+      state.toggle.setAttribute("aria-expanded", "true");
+    }
+    if (state.scrim) {
+      state.scrim.hidden = false;
+    }
+    setBodyClass("mobile-layer-drawer-open", true);
+  }
+
+  function isMobileLayerDrawerOpen() {
+    return Boolean(mobileLayerDrawerState.open);
+  }
+
+  function enhanceMobileLayerControl(control) {
+    if (!control || typeof control.getContainer !== "function") {
+      return control;
+    }
+
+    const container = control.getContainer();
+    if (!container || typeof container.querySelector !== "function") {
+      return control;
+    }
+
+    const toggle = container.querySelector(".leaflet-control-layers-toggle");
+    const list = container.querySelector(".leaflet-control-layers-list");
+    if (!toggle || !list) {
+      return control;
+    }
+
+    if (typeof toggle.replaceChildren === "function") {
+      toggle.replaceChildren(uiIcons.create("layers"));
+      toggle.classList?.add("map-layer-control-toggle");
+    }
+
+    const header = createElement("div", "mobile-layer-drawer-header");
+    header.appendChild(createElement("h2", null, "ชั้นข้อมูลแผนที่"));
+    const closeButton = createElement("button", "mobile-layer-drawer-close panel-icon-action panel-close-icon");
+    closeButton.type = "button";
+    setCloseIcon(closeButton, "ปิดรายการชั้นข้อมูลแผนที่");
+    header.appendChild(closeButton);
+    list.prepend(header);
+
+    const scrim = createElement("div", "mobile-layer-drawer-scrim");
+    scrim.hidden = true;
+    document.body.appendChild(scrim);
+
+    mobileLayerDrawerState.control = control;
+    mobileLayerDrawerState.container = container;
+    mobileLayerDrawerState.toggle = toggle;
+    mobileLayerDrawerState.scrim = scrim;
+
+    toggle.setAttribute("aria-label", "เปิดรายการชั้นข้อมูลแผนที่");
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.addEventListener(
+      "click",
+      (event) => {
+        if (!isMobileLayout()) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        if (mobileLayerDrawerState.open) {
+          closeMobileLayerDrawer();
+        } else {
+          openMobileLayerDrawer();
+        }
+      },
+      true,
+    );
+    const handleCloseButton = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      closeMobileLayerDrawer();
+    };
+    closeButton.addEventListener("click", handleCloseButton, true);
+    scrim.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      closeMobileLayerDrawer();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && mobileLayerDrawerState.open) {
+        event.preventDefault();
+        closeMobileLayerDrawer();
+      }
+    });
+
+    const handleLayoutChange = () => {
+      if (!isMobileLayout()) {
+        closeMobileLayerDrawer();
+      } else if (mobileLayerDrawerState.open) {
+        syncMobileLayerDrawerBottom();
+      }
+      syncMobilePanelState();
+    };
+    if (mobileLayoutMediaQuery?.addEventListener) {
+      mobileLayoutMediaQuery.addEventListener("change", handleLayoutChange);
+    } else if (mobileLayoutMediaQuery?.addListener) {
+      mobileLayoutMediaQuery.addListener(handleLayoutChange);
+    }
+    if (typeof window.addEventListener === "function") {
+      window.addEventListener("resize", () => {
+        if (mobileLayerDrawerState.open) {
+          syncMobileLayerDrawerBottom();
+        }
+      });
+    }
+
+    return control;
   }
 
   function ensureMobileLocationLauncher() {
@@ -135,11 +353,11 @@
     launcher.id = "mobile-location-launcher";
     launcher.type = "button";
     launcher.setAttribute("aria-controls", "location-panel");
-    launcher.setAttribute("aria-label", "หาตำแหน่งปัจจุบัน");
-    launcher.append(
-      createElement("span", "mobile-location-launcher-icon", "⌖"),
-      createElement("span", "mobile-location-launcher-text", "หาตำแหน่ง"),
-    );
+    launcher.setAttribute("aria-label", TEXT.locate);
+    launcher.title = TEXT.locate;
+    const launcherIcon = createElement("span", "mobile-location-launcher-icon");
+    launcherIcon.appendChild(uiIcons.create("locate"));
+    launcher.append(launcherIcon, createElement("span", "mobile-location-launcher-text", TEXT.locate));
     launcher.addEventListener("click", () => {
       if (typeof mobileLocationLauncherAction === "function") {
         mobileLocationLauncherAction();
@@ -154,10 +372,10 @@
   function setMobileLocationLauncherLoading(isLoading) {
     const launcher = ensureMobileLocationLauncher();
     const text = launcher.querySelector(".mobile-location-launcher-text");
-    launcher.disabled = Boolean(isLoading);
+    launcher.disabled = Boolean(isLoading) || !locationActionsEnabled;
     launcher.setAttribute("aria-busy", isLoading ? "true" : "false");
     if (text) {
-      text.textContent = isLoading ? "กำลังค้นหา..." : "หาตำแหน่ง";
+      text.textContent = isLoading ? "กำลังค้นหา..." : TEXT.locate;
     }
   }
 
@@ -172,6 +390,7 @@
     }
 
     button = createElement("button", "mobile-point-confirm", "ยืนยันตำแหน่ง");
+    uiIcons.setActionLabel(button, "ยืนยันตำแหน่ง");
     button.id = "mobile-point-confirm";
     button.type = "button";
     button.hidden = true;
@@ -219,6 +438,7 @@
       "mobile-point-confirm mobile-line-summary-button",
       TEXT.lineSummary,
     );
+    uiIcons.setActionLabel(button, TEXT.lineSummary);
     button.id = "mobile-line-summary-button";
     button.type = "button";
     button.hidden = true;
@@ -263,6 +483,9 @@
         (summaryStatus && !summaryStatus.hidden));
 
     actionBar.hidden = !hasVisibleContent;
+    if (mobileLayerDrawerState.open) {
+      syncMobileLayerDrawerBottom();
+    }
   }
 
   function syncMobilePanelState() {
@@ -283,7 +506,12 @@
     }
 
     if (launcher) {
-      launcher.hidden = !isMobile || isLocationOpen || isResultOpen;
+      const actions = panel?.querySelector(".location-actions");
+      const parent = isMobile && !isLocationOpen ? document.body : actions;
+      if (parent && launcher.parentElement !== parent) {
+        parent.prepend(launcher);
+      }
+      launcher.hidden = isMobile && isResultOpen;
       launcher.setAttribute("aria-expanded", isLocationOpen ? "true" : "false");
     }
 
@@ -291,6 +519,7 @@
   }
 
   function openMobileLocationPanel() {
+    closeMobileLayerDrawer();
     ensureLocationPanel();
     const panel = document.getElementById("location-panel");
     const resultPanel = document.getElementById("result-panel");
@@ -315,6 +544,7 @@
   }
 
   function openResultPanel(panel) {
+    closeMobileLayerDrawer();
     const locationPanel = document.getElementById("location-panel");
     panel.hidden = false;
     panel.classList.add("is-open");
@@ -675,9 +905,9 @@
     const sidebar = ensureSidebar();
     panel = createPanel("location-panel", "location-panel is-open", TEXT.locationTitle);
     const header = panel.querySelector(".panel-header");
-    const closeButton = createElement("button", "panel-close panel-close-danger location-panel-close", "ปิด");
+    const closeButton = createElement("button", "panel-close panel-icon-action panel-close-icon location-panel-close");
     closeButton.type = "button";
-    closeButton.setAttribute("aria-label", "ปิดหน้าต่างเลือกตำแหน่ง");
+    setCloseIcon(closeButton, "ปิดหน้าต่างเลือกตำแหน่ง");
     closeButton.addEventListener("click", closeMobileLocationPanel);
     header.appendChild(closeButton);
     const content = panel.querySelector("#location-panel-content");
@@ -690,10 +920,8 @@
     updateLocationList(list, null);
 
     const actions = createElement("div", "location-actions");
-    const locateButton = createElement("button", "panel-button secondary", TEXT.locate);
-    locateButton.type = "button";
-    locateButton.id = "locate-button";
     const confirmButton = createElement("button", "panel-button primary", TEXT.confirm);
+    uiIcons.setActionLabel(confirmButton, TEXT.confirm);
     confirmButton.type = "button";
     confirmButton.id = "confirm-location-button";
     confirmButton.disabled = true;
@@ -702,6 +930,7 @@
       "panel-button secondary line-summary-button",
       TEXT.lineSummary,
     );
+    uiIcons.setActionLabel(lineSummaryButton, TEXT.lineSummary);
     lineSummaryButton.type = "button";
     lineSummaryButton.id = "line-summary-button";
     lineSummaryButton.hidden = true;
@@ -716,7 +945,7 @@
     lineSummaryStatus.hidden = true;
     lineSummaryStatus.setAttribute("aria-live", "polite");
     lineSummaryStatus.setAttribute("role", "status");
-    actions.append(locateButton, confirmButton, lineSummaryButton);
+    actions.append(confirmButton, lineSummaryButton);
 
     content.append(status, instruction, list, actions, lineSummaryStatus);
     sidebar.appendChild(panel);
@@ -735,19 +964,37 @@
     panel = createPanel("result-panel", "result-panel", TEXT.pointResultTitle);
     panel.hidden = true;
     const header = panel.querySelector(".panel-header");
-    const closeButton = createElement("button", "panel-close panel-close-danger result-panel-close", "ปิด");
+    const returnButton = createElement("button", "panel-close panel-icon-action result-panel-icon-action result-panel-return", "แปลงของฉัน");
+    returnButton.id = "result-panel-return-button";
+    returnButton.type = "button";
+    returnButton.hidden = true;
+    returnButton.setAttribute("aria-label", "กลับไปแปลงของฉัน");
+    returnButton.title = "กลับไปแปลงของฉัน";
+    returnButton.replaceChildren(uiIcons.create("parcels"));
+    returnButton.addEventListener("click", () => {
+      if (savedParcelPanelActions.onReturn && savedParcelPanelParcel) {
+        savedParcelPanelActions.onReturn(savedParcelPanelParcel);
+      }
+    });
+    const closeButton = createElement("button", "panel-close panel-icon-action panel-close-icon result-panel-close");
     closeButton.type = "button";
-    closeButton.setAttribute("aria-label", "ปิดหน้าต่างผลการตรวจสอบ");
+    setCloseIcon(closeButton, "ปิดหน้าต่างผลการตรวจสอบ");
     closeButton.addEventListener("click", () => {
       closeResultPanel(panel);
     });
-    header.appendChild(closeButton);
+    header.append(returnButton, closeButton);
     sidebar.appendChild(panel);
     syncSidebarLayoutState();
     return panel;
   }
 
   function setResultPanelTitle(panel, title) {
+    panel?.querySelector("#mobile-parcel-save-button")?.remove();
+    const returnButton = panel?.querySelector("#result-panel-return-button");
+    if (returnButton) {
+      returnButton.hidden = true;
+    }
+    savedParcelPanelParcel = null;
     const heading = panel?.querySelector(".panel-header h2");
     if (heading) {
       heading.textContent = title;
@@ -781,7 +1028,9 @@
 
   function setLocationActionsEnabled(isEnabled) {
     ensureLocationPanel();
-    document.getElementById("locate-button").disabled = !isEnabled;
+    locationActionsEnabled = Boolean(isEnabled);
+    const launcher = ensureMobileLocationLauncher();
+    launcher.disabled = !locationActionsEnabled || launcher.getAttribute("aria-busy") === "true";
     document.getElementById("confirm-location-button").disabled = !isEnabled;
   }
 
@@ -816,7 +1065,7 @@
         (button === desktopButton && isMobile) ||
         (button === mobileButton && !isMobile);
       button.disabled = !isEnabled;
-      button.textContent = text;
+      uiIcons.setActionLabel(button, text, "line");
       button.setAttribute("aria-busy", isBusy ? "true" : "false");
       bindLineSummaryButton(button);
     });
@@ -861,7 +1110,6 @@
   function setupLocationPanel({ onLocate, onConfirm }) {
     const panel = ensureLocationPanel();
     mobileLocationLauncherAction = onLocate;
-    panel.querySelector("#locate-button").addEventListener("click", onLocate);
     panel.querySelector("#confirm-location-button").addEventListener("click", onConfirm);
     const mobileConfirmButton = ensureMobilePointConfirmButton();
     mobileConfirmButton.addEventListener("click", onConfirm);
@@ -883,7 +1131,12 @@
 
     button.hidden = !shouldShow;
     button.disabled = isLoading;
-    button.textContent = isLoading ? "กำลังตรวจสอบ..." : "ยืนยันตำแหน่ง";
+    uiIcons.setActionLabel(
+      button,
+      isLoading ? "กำลังตรวจสอบ..." : "ยืนยันตำแหน่ง",
+      isLoading ? "spinner" : "confirm",
+    );
+    button.querySelector?.(".fa-spinner")?.classList?.add("fa-spin");
     button.setAttribute("aria-busy", isLoading ? "true" : "false");
     syncMobilePointActionBarVisibility();
   }
@@ -1208,7 +1461,7 @@
       actions.hidden = true;
     });
     container.querySelectorAll(".parcel-item-chevron").forEach((chevron) => {
-      chevron.textContent = "⌄";
+      uiIcons.setChevron(chevron, false);
     });
   }
 
@@ -1244,7 +1497,8 @@
       const actionsId = `temporary-parcel-actions-${parcel.id}`;
       const titleWrap = createElement("span", "parcel-item-title");
       const titleLine = createElement("span", "parcel-item-main");
-      const chevron = createElement("span", "parcel-item-chevron", isExpanded ? "⌃" : "⌄");
+      const chevron = createElement("span", "parcel-item-chevron");
+      uiIcons.setChevron(chevron, isExpanded);
       header.type = "button";
       header.setAttribute("aria-expanded", isExpanded ? "true" : "false");
       header.setAttribute("aria-controls", actionsId);
@@ -1264,6 +1518,7 @@
       actions.hidden = !isExpanded;
       const makeButton = (label, onClick) => {
         const button = createElement("button", "parcel-action", label);
+        uiIcons.setActionLabel(button, label);
         button.type = "button";
         button.addEventListener("click", (event) => {
           event.stopPropagation();
@@ -1298,20 +1553,82 @@
       input.value = options?.initialValue || "";
       input.maxLength = 120;
       label.appendChild(input);
+      const photos = [];
+      let photoSection = null;
+      let photoStrip = null;
+      let photoCount = null;
+      if (options?.allowPhotos) {
+        photoSection = createElement("section", "parcel-photo-picker");
+        photoSection.appendChild(createElement("h4", null, "รูปภาพแปลง"));
+        const photoActions = createElement("div", "parcel-photo-picker-actions");
+        function addInput(text, icon, capture, multiple) {
+          const button = createElement("button", "panel-button secondary");
+          button.type = "button";
+          uiIcons.setLabel(button, icon, text);
+          const picker = document.createElement("input");
+          picker.type = "file";
+          picker.accept = "image/*";
+          picker.className = "parcel-photo-file-input";
+          if (capture) picker.setAttribute("capture", "environment");
+          if (multiple) picker.multiple = true;
+          button.addEventListener("click", () => picker.click());
+          picker.addEventListener("change", () => {
+            for (const file of picker.files || []) {
+              if (!file.type.startsWith("image/")) continue;
+              photos.push({ file, previewUrl: URL.createObjectURL(file) });
+            }
+            picker.value = "";
+            renderPendingPhotos();
+          });
+          photoActions.append(button, picker);
+        }
+        addInput("ถ่ายรูป", "camera", true, false);
+        addInput("เลือกรูป", "images", false, true);
+        photoStrip = createElement("div", "parcel-photo-strip");
+        photoCount = createElement("p", "parcel-photo-count", "รูปภาพ 0 รูป");
+        photoSection.append(photoActions, photoStrip, photoCount);
+      }
+
+      function renderPendingPhotos() {
+        if (!photoStrip) return;
+        photoStrip.replaceChildren();
+        photos.forEach((photo, index) => {
+          const card = createElement("div", "parcel-photo-item");
+          const image = document.createElement("img");
+          image.src = photo.previewUrl;
+          image.alt = `รูปภาพแปลง ${index + 1}`;
+          const remove = createElement("button", "parcel-photo-remove");
+          remove.type = "button";
+          remove.replaceChildren(uiIcons.create("close"));
+          remove.setAttribute("aria-label", `ลบรูปภาพแปลง ${index + 1}`);
+          remove.title = "ลบรูปภาพ";
+          remove.addEventListener("click", () => {
+            const [removed] = photos.splice(index, 1);
+            URL.revokeObjectURL(removed.previewUrl);
+            renderPendingPhotos();
+          });
+          card.append(image, remove);
+          photoStrip.appendChild(card);
+        });
+        photoCount.textContent = `รูปภาพ ${photos.length} รูป`;
+      }
       const error = createElement("p", "parcel-modal-error", "");
       const actions = createElement("div", "parcel-modal-actions");
       const cancelButton = createElement("button", "panel-button secondary", "ยกเลิก");
+      uiIcons.setActionLabel(cancelButton, "ยกเลิก");
       cancelButton.type = "button";
       const confirmButton = createElement(
         "button",
         "panel-button",
         options?.confirmText || "บันทึก",
       );
+      uiIcons.setActionLabel(confirmButton, options?.confirmText || "บันทึก", "save");
       confirmButton.type = "button";
 
       const close = (result) => {
         backdrop.remove();
-        resolve(result);
+        if (!result) photos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
+        resolve(result && options?.allowPhotos ? { name: result, photos } : result);
       };
 
       const submit = () => {
@@ -1338,7 +1655,9 @@
       });
 
       actions.append(cancelButton, confirmButton);
-      modal.append(title, label, error, actions);
+      modal.append(title, label);
+      if (photoSection) modal.appendChild(photoSection);
+      modal.append(error, actions);
       backdrop.appendChild(modal);
       document.body.appendChild(backdrop);
       input.focus();
@@ -2034,6 +2353,31 @@
     return section;
   }
 
+  function createParcelPhotoSection(photos) {
+    const section = createElement("section", "parcel-photo-section");
+    section.appendChild(createElement("h3", "parcel-result-card-title", "รูปภาพแปลง"));
+    if (!Array.isArray(photos) || photos.length === 0) {
+      section.appendChild(createElement("p", "parcel-photo-empty", "ยังไม่มีรูปภาพแปลง"));
+      return section;
+    }
+    const strip = createElement("div", "parcel-photo-strip");
+    photos.forEach((photo, index) => {
+      if (photo.loadError) {
+        strip.appendChild(createElement("p", "parcel-photo-load-error", `โหลดรูปภาพ ${index + 1} ไม่สำเร็จ`));
+        return;
+      }
+      const image = document.createElement("img");
+      image.className = "parcel-photo-item";
+      image.src = photo.previewUrl;
+      image.alt = `รูปภาพแปลง ${index + 1}`;
+      image.loading = "lazy";
+      image.decoding = "async";
+      strip.appendChild(image);
+    });
+    section.appendChild(strip);
+    return section;
+  }
+
   function renderParcelResult(parcelState) {
     const panel = ensureResultPanel();
     setResultPanelTitle(panel, TEXT.parcelResultTitle);
@@ -2089,6 +2433,8 @@
       { label: "ลุ่มน้ำหลัก", value: location.mainBasins, formatter: formatters.formatList },
       { label: "ลุ่มน้ำย่อย", value: location.subBasins, formatter: formatters.formatList },
     ]);
+
+    content.appendChild(createParcelPhotoSection(parcelState.photos));
 
     const riceSection = createParcelCropSection(
       TEXT.riceSuitabilityTitle,
@@ -2163,8 +2509,22 @@
       { label: "วันที่ปลูก", value: parcel?.plantingDate, formatter: formatters.formatThaiDateOnly },
       { label: "พื้นที่", value: parcel?.areaSqm, formatter: formatters.formatThaiLandArea },
       { label: "พื้นที่ไร่", value: parcel?.areaRai, formatter: formatters.formatAreaRai },
-      { label: "อัปเดตล่าสุด", value: parcel?.updatedAt || parcel?.createdAt, formatter: formatters.formatThaiDateTime },
+      { label: "วันที่สร้าง", value: parcel?.createdAt, formatter: formatters.formatThaiDateTime },
+      { label: "อัปเดตล่าสุด", value: parcel?.updatedAt, formatter: formatters.formatThaiDateTime },
     ]);
+
+    content.appendChild(createParcelPhotoSection(parcel?.photos));
+
+    if (parcel?.id && !message) {
+      savedParcelPanelParcel = parcel;
+      panel.querySelector("#result-panel-return-button").hidden = false;
+      const detailsButton = createElement("button", "panel-button", "เปิดรายละเอียด");
+      detailsButton.id = "saved-parcel-open-details";
+      detailsButton.type = "button";
+      uiIcons.setActionLabel(detailsButton, "เปิดรายละเอียด");
+      detailsButton.addEventListener("click", () => savedParcelPanelActions.onDetails?.(parcel));
+      content.appendChild(detailsButton);
+    }
 
     openResultPanel(panel);
   }
@@ -2177,12 +2537,15 @@
       onAdd() {
         const container = createElement("div", "parcel-draw-control leaflet-bar");
         const drawButton = createElement("button", "panel-button parcel-draw-button", TEXT.drawParcel);
+        uiIcons.setActionLabel(drawButton, TEXT.drawParcel);
         drawButton.type = "button";
         drawButton.setAttribute("aria-pressed", "false");
         const saveButton = createElement("button", "panel-button", TEXT.saveEdit);
+        uiIcons.setActionLabel(saveButton, TEXT.saveEdit);
         saveButton.type = "button";
         saveButton.hidden = true;
         const cancelButton = createElement("button", "panel-button secondary", TEXT.cancelEdit);
+        uiIcons.setActionLabel(cancelButton, TEXT.cancelEdit);
         cancelButton.type = "button";
         cancelButton.hidden = true;
         const savedParcelButton = createElement(
@@ -2190,6 +2553,7 @@
           "panel-button secondary saved-parcels-control-button",
           "แปลงของฉัน",
         );
+        uiIcons.setActionLabel(savedParcelButton, "แปลงของฉัน");
         savedParcelButton.id = "saved-parcels-control-button";
         savedParcelButton.type = "button";
         savedParcelButton.hidden = true;
@@ -2202,6 +2566,7 @@
           "mobile-temporary-parcels-button",
           "แปลงชั่วคราว",
         );
+        uiIcons.setActionLabel(temporaryParcelButton, "แปลงชั่วคราว");
         temporaryParcelButton.id = "mobile-temporary-parcels-button";
         temporaryParcelButton.type = "button";
         temporaryParcelButton.hidden = true;
@@ -2216,9 +2581,9 @@
         parcelPanel.setAttribute("aria-label", "พื้นที่แปลง");
         const parcelHeader = createElement("div", "temporary-parcel-panel-header");
         parcelHeader.appendChild(createElement("h2", null, "พื้นที่แปลง"));
-        const closeButton = createElement("button", "panel-close panel-close-danger", "ปิด");
+        const closeButton = createElement("button", "panel-close panel-icon-action panel-close-icon");
         closeButton.type = "button";
-        closeButton.setAttribute("aria-label", "ปิดแผงพื้นที่แปลง");
+        setCloseIcon(closeButton, "ปิดแผงพื้นที่แปลง");
         parcelHeader.appendChild(closeButton);
         const parcelList = createElement("div", "parcel-list temporary-parcel-panel-list");
         parcelList.id = "temporary-parcel-list";
@@ -2229,6 +2594,64 @@
           "รีเฟรชหรือปิดหน้าเว็บ พื้นที่แปลงชั่วคราวจะหายทั้งหมด",
         );
         parcelPanel.append(parcelHeader, parcelList, parcelNote);
+
+        const mobileDrawHud = createElement("div", "mobile-parcel-draw-hud");
+        mobileDrawHud.id = "mobile-parcel-draw-hud";
+        mobileDrawHud.hidden = true;
+        mobileDrawHud.setAttribute("aria-label", "เครื่องมือกำหนดขอบเขตแปลง");
+
+        const mobileDrawHint = createElement(
+          "p",
+          "mobile-parcel-draw-hint",
+          "เลื่อนแผนที่ให้เป้าตรงขอบแปลง · ยังไม่มีจุด",
+        );
+        mobileDrawHint.setAttribute("aria-live", "polite");
+        const mobileDrawReticle = createElement("div", "mobile-parcel-draw-reticle");
+        mobileDrawReticle.setAttribute("aria-hidden", "true");
+
+        const mobileDrawCancelButton = createElement(
+          "button",
+          "mobile-parcel-draw-cancel",
+          "ยกเลิกการวาด",
+        );
+        uiIcons.setActionLabel(mobileDrawCancelButton, "ยกเลิกการวาด");
+        mobileDrawCancelButton.type = "button";
+
+        const mobileDrawActions = createElement("div", "mobile-parcel-draw-actions");
+        const mobileDrawUndoButton = createElement(
+          "button",
+          "mobile-parcel-draw-action mobile-parcel-draw-undo",
+          "ย้อนจุด",
+        );
+        uiIcons.setActionLabel(mobileDrawUndoButton, "ย้อนจุด");
+        mobileDrawUndoButton.type = "button";
+        mobileDrawUndoButton.disabled = true;
+        const mobileDrawAddButton = createElement(
+          "button",
+          "mobile-parcel-draw-action mobile-parcel-draw-add",
+          "เพิ่มจุด",
+        );
+        uiIcons.setActionLabel(mobileDrawAddButton, "เพิ่มจุด");
+        mobileDrawAddButton.type = "button";
+        const mobileDrawFinishButton = createElement(
+          "button",
+          "mobile-parcel-draw-action mobile-parcel-draw-finish",
+          "เสร็จสิ้น",
+        );
+        uiIcons.setActionLabel(mobileDrawFinishButton, "เสร็จสิ้น");
+        mobileDrawFinishButton.type = "button";
+        mobileDrawFinishButton.disabled = true;
+        mobileDrawActions.append(
+          mobileDrawUndoButton,
+          mobileDrawAddButton,
+          mobileDrawFinishButton,
+        );
+        mobileDrawHud.append(
+          mobileDrawHint,
+          mobileDrawReticle,
+          mobileDrawCancelButton,
+          mobileDrawActions,
+        );
 
         L.DomEvent.disableClickPropagation(container);
         L.DomEvent.disableScrollPropagation(container);
@@ -2244,9 +2667,23 @@
         });
         temporaryParcelButton.addEventListener("click", toggleTemporaryParcelPanel);
         closeButton.addEventListener("click", closeTemporaryParcelPanel);
+        if (typeof handlers.onMobileUndoVertex === "function") {
+          mobileDrawUndoButton.addEventListener("click", handlers.onMobileUndoVertex);
+        }
+        if (typeof handlers.onMobileAddVertex === "function") {
+          mobileDrawAddButton.addEventListener("click", handlers.onMobileAddVertex);
+        }
+        if (typeof handlers.onMobileFinish === "function") {
+          mobileDrawFinishButton.addEventListener("click", handlers.onMobileFinish);
+        }
+        const cancelDrawHandler = handlers.onCancelDraw || handlers.onDraw;
+        if (typeof cancelDrawHandler === "function") {
+          mobileDrawCancelButton.addEventListener("click", cancelDrawHandler);
+        }
 
         container.append(drawButton, saveButton, cancelButton, savedParcelButton, parcelPanel);
         document.body.appendChild(temporaryParcelButton);
+        document.body.appendChild(mobileDrawHud);
 
         parcelControlState.drawButton = drawButton;
         parcelControlState.saveButton = saveButton;
@@ -2255,6 +2692,12 @@
         parcelControlState.temporaryParcelButton = temporaryParcelButton;
         parcelControlState.parcelPanel = parcelPanel;
         parcelControlState.parcelList = parcelList;
+        parcelControlState.mobileDrawHud = mobileDrawHud;
+        parcelControlState.mobileDrawHint = mobileDrawHint;
+        parcelControlState.mobileDrawUndoButton = mobileDrawUndoButton;
+        parcelControlState.mobileDrawAddButton = mobileDrawAddButton;
+        parcelControlState.mobileDrawFinishButton = mobileDrawFinishButton;
+        parcelControlState.mobileDrawCancelButton = mobileDrawCancelButton;
         updateParcelButtonVisibility();
 
         return container;
@@ -2269,6 +2712,12 @@
     const drawDisabled = Boolean(options?.drawDisabled);
     const isDrawing = Boolean(options?.isDrawing);
     const isSaving = Boolean(options?.isSaving);
+    const drawingVertexCount = Number.isInteger(options?.drawingVertexCount)
+      ? Math.max(0, options.drawingVertexCount)
+      : 0;
+    const drawingAreaRai = Number.isFinite(options?.drawingAreaRai)
+      ? Math.max(0, options.drawingAreaRai)
+      : null;
     const hideDraw = Boolean(options?.hideDraw);
     const hideParcelList = Boolean(options?.hideParcelList);
     const saveText = options?.saveText || TEXT.saveEdit;
@@ -2277,22 +2726,54 @@
     parcelControlState.hideParcelButtons = hideParcelList;
 
     if (parcelControlState.drawButton) {
-      parcelControlState.drawButton.hidden = hideDraw;
+      parcelControlState.drawButton.hidden = hideDraw || (isDrawing && isMobileLayout());
       parcelControlState.drawButton.disabled = drawDisabled;
-      parcelControlState.drawButton.textContent = isDrawing ? "ยกเลิกการวาด" : TEXT.drawParcel;
+      uiIcons.setActionLabel(
+        parcelControlState.drawButton,
+        isDrawing ? "ยกเลิกการวาด" : TEXT.drawParcel,
+      );
       parcelControlState.drawButton.classList.toggle("is-active", isDrawing);
       parcelControlState.drawButton.setAttribute("aria-pressed", isDrawing ? "true" : "false");
     }
     if (parcelControlState.saveButton) {
       parcelControlState.saveButton.hidden = !isEditing;
       parcelControlState.saveButton.disabled = !isEditing || isSaving;
-      parcelControlState.saveButton.textContent = saveText;
+      uiIcons.setActionLabel(parcelControlState.saveButton, saveText, "save");
     }
     if (parcelControlState.cancelButton) {
       parcelControlState.cancelButton.hidden = !isEditing;
       parcelControlState.cancelButton.disabled = !isEditing || isSaving;
-      parcelControlState.cancelButton.textContent = cancelText;
+      uiIcons.setActionLabel(parcelControlState.cancelButton, cancelText, "cancel");
     }
+    if (parcelControlState.mobileDrawHud) {
+      parcelControlState.mobileDrawHud.hidden = !isDrawing || !isMobileLayout();
+    }
+    if (parcelControlState.mobileDrawHint) {
+      const countText = drawingVertexCount > 0
+        ? `${drawingVertexCount} จุด`
+        : "ยังไม่มีจุด";
+      const areaText = drawingAreaRai === null || drawingVertexCount < 3
+        ? ""
+        : ` · ประมาณ ${drawingAreaRai.toLocaleString("th-TH", {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 2,
+          })} ไร่`;
+      parcelControlState.mobileDrawHint.textContent =
+        `เลื่อนแผนที่ให้เป้าตรงขอบแปลง · ${countText}${areaText}`;
+    }
+    if (parcelControlState.mobileDrawUndoButton) {
+      parcelControlState.mobileDrawUndoButton.disabled = drawingVertexCount === 0;
+    }
+    if (parcelControlState.mobileDrawAddButton) {
+      parcelControlState.mobileDrawAddButton.disabled = !isDrawing;
+    }
+    if (parcelControlState.mobileDrawFinishButton) {
+      parcelControlState.mobileDrawFinishButton.disabled = drawingVertexCount < 3;
+    }
+    if (isDrawing) {
+      closeMobileLayerDrawer();
+    }
+    setBodyClass("mobile-parcel-drawing", isDrawing && isMobileLayout());
     updateParcelButtonVisibility();
   }
 
@@ -2328,14 +2809,17 @@
         overlayLayers.droughtRecurrenceLayer,
       );
 
-      return L.control
+      const control = L.control
         .layers(layerControlBaseLayers, layerControlOverlayLayers, {
           position: "topleft",
           collapsed: true,
         })
         .addTo(map);
+      return enhanceMobileLayerControl(control);
     },
     isMobileLayout,
+    isMobileLayerDrawerOpen,
+    closeMobileLayerDrawer,
     addParcelDrawControl,
     setParcelControlState,
     setSavedParcelsControlVisible,
@@ -2366,6 +2850,9 @@
     renderResultPanel,
     renderParcelResult,
     renderSavedParcelDetail,
+    setSavedParcelPanelActions: function (actions) {
+      savedParcelPanelActions = actions || {};
+    },
     createPopupContent,
     createParcelPopupContent,
     text: TEXT,

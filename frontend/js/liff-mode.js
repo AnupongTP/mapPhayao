@@ -516,7 +516,7 @@
         "border-radius:8px",
         "box-shadow:0 18px 48px rgba(15, 23, 42, 0.25)",
         "padding:12px",
-        "font:12px/1.5 system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+        "font:12px/1.5 'Sarabun', sans-serif",
       ].join(";");
 
       const title = createElement("h2", "LIFF Debug");

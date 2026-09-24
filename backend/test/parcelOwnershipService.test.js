@@ -112,6 +112,7 @@ test("createParcel writes owner_user_id from the resolved app user and ignores c
       ownerUserId: OTHER_OWNER_USER_ID,
       lineUserId: "client-supplied-line-user",
       userId: "client-supplied-user",
+      display_name: "client-supplied-display-name",
     },
     {
       lineUserId: " verified-line-user ",
@@ -133,6 +134,7 @@ test("createParcel writes owner_user_id from the resolved app user and ignores c
   assert.equal(insertCall.params[6], OWNER_USER_ID);
   assert.equal(insertCall.params.includes(OTHER_OWNER_USER_ID), false);
   assert.equal(insertCall.params.includes("client-supplied-line-user"), false);
+  assert.equal(insertCall.params.includes("client-supplied-display-name"), false);
   assert.equal(client.calls.some((call) => call.text === "COMMIT"), true);
   assert.equal(client.released, true);
   assert.equal(parcel.id, PARCEL_ID);

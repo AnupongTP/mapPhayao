@@ -1,5 +1,11 @@
 // Builds basemaps, lazy GeoJSON overlays, and panes for map layer ordering.
 (function (window) {
+  const uiIcons = window.MapUiIcons || {
+    setLabel(element, iconName, text) {
+      element.textContent = text;
+      return element;
+    },
+  };
   const SUITABILITY_COLORS = {
     S1: "#74ff00",
     S2: "#ffbf00",
@@ -699,9 +705,11 @@
   function createHazardLegendControl(map, activeLayers) {
     const control = L.control({ position: "bottomright" });
     let container = null;
+    let content = null;
+    let toggleButton = null;
 
     function addSection(title, items, note) {
-      const section = L.DomUtil.create("div", "hazard-legend-section", container);
+      const section = L.DomUtil.create("div", "hazard-legend-section", content);
       const heading = L.DomUtil.create("h4", "", section);
       heading.textContent = title;
       items.forEach((item) => section.appendChild(createLegendItem(item.color, item.label)));
@@ -715,10 +723,17 @@
       if (!container) {
         return;
       }
-      container.replaceChildren();
+      content.replaceChildren();
       const showFlood = activeLayers.has(HAZARD_LAYER_KEYS.flood);
       const showDrought = activeLayers.has(HAZARD_LAYER_KEYS.drought);
       container.hidden = !showFlood && !showDrought;
+      if (toggleButton) {
+        const activeCount = Number(showFlood) + Number(showDrought);
+        const toggleText = activeCount > 1
+          ? `คำอธิบายสี (${activeCount})`
+          : "คำอธิบายสี";
+        uiIcons.setLabel(toggleButton, "palette", toggleText);
+      }
       if (showFlood) {
         const floodMetadata = activeLayers
           .get(HAZARD_LAYER_KEYS.flood)
@@ -751,6 +766,22 @@
     control.onAdd = function () {
       container = L.DomUtil.create("div", "hazard-legend leaflet-control");
       container.hidden = true;
+      toggleButton = L.DomUtil.create(
+        "button",
+        "hazard-legend-mobile-toggle",
+        container,
+      );
+      toggleButton.type = "button";
+      uiIcons.setLabel(toggleButton, "palette", "คำอธิบายสี");
+      toggleButton.setAttribute?.("aria-expanded", "false");
+      toggleButton.setAttribute?.("aria-label", "แสดงหรือซ่อนคำอธิบายสีภัยพิบัติ");
+      content = L.DomUtil.create("div", "hazard-legend-content", container);
+      if (typeof toggleButton.addEventListener === "function") {
+        toggleButton.addEventListener("click", () => {
+          const isExpanded = container.classList.toggle("is-mobile-expanded");
+          toggleButton.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+        });
+      }
       L.DomEvent.disableClickPropagation(container);
       L.DomEvent.disableScrollPropagation(container);
       update();

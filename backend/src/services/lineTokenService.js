@@ -53,6 +53,7 @@ async function verifyIdToken(idToken) {
     return {
       userId,
       audience,
+      displayName: typeof payload?.name === "string" ? payload.name.trim() : "",
     };
   } catch (error) {
     if (error.name === "AbortError") {

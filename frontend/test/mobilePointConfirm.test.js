@@ -55,9 +55,14 @@ function createEventTarget() {
 
 function createMapTarget() {
   const target = createEventTarget();
+  let center = { lat: 19.1, lng: 99.9 };
   return {
     on(type, handler) {
       target.addEventListener(type, handler);
+      return this;
+    },
+    off(type, handler) {
+      target.removeEventListener(type, handler);
       return this;
     },
     fire(type, payload) {
@@ -70,6 +75,13 @@ function createMapTarget() {
       return this;
     },
     panTo() {
+      return this;
+    },
+    getCenter() {
+      return { ...center };
+    },
+    setCenter(lat, lng) {
+      center = { lat, lng };
       return this;
     },
     listenerCount: target.listenerCount,
@@ -171,8 +183,47 @@ function createLeafletStub(state) {
     },
     Draw: {
       Polygon: class {
-        enable() {}
-        disable() {}
+        constructor(map) {
+          this._map = map;
+          this._markers = [];
+          this._latLngs = [];
+          this._markerGroup = {
+            removeLayer: () => {
+              state.removedSingleVertex = true;
+            },
+          };
+          this._poly = {
+            getLatLngs: () => this._latLngs.slice(),
+            setLatLngs: (latLngs) => {
+              this._latLngs = latLngs.slice();
+            },
+          };
+          this._mouseMarker = {
+            off: () => this._mouseMarker,
+          };
+          state.drawHandler = this;
+        }
+        enable() {
+          this.enabled = true;
+        }
+        disable() {
+          this.enabled = false;
+        }
+        addVertex(latLng) {
+          this._markers.push({ latLng });
+          this._latLngs.push({ lat: latLng.lat, lng: latLng.lng });
+        }
+        deleteLastVertex() {
+          if (this._markers.length <= 1) {
+            return;
+          }
+          this._markers.pop();
+          this._latLngs.pop();
+        }
+        completeShape() {
+          state.completedShapeCount = (state.completedShapeCount || 0) + 1;
+        }
+        _vertexChanged() {}
       },
       Event: {
         CREATED: "draw:created",
@@ -180,8 +231,8 @@ function createLeafletStub(state) {
       },
     },
     GeometryUtil: {
-      geodesicArea() {
-        return 0;
+      geodesicArea(latLngs) {
+        return latLngs.length >= 3 ? 3200 : 0;
       },
     },
     DomEvent: {
@@ -243,6 +294,9 @@ function createMapHarness(options = {}) {
     parcelControlStates: [],
     parcelInitCalls: 0,
     parcelReadyValues: [],
+    parcelDrawHandlers: null,
+    drawerCloseCalls: 0,
+    confirmMessages: [],
     warnings: [],
   };
 
@@ -276,6 +330,12 @@ function createMapHarness(options = {}) {
   const MapUi = {
     text,
     addLayerControl() {},
+    isMobileLayerDrawerOpen() {
+      return Boolean(options.mobileLayerDrawerOpen);
+    },
+    closeMobileLayerDrawer() {
+      uiState.drawerCloseCalls += 1;
+    },
     setupLocationPanel(handlers) {
       uiState.setupCalls += 1;
       uiState.locateHandler = handlers.onLocate;
@@ -331,7 +391,8 @@ function createMapHarness(options = {}) {
       return "popup";
     },
     renderTemporaryParcelList() {},
-    addParcelDrawControl() {
+    addParcelDrawControl(map, handlers) {
+      uiState.parcelDrawHandlers = handlers;
       return {};
     },
     setParcelControlState(state) {
@@ -431,6 +492,10 @@ function createMapHarness(options = {}) {
     dispatchEvent: windowEvents.dispatchEvent,
     setTimeout,
     clearTimeout,
+    confirm(message) {
+      uiState.confirmMessages.push(String(message));
+      return options.confirmResult !== false;
+    },
     console: {
       warn(message) {
         uiState.warnings.push(String(message));
@@ -468,6 +533,12 @@ function createMapHarness(options = {}) {
     map: leafletState.map,
     get marker() {
       return leafletState.marker;
+    },
+    get drawHandler() {
+      return leafletState.drawHandler;
+    },
+    get completedShapeCount() {
+      return leafletState.completedShapeCount || 0;
     },
   };
 }
@@ -636,4 +707,125 @@ test("point confirmation source no longer depends on token-bearing LIFF analysis
     mapSource.match(/async function confirmSelectedLocation\(\) \{[\s\S]*?\n  \}/)[0],
     /isLiffConfirmationUnavailable\(\)/,
   );
+});
+
+test("mobile parcel drawing uses map center controls and blocks ordinary point selection", async () => {
+  const harness = createMapHarness();
+  await nextTick();
+  const handlers = harness.uiState.parcelDrawHandlers;
+
+  assert.ok(handlers);
+  harness.map.setCenter(19.123456, 99.654321);
+  handlers.onDraw();
+
+  assert.equal(harness.drawHandler.enabled, true);
+  assert.equal(last(harness.uiState.parcelControlStates).isDrawing, true);
+  assert.equal(last(harness.uiState.parcelControlStates).drawingVertexCount, 0);
+
+  harness.map.fire("click", { latlng: { lat: 18, lng: 98 } });
+  assert.equal(harness.uiState.mapReady.length, 0);
+
+  handlers.onMobileAddVertex();
+  assert.deepEqual(harness.drawHandler._latLngs[0], {
+    lat: 19.123456,
+    lng: 99.654321,
+  });
+  assert.equal(last(harness.uiState.parcelControlStates).drawingVertexCount, 1);
+});
+
+test("mobile parcel drawing supports first-point undo, area preview, and three-point finish", async () => {
+  const harness = createMapHarness();
+  await nextTick();
+  const handlers = harness.uiState.parcelDrawHandlers;
+
+  handlers.onDraw();
+  handlers.onMobileAddVertex();
+  handlers.onMobileUndoVertex();
+  assert.equal(harness.drawHandler._markers.length, 0);
+  assert.equal(last(harness.uiState.parcelControlStates).drawingVertexCount, 0);
+
+  [[19.1, 99.1], [19.2, 99.2], [19.3, 99.3]].forEach(([lat, lng]) => {
+    harness.map.setCenter(lat, lng);
+    handlers.onMobileAddVertex();
+  });
+
+  const drawingState = last(harness.uiState.parcelControlStates);
+  assert.equal(drawingState.drawingVertexCount, 3);
+  assert.equal(drawingState.drawingAreaRai, 2);
+  handlers.onMobileFinish();
+  assert.equal(harness.completedShapeCount, 1);
+});
+
+test("mobile parcel cancel returns point controls without making an analysis request", async () => {
+  const harness = createMapHarness();
+  await nextTick();
+  const handlers = harness.uiState.parcelDrawHandlers;
+
+  handlers.onDraw();
+  handlers.onMobileAddVertex();
+  handlers.onCancelDraw();
+
+  assert.equal(harness.drawHandler.enabled, false);
+  assert.equal(last(harness.uiState.parcelControlStates).isDrawing, false);
+  assert.equal(harness.apiCalls.length, 0);
+});
+
+test("mobile parcel cancel keeps the draft when confirmation is declined", async () => {
+  const harness = createMapHarness({ confirmResult: false });
+  await nextTick();
+  const handlers = harness.uiState.parcelDrawHandlers;
+
+  handlers.onDraw();
+  handlers.onMobileAddVertex();
+  handlers.onCancelDraw();
+
+  assert.equal(harness.drawHandler.enabled, true);
+  assert.equal(last(harness.uiState.parcelControlStates).isDrawing, true);
+  assert.equal(harness.uiState.confirmMessages.length, 1);
+  assert.equal(harness.apiCalls.length, 0);
+});
+
+test("mobile layer and parcel UI reuse singular controls and reserve non-overlapping states", () => {
+  assert.equal((uiSource.match(/L\.control\s*\.layers/g) || []).length, 1);
+  assert.equal((uiSource.match(/id = "mobile-parcel-draw-hud"/g) || []).length, 1);
+  assert.match(uiSource, /enhanceMobileLayerControl\(control\)/);
+  assert.match(uiSource, /mobile-layer-drawer-open/);
+  assert.match(uiSource, /mobile-parcel-drawing/);
+  assert.match(cssSource, /\.mobile-layer-drawer-scrim:not\(\[hidden\]\)/);
+  assert.match(cssSource, /\.leaflet-control-layers\.is-mobile-drawer-open/);
+  assert.match(
+    cssSource,
+    /\.leaflet-control-layers\.is-mobile-drawer-open label[\s\S]*?touch-action:\s*manipulation/,
+  );
+  assert.match(
+    cssSource,
+    /\.leaflet-control-layers\.is-mobile-drawer-open \.leaflet-control-layers-selector[\s\S]*?pointer-events:\s*auto/,
+  );
+  assert.doesNotMatch(cssSource, /\.mobile-layer-drawer-open \.mobile-point-actions/);
+  assert.doesNotMatch(cssSource, /mobile-layer-sheet/);
+  assert.match(cssSource, /\.mobile-parcel-drawing \.mobile-point-actions/);
+  assert.match(cssSource, /\.mobile-parcel-draw-reticle/);
+  assert.match(
+    cssSource,
+    /\.mobile-parcel-draw-reticle::before \{[\s\S]*?top: 50%;[\s\S]*?left: 50%;[\s\S]*?transform: translate\(-50%, -50%\);[\s\S]*?\}/,
+  );
+  assert.match(
+    cssSource,
+    /\.mobile-parcel-draw-reticle::after \{[\s\S]*?top: 50%;[\s\S]*?left: 50%;[\s\S]*?transform: translate\(-50%, -50%\);[\s\S]*?\}/,
+  );
+  assert.match(cssSource, /grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1\.3fr\) minmax\(0, 1fr\)/);
+  assert.match(mapSource, /\.off\("mousedown", parcelDrawHandler\._onMouseDown/);
+  assert.match(mapSource, /\.off\("touchstart", parcelDrawHandler\._onTouch/);
+  assert.equal((mapSource.match(/new L\.Draw\.Polygon/g) || []).length, 1);
+});
+
+test("map click closes an open mobile layer drawer without selecting a point", async () => {
+  const harness = createMapHarness({ mobileLayerDrawerOpen: true });
+  await nextTick();
+
+  harness.map.fire("click", { latlng: { lat: 19.1, lng: 99.9 } });
+
+  assert.equal(harness.uiState.drawerCloseCalls, 1);
+  assert.equal(harness.uiState.mapReady.length, 0);
+  assert.equal(Boolean(harness.marker), false);
 });

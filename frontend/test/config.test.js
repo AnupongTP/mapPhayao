@@ -113,14 +113,14 @@ test("location-report URL contains exactly one /api segment", async () => {
   assert.equal(calls[0].url.includes("/api/api/"), false);
 });
 
-test("Netlify config publishes only the active static frontend directory without a build command", () => {
+test("Netlify builds Tailwind assets and publishes only the active frontend directory", () => {
   const netlifySource = fs.readFileSync(
     path.join(__dirname, "../../netlify.toml"),
     "utf8",
   );
 
   assert.match(netlifySource, /\[build\]/);
+  assert.match(netlifySource, /command\s*=\s*"npm run build"/);
   assert.match(netlifySource, /publish\s*=\s*"frontend"/);
-  assert.doesNotMatch(netlifySource, /command\s*=/);
   assert.doesNotMatch(netlifySource, /backend|database|db_export|backups|\.env/);
 });

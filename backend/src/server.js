@@ -16,8 +16,9 @@ const areaAnalysisRoutes = require("./routes/areaAnalysisRoutes");
 const lineRoutes = require("./routes/lineRoutes");
 const hazardLayerRoutes = require("./routes/hazardLayerRoutes");
 
-const app = express();
 const port = process.env.PORT || 3000;
+function createApp(dependencies = {}) {
+const app = express();
 const developmentOrigins = [
   "http://localhost",
   "http://127.0.0.1",
@@ -62,9 +63,20 @@ app.use("/api/pgconnect", pgConnectRoutes);
 app.use("/api/rice-suitability", riceSuitabilityRoutes);
 app.use("/api/location-report", locationReportRoutes);
 app.use("/api/area-analysis", areaAnalysisRoutes);
-app.use("/api/parcels", parcelRoutes);
-app.use("/api/line", lineRoutes);
+app.use("/api/parcels", dependencies.lineTokenService || dependencies.googleIntegration
+  ? parcelRoutes.createParcelRoutes({
+    lineTokenService: dependencies.lineTokenService,
+    googleIntegration: dependencies.googleIntegration,
+  })
+  : parcelRoutes);
+app.use("/api/line", dependencies.lineController
+  ? lineRoutes.createLineRoutes(dependencies.lineController)
+  : lineRoutes);
 app.use("/api/hazard-layers", hazardLayerRoutes);
+
+if (typeof dependencies.registerRoutes === "function") {
+  dependencies.registerRoutes(app);
+}
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found" });
@@ -78,6 +90,13 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-});
+return app;
+}
+
+if (require.main === module) {
+  createApp().listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+  });
+}
+
+module.exports = { createApp };

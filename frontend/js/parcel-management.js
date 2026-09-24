@@ -1,5 +1,20 @@
 (function (window, document) {
   const formatters = window.MapFormatters;
+  const uiIcons = window.MapUiIcons || {
+    create() {
+      const icon = document.createElement("span");
+      icon.setAttribute("aria-hidden", "true");
+      return icon;
+    },
+    setActionLabel(element, text) {
+      element.textContent = text;
+      return element;
+    },
+    setChevron(element, isExpanded) {
+      element.textContent = isExpanded ? "⌃" : "⌄";
+      return element;
+    },
+  };
   const TEXT = {
     saveParcel: "บันทึกแปลง",
     myParcels: "แปลงของฉัน",
@@ -13,6 +28,7 @@
     saveFailed: "ไม่สามารถบันทึกแปลงได้ กรุณาลองใหม่",
     loading: "กำลังโหลดแปลง...",
     empty: "ยังไม่มีแปลงที่บันทึก",
+    noResults: "ไม่พบแปลงที่ตรงกับคำค้น",
     loadFailed: "ไม่สามารถโหลดข้อมูลแปลงได้",
     partialMapLoad: "บางแปลงไม่สามารถแสดงบนแผนที่ได้",
     analyzing: "กำลังวิเคราะห์...",
@@ -43,6 +59,8 @@
   let lastFocusedElement = null;
   let cachedParcels = [];
   let expandedSavedParcelId = null;
+  let focusedSavedParcelId = null;
+  let myParcelsSearchTerm = "";
   let activeListRequest = null;
 
   function createElement(tagName, className, text) {
@@ -111,9 +129,11 @@
     const sheet = createElement("section", "parcel-sheet");
     const header = createElement("header", "parcel-sheet-header");
     header.appendChild(createElement("h2", null, title));
-    const closeButton = createElement("button", "panel-close panel-close-danger", "ปิด");
+    const closeButton = createElement("button", "panel-close panel-icon-action panel-close-icon");
+    closeButton.replaceChildren(uiIcons.create("close"));
     closeButton.type = "button";
     closeButton.setAttribute("aria-label", "ปิด");
+    closeButton.title = "ปิด";
     closeButton.addEventListener("click", () => closeSheet(backdrop));
     header.appendChild(closeButton);
     const body = createElement("div", "parcel-sheet-body");
@@ -158,15 +178,17 @@
 
   function createParcelForm({ idPrefix, title, confirmText, parcel, onSubmit }) {
     const { backdrop, body } = createSheet(`${idPrefix}-sheet`, title);
+    body.classList.add("parcel-form-body");
     const form = createElement("form", "parcel-form");
     form.id = `${idPrefix}-form`;
+    const fields = createElement("div", "parcel-form-fields");
     const nameInput = document.createElement("input");
     nameInput.type = "text";
     nameInput.name = "parcelName";
     nameInput.required = true;
     nameInput.maxLength = 120;
     nameInput.value = parcel?.parcelName || parcel?.name || "";
-    createField(form, `${idPrefix}-name`, TEXT.parcelName, nameInput);
+    createField(fields, `${idPrefix}-name`, TEXT.parcelName, nameInput);
 
     const cropSelect = document.createElement("select");
     cropSelect.name = "cropType";
@@ -178,20 +200,20 @@
       cropSelect.appendChild(element);
     });
     cropSelect.value = parcel?.cropType || "rice";
-    createField(form, `${idPrefix}-crop`, TEXT.cropType, cropSelect);
+    createField(fields, `${idPrefix}-crop`, TEXT.cropType, cropSelect);
 
     const riceInput = document.createElement("input");
     riceInput.type = "text";
     riceInput.name = "riceVariety";
     riceInput.maxLength = 120;
     riceInput.value = parcel?.riceVariety || "";
-    createField(form, `${idPrefix}-rice-variety`, TEXT.riceVariety, riceInput);
+    createField(fields, `${idPrefix}-rice-variety`, TEXT.riceVariety, riceInput);
 
     const dateInput = document.createElement("input");
     dateInput.type = "date";
     dateInput.name = "plantingDate";
     dateInput.value = parcel?.plantingDate || "";
-    createField(form, `${idPrefix}-planting-date`, TEXT.plantingDate, dateInput);
+    createField(fields, `${idPrefix}-planting-date`, TEXT.plantingDate, dateInput);
 
     const status = createElement("p", "parcel-sheet-status");
     status.id = `${idPrefix}-status`;
@@ -201,9 +223,11 @@
 
     const actions = createElement("div", "parcel-sheet-actions");
     const cancelButton = createElement("button", "panel-button secondary", TEXT.cancel);
+    uiIcons.setActionLabel(cancelButton, TEXT.cancel);
     cancelButton.type = "button";
     cancelButton.addEventListener("click", () => closeSheet(backdrop));
     const submitButton = createElement("button", "panel-button", confirmText);
+    uiIcons.setActionLabel(submitButton, confirmText, "save");
     submitButton.type = "submit";
     actions.append(cancelButton, submitButton);
 
@@ -229,13 +253,15 @@
         cancelButton.disabled = false;
         setStatus(
           status,
-          idPrefix === "parcel-save" ? TEXT.saveFailed : getFriendlyError(error),
+          error.partialSuccess ? error.message : idPrefix === "parcel-save" ? TEXT.saveFailed : getFriendlyError(error),
           "error",
         );
       }
     });
 
-    form.append(status, actions);
+    const footer = createElement("div", "parcel-form-footer");
+    footer.append(status, actions);
+    form.append(fields, footer);
     body.appendChild(form);
     nameInput.focus({ preventScroll: true });
     nameInput.select();
@@ -263,45 +289,37 @@
   }
 
   function renderSaveAction(parcel, options = {}) {
-    const existing = document.getElementById("mobile-parcel-save-action");
-    if (existing) {
-      existing.remove();
-    }
+    document.getElementById("mobile-parcel-save-button")?.remove();
 
     if (!isLiffEnabled() || !liffReady || !parcel) {
       return;
     }
 
-    const content = document.getElementById("result-panel-content");
-    if (!content || parcel.analysisStatus !== "success") {
+    const panel = document.getElementById("result-panel");
+    const header = panel?.querySelector(".panel-header");
+    if (!header || parcel.analysisStatus !== "success") {
       return;
     }
 
     const state = window.MapParcelState.ensurePersistenceState(parcel);
-    const wrapper = createElement("section", "mobile-parcel-save-action");
-    wrapper.id = "mobile-parcel-save-action";
-    const status = createElement("p", "parcel-sheet-status");
-    status.id = "mobile-parcel-save-status";
-    status.hidden = true;
-    status.setAttribute("aria-live", "polite");
-
-    if (state.saveState === "saved") {
-      setStatus(status, TEXT.saved, "success");
-      wrapper.appendChild(status);
-      content.appendChild(wrapper);
+    const pendingPhotos = parcel.photos?.some((photo) => !photo.image);
+    if (state.saveState === "saved" && !pendingPhotos) {
       return;
     }
 
-    const button = createElement("button", "panel-button mobile-parcel-save-button", TEXT.saveParcel);
+    const button = createElement("button", "panel-close panel-icon-action result-panel-icon-action mobile-parcel-save-button");
+    button.replaceChildren(uiIcons.create("save"));
     button.id = "mobile-parcel-save-button";
     button.type = "button";
+    button.title = TEXT.saveParcel;
+    button.setAttribute("aria-label", TEXT.saveParcel);
     button.disabled =
       state.saveState === "saving" ||
-      !window.MapParcelState.canSaveAnalyzedParcel(parcel);
+      !(pendingPhotos && state.savedParcelId) && !window.MapParcelState.canSaveAnalyzedParcel(parcel);
     button.setAttribute("aria-controls", "parcel-save-sheet");
     button.setAttribute("aria-busy", state.saveState === "saving" ? "true" : "false");
     button.addEventListener("click", () => {
-      if (!window.MapParcelState.canSaveAnalyzedParcel(parcel)) {
+      if (!(pendingPhotos && state.savedParcelId) && !window.MapParcelState.canSaveAnalyzedParcel(parcel)) {
         return;
       }
       openSaveSheet(parcel, async (metadata) => {
@@ -311,8 +329,7 @@
       });
     });
 
-    wrapper.append(button, status);
-    content.appendChild(wrapper);
+    header.insertBefore(button, header.querySelector(".result-panel-close"));
   }
 
   function createParcelSummary(parcel) {
@@ -350,7 +367,8 @@
       ? `ปลูก ${formatters.formatThaiDateOnly(parcel.plantingDate)}`
       : formatters.formatThaiDateTime(parcel.updatedAt || parcel.createdAt);
     const date = createElement("span", "saved-parcel-date", dateValue);
-    const chevron = createElement("span", "saved-parcel-chevron", isExpanded ? "⌃" : "⌄");
+    const chevron = createElement("span", "saved-parcel-chevron");
+    uiIcons.setChevron(chevron, isExpanded);
 
     titleWrap.append(title);
     if (summary.textContent) {
@@ -363,33 +381,49 @@
     return header;
   }
 
-  function renderParcelCards(container, parcels) {
+  function renderParcelCards(container) {
+    const search = myParcelsSearchTerm.trim().toLocaleLowerCase();
+    const matches = search
+      ? cachedParcels.filter((parcel) => [
+        parcel.parcelName,
+        parcel.parcelCode,
+        parcel.cropType,
+        formatters.getCropTypeLabel(parcel.cropType),
+        parcel.riceVariety,
+      ].some((value) => String(value || "").toLocaleLowerCase().includes(search)))
+      : cachedParcels;
+    const focus = matches.find((parcel) => parcel.id === focusedSavedParcelId);
+    const parcels = focus ? [focus, ...matches.filter((parcel) => parcel.id !== focus.id)] : matches;
     container.replaceChildren();
     if (!parcels.length) {
-      container.appendChild(createElement("p", "parcel-empty", TEXT.empty));
+      container.appendChild(createElement("p", "parcel-empty", search ? TEXT.noResults : TEXT.empty));
       return;
     }
 
-    if (expandedSavedParcelId && !parcels.some((parcel) => parcel.id === expandedSavedParcelId)) {
+    if (expandedSavedParcelId && !cachedParcels.some((parcel) => parcel.id === expandedSavedParcelId)) {
       expandedSavedParcelId = null;
     }
 
     parcels.forEach((parcel) => {
+      const isFocused = parcel.id === focusedSavedParcelId;
       const isExpanded = parcel.id === expandedSavedParcelId;
       const card = createElement(
         "article",
-        `saved-parcel-card${isExpanded ? " is-expanded" : ""}`,
+        `saved-parcel-card${isExpanded ? " is-expanded" : ""}${isFocused ? " is-focused" : ""}`,
       );
+      card.dataset.parcelId = parcel.id;
       const actionsId = `saved-parcel-actions-${parcel.id}`;
       const header = createSavedParcelHeader(parcel, isExpanded, actionsId, () => {
+        focusedSavedParcelId = null;
         expandedSavedParcelId = isExpanded ? null : parcel.id;
-        renderParcelCards(container, parcels);
+        renderParcelCards(container);
       });
       const actions = createElement("div", "saved-parcel-actions");
       actions.id = actionsId;
       actions.hidden = !isExpanded;
       const makeButton = (label, onClick, className = "parcel-action") => {
         const button = createElement("button", className, label);
+        uiIcons.setActionLabel(button, label);
         button.type = "button";
         button.addEventListener("click", (event) => {
           event.stopPropagation();
@@ -400,6 +434,7 @@
 
       actions.append(
         makeButton("ดูแปลง", () => handlers.onOpenParcel?.(parcel)),
+        makeButton("รายละเอียด", () => handlers.onAnalyzeParcel?.(parcel, { reuseCachedResult: true })),
         makeButton("วิเคราะห์ใหม่", () => handlers.onAnalyzeParcel?.(parcel)),
         makeButton("แก้ไขข้อมูล", () => {
           openEditSheet(parcel, async (metadata) => {
@@ -417,7 +452,7 @@
             cachedParcels = cachedParcels.map((item) =>
               item.id === updatedParcel.id ? updatedParcel : item,
             );
-            renderParcelCards(container, cachedParcels);
+            renderParcelCards(container);
             handlers.onParcelUpdated?.(updatedParcel);
           });
         }),
@@ -488,18 +523,19 @@
         result.layerResult && result.layerResult.skipped > 0 ? TEXT.partialMapLoad : "",
         result.layerResult && result.layerResult.skipped > 0 ? "error" : undefined,
       );
-      renderParcelCards(container, cachedParcels);
+      renderParcelCards(container);
     } catch (error) {
       setStatus(status, getFriendlyError(error) || TEXT.loadFailed, "error");
       container.replaceChildren();
       const retry = createElement("button", "panel-button secondary", "ลองใหม่");
+      uiIcons.setActionLabel(retry, "ลองใหม่");
       retry.type = "button";
       retry.addEventListener("click", () => loadMyParcels(container, status));
       container.appendChild(retry);
     }
   }
 
-  function openMyParcelsSheet() {
+  function openMyParcelsSheet(options = {}) {
     if (!liffReady) {
       showLineOnlyMessage();
       return;
@@ -508,18 +544,56 @@
       window.MapUi.closeTemporaryParcelPanel();
     }
     const { body } = createSheet("my-parcels-sheet", TEXT.myParcels);
+    if (options.focusParcelId) {
+      focusedSavedParcelId = options.focusParcelId;
+      expandedSavedParcelId = options.focusParcelId;
+      myParcelsSearchTerm = "";
+    } else {
+      focusedSavedParcelId = null;
+    }
+    const searchRow = createElement("div", "my-parcels-search-row");
+    const searchInput = createElement("input", "my-parcels-search");
+    searchInput.id = "my-parcels-search";
+    searchInput.type = "search";
+    searchInput.placeholder = "ค้นหาแปลง";
+    searchInput.setAttribute("aria-label", "ค้นหาแปลงตามชื่อ รหัส ชนิดพืช หรือพันธุ์");
+    searchInput.value = myParcelsSearchTerm;
+    const clearButton = createElement("button", "my-parcels-search-clear");
+    clearButton.type = "button";
+    clearButton.title = "ล้างคำค้น";
+    clearButton.setAttribute("aria-label", "ล้างคำค้น");
+    clearButton.replaceChildren(uiIcons.create("close"));
+    clearButton.hidden = !myParcelsSearchTerm;
+    searchRow.append(searchInput, clearButton);
     const status = createElement("p", "parcel-sheet-status");
     status.id = "my-parcels-status";
     status.setAttribute("aria-live", "polite");
     status.setAttribute("role", "status");
     const list = createElement("div", "my-parcels-list");
     list.id = "my-parcels-list";
-    body.append(status, list);
+    searchInput.addEventListener("input", () => {
+      myParcelsSearchTerm = searchInput.value;
+      focusedSavedParcelId = null;
+      clearButton.hidden = !myParcelsSearchTerm;
+      renderParcelCards(list);
+      list.scrollTop = 0;
+    });
+    clearButton.addEventListener("click", () => {
+      searchInput.value = "";
+      myParcelsSearchTerm = "";
+      focusedSavedParcelId = null;
+      clearButton.hidden = true;
+      renderParcelCards(list);
+      list.scrollTop = 0;
+      searchInput.focus({ preventScroll: true });
+    });
+    body.append(status, searchRow, list);
     loadMyParcels(list, status);
   }
 
   function openDeleteDialog(parcel, listContainer) {
     const { backdrop, body } = createSheet("parcel-delete-dialog", TEXT.deleteTitle);
+    let isDeleting = false;
     const message = createElement(
       "p",
       "result-message",
@@ -531,32 +605,44 @@
     status.setAttribute("aria-live", "polite");
     const actions = createElement("div", "parcel-sheet-actions");
     const cancelButton = createElement("button", "panel-button secondary", TEXT.cancel);
+    uiIcons.setActionLabel(cancelButton, TEXT.cancel);
     cancelButton.type = "button";
     cancelButton.addEventListener("click", () => closeSheet(backdrop));
     const deleteButton = createElement("button", "panel-button danger", TEXT.delete);
+    uiIcons.setActionLabel(deleteButton, TEXT.delete);
     deleteButton.type = "button";
     deleteButton.addEventListener("click", async () => {
+      if (isDeleting) {
+        return;
+      }
+      isDeleting = true;
       cancelButton.disabled = true;
       deleteButton.disabled = true;
       setStatus(status, TEXT.deleting);
       try {
         await window.MapApi.deleteMyParcel(parcel.id);
-        cachedParcels = cachedParcels.filter((item) => item.id !== parcel.id);
-        syncMyParcelsButton();
-        if (expandedSavedParcelId === parcel.id) {
-          expandedSavedParcelId = null;
-        }
-        if (listContainer) {
-          renderParcelCards(listContainer, cachedParcels);
-        }
-        handlers.onParcelDeleted?.(parcel.id);
-        setStatus(status, TEXT.deleted, "success");
-        window.setTimeout(() => closeSheet(backdrop), 600);
       } catch (error) {
+        isDeleting = false;
         cancelButton.disabled = false;
         deleteButton.disabled = false;
         setStatus(status, getFriendlyError(error), "error");
+        return;
       }
+      closeSheet(backdrop);
+      listRevision += 1;
+      cachedParcels = cachedParcels.filter((item) => item.id !== parcel.id);
+      syncMyParcelsButton();
+      if (expandedSavedParcelId === parcel.id) {
+        expandedSavedParcelId = null;
+      }
+      if (focusedSavedParcelId === parcel.id) {
+        focusedSavedParcelId = null;
+      }
+      if (listContainer) {
+        renderParcelCards(listContainer);
+      }
+      handlers.onParcelDeleted?.(parcel.id);
+      setStatus(document.getElementById("my-parcels-status"), TEXT.deleted, "success");
     });
     actions.append(cancelButton, deleteButton);
     body.append(message, note, status, actions);
@@ -582,12 +668,14 @@
       body.appendChild(createElement("p", "result-message", TEXT.openUnsavedConfirm));
       const actions = createElement("div", "parcel-sheet-actions");
       const cancelButton = createElement("button", "panel-button secondary", TEXT.cancel);
+      uiIcons.setActionLabel(cancelButton, TEXT.cancel);
       cancelButton.type = "button";
       cancelButton.addEventListener("click", () => {
         closeSheet(backdrop);
         resolve(false);
       });
       const openButton = createElement("button", "panel-button", "เปิดแปลง");
+      uiIcons.setActionLabel(openButton, "เปิดแปลง");
       openButton.type = "button";
       openButton.addEventListener("click", () => {
         closeSheet(backdrop);
@@ -613,7 +701,7 @@
     syncMyParcelsButton();
     const list = document.getElementById("my-parcels-list");
     if (list) {
-      renderParcelCards(list, cachedParcels);
+      renderParcelCards(list);
     }
   }
 
@@ -630,7 +718,7 @@
     syncMyParcelsButton();
     const list = document.getElementById("my-parcels-list");
     if (list) {
-      renderParcelCards(list, cachedParcels);
+      renderParcelCards(list);
     }
   }
 

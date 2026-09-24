@@ -1,0 +1,276 @@
+@layer theme, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" source(none);
+
+@source "../index.html";
+@source "../js";
+
+@theme {
+  --font-sans: "Sarabun", sans-serif;
+  --color-map-primary: #0f766e;
+  --color-map-primary-hover: #115e59;
+  --color-map-accent: #0d9488;
+  --color-map-danger: #dc2626;
+  --color-map-danger-hover: #b91c1c;
+  --color-map-ink: #0f172a;
+}
+
+[hidden] {
+    display: none !important;
+}
+
+body {
+    @apply font-sans text-slate-900 antialiased;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    @apply font-sans;
+  }
+
+  .panel-header,
+  .temporary-parcel-panel-header,
+  .parcel-sheet-header,
+  .mobile-layer-drawer-header {
+    @apply bg-white text-slate-900;
+  }
+
+  .panel-header h2,
+  .temporary-parcel-panel-header h2,
+  .parcel-sheet-header h2,
+  .mobile-layer-drawer-header h2 {
+    @apply font-sans font-bold tracking-tight text-slate-900;
+  }
+
+  .panel-button,
+  .panel-close,
+  .mobile-layer-drawer-close,
+  .mobile-point-confirm,
+  .mobile-line-summary-button,
+  .mobile-parcel-draw-action,
+  .mobile-parcel-draw-cancel,
+  .parcel-action,
+  .point-popup-result-button,
+  .parcel-popup-details-button {
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-md border border-map-primary bg-map-primary px-3 py-2 font-sans text-sm font-bold leading-tight text-white shadow-sm transition-colors duration-150;
+  }
+
+  .panel-button:hover:not(:disabled),
+  .panel-button:active:not(:disabled),
+  .mobile-point-confirm:hover:not(:disabled),
+  .mobile-point-confirm:active:not(:disabled),
+  .mobile-line-summary-button:hover:not(:disabled),
+  .mobile-line-summary-button:active:not(:disabled),
+  .parcel-action:hover:not(:disabled),
+  .point-popup-result-button:hover:not(:disabled),
+  .parcel-popup-details-button:hover:not(:disabled) {
+    @apply border-map-primary-hover bg-map-primary-hover;
+  }
+
+  .panel-button.secondary {
+    @apply border-map-primary bg-white text-map-primary;
+  }
+
+  .parcel-action,
+  .mobile-parcel-draw-action {
+    @apply border-slate-300 bg-white text-slate-700;
+  }
+
+  .panel-button.secondary:hover:not(:disabled) {
+    @apply border-map-primary-hover bg-teal-50 text-map-primary-hover;
+  }
+
+  .parcel-action:hover:not(:disabled),
+  .mobile-parcel-draw-action:hover:not(:disabled) {
+    @apply border-slate-400 bg-slate-50 text-slate-900;
+  }
+
+  .panel-close-danger,
+  .panel-button.danger,
+  .parcel-action.danger,
+  .mobile-layer-drawer-close,
+  .mobile-parcel-draw-cancel {
+    @apply border-map-danger bg-map-danger text-white;
+  }
+
+  .panel-close-danger:hover:not(:disabled),
+  .panel-button.danger:hover:not(:disabled),
+  .parcel-action.danger:hover:not(:disabled),
+  .mobile-layer-drawer-close:hover:not(:disabled),
+  .mobile-parcel-draw-cancel:hover:not(:disabled) {
+    @apply border-map-danger-hover bg-map-danger-hover;
+  }
+
+  .panel-button:disabled,
+  .mobile-point-confirm:disabled,
+  .mobile-line-summary-button:disabled,
+  .mobile-parcel-draw-action:disabled,
+  .parcel-action:disabled {
+    @apply cursor-not-allowed border-slate-300 bg-slate-200 text-slate-500 shadow-none opacity-100;
+  }
+
+  .panel-button:focus-visible,
+  .panel-close:focus-visible,
+  .mobile-layer-drawer-close:focus-visible,
+  .mobile-location-launcher:focus-visible,
+  .mobile-point-confirm:focus-visible,
+  .mobile-parcel-draw-action:focus-visible,
+  .mobile-parcel-draw-cancel:focus-visible,
+  .parcel-action:focus-visible,
+  .point-popup-result-button:focus-visible,
+  .parcel-popup-details-button:focus-visible {
+    @apply outline-3 outline-offset-2 outline-teal-200;
+  }
+
+  .mobile-location-launcher {
+    @apply min-h-11 cursor-pointer items-center justify-center gap-2 rounded-full border border-map-primary bg-white px-4 py-2.5 font-sans text-sm font-bold text-map-ink shadow-lg;
+  }
+
+  .mobile-location-launcher:hover:not(:disabled) {
+    @apply bg-teal-50;
+  }
+
+  .mobile-location-launcher-icon {
+    @apply inline-flex size-5 items-center justify-center rounded-full bg-map-primary text-xs text-white;
+  }
+
+  .location-panel,
+  .result-panel,
+  .temporary-parcel-panel,
+  .parcel-sheet,
+  .parcel-modal {
+    @apply border border-slate-200 bg-white font-sans text-slate-900 shadow-xl;
+  }
+
+  .panel-content,
+  .parcel-sheet-body,
+  .temporary-parcel-panel-list {
+    @apply bg-white;
+  }
+
+  .result-section,
+  .parcel-result-card,
+  .suitability-summary-card,
+  .summary-card-group,
+  .parcel-item,
+  .saved-parcel-card {
+    @apply border-slate-200 bg-white font-sans text-slate-900;
+  }
+
+  .parcel-item.is-selected,
+  .saved-parcel-card.is-expanded {
+    @apply border-map-accent ring-2 ring-teal-100;
+  }
+
+  .parcel-item-header,
+  .saved-parcel-header {
+    @apply font-sans text-slate-900 transition-colors duration-150;
+  }
+
+  .parcel-item-header:hover,
+  .saved-parcel-header:hover {
+    @apply bg-slate-50;
+  }
+
+  .parcel-form-field input,
+  .parcel-form-field select,
+  .parcel-modal input {
+    @apply w-full border border-slate-300 bg-white font-sans text-slate-900 outline-none transition-shadow;
+  }
+
+  .parcel-form-field input:focus,
+  .parcel-form-field select:focus,
+  .parcel-modal input:focus {
+    @apply border-map-accent ring-3 ring-teal-100;
+  }
+
+  .parcel-sheet-status.is-error,
+  .parcel-modal-error,
+  .mobile-line-summary-status.is-error,
+  .line-summary-status.is-error {
+    @apply text-red-700;
+  }
+
+  .parcel-sheet-status.is-success,
+  .mobile-line-summary-status.is-success,
+  .line-summary-status.is-success {
+    @apply text-green-700;
+  }
+
+  .leaflet-control-layers,
+  .hazard-legend,
+  .parcel-draw-control,
+  .map-popup,
+  .leaflet-popup-content {
+    @apply font-sans;
+  }
+
+  .leaflet-control-layers.is-mobile-drawer-open label {
+    @apply text-sm text-slate-800;
+  }
+
+  .leaflet-control-layers.is-mobile-drawer-open label:hover {
+    @apply bg-slate-50;
+  }
+
+  .map-layer-control-toggle {
+    @apply grid place-items-center text-xl text-map-primary;
+    background-image: none !important;
+  }
+
+  .map-layer-control-toggle:hover,
+  .map-layer-control-toggle:focus-visible {
+    @apply bg-teal-50 text-map-primary-hover;
+  }
+
+  .hazard-legend-mobile-toggle {
+    @apply items-center justify-center gap-2 border border-slate-300 bg-white px-3 py-2 font-sans text-sm font-bold text-slate-900 shadow-lg;
+  }
+
+  .mobile-parcel-draw-hint {
+    @apply font-sans text-sm font-bold text-white shadow-lg;
+  }
+
+  .mobile-parcel-draw-actions {
+    @apply border border-white/80 bg-white/95 shadow-2xl backdrop-blur-sm;
+  }
+
+  .mobile-parcel-draw-add {
+    @apply border-map-primary bg-map-primary text-white;
+  }
+
+  .mobile-parcel-draw-add:hover:not(:disabled) {
+    @apply border-map-primary-hover bg-map-primary-hover;
+  }
+
+  .mobile-parcel-draw-finish:not(:disabled) {
+    @apply border-green-700 bg-green-50 text-green-800;
+  }
+
+  .mobile-point-confirm,
+  .mobile-line-summary-button {
+    @apply min-h-13 rounded-full px-[22px] py-[13px] text-[15px] shadow-lg;
+  }
+
+  .mobile-parcel-draw-action {
+    @apply rounded-xl;
+  }
+
+  .mobile-parcel-draw-cancel {
+    @apply rounded-lg;
+  }
+
+.fa-solid {
+    @apply shrink-0;
+}
+
+@media (max-width: 700px) {
+  .parcel-draw-control .panel-button,
+  .parcel-action,
+  .leaflet-control-layers.is-mobile-drawer-open label {
+    @apply min-h-11;
+  }
+}
