@@ -83,9 +83,7 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   const detail = await request.get(`${backendUrl}/api/parcels/${parcel.id}`, { headers: auth });
   expect(detail.status()).toBe(200);
   expect((await detail.json()).parcel.images).toHaveLength(2);
-  const rows = await db.query("SELECT mime_type, width, height, byte_size FROM app.parcel_images WHERE parcel_id = $1", [parcel.id]);
-  expect(rows.rows).toHaveLength(2);
-  expect(rows.rows.every((row) => row.mime_type === "image/webp" && row.width <= 1600 && row.height <= 1600)).toBe(true);
+  expect((await db.query("SELECT to_regclass('app.parcel_images') AS image_table")).rows[0].image_table).toBeNull();
   const google = (await (await request.get(`${backendUrl}/__e2e__/google`)).json());
   expect(google.users).toHaveLength(1);
   expect(google.users[0][1]).toBe("ผู้ใช้ทดสอบ A");
@@ -98,6 +96,9 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   expect(JSON.parse(sheetRow[8]).type).toMatch(/Polygon/);
   expect(JSON.parse(sheetRow[11])).toHaveLength(2);
   expect(JSON.parse(sheetRow[12])).toHaveLength(2);
+  expect(JSON.parse(sheetRow[11])).toEqual(google.files.map((file) => file.fileName));
+  expect(JSON.parse(sheetRow[12])).toEqual(google.files.map((file) =>
+    `https://drive.google.com/uc?export=view&id=${file.id}`));
   expect(sheetRow[13]).toBe("");
   expect(google.files).toHaveLength(2);
   const denied = await request.post(`${backendUrl}/api/parcels/${parcel.id}/images`, {
@@ -121,6 +122,9 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   expect((await request.get(`${backendUrl}/api/parcels/${parcel.id}/images/${(await detail.json()).parcel.images[0].id}/content`, {
     headers: { Authorization: "Bearer e2e-line-token-user-b" },
   })).status()).toBe(404);
+  expect((await request.get(`${backendUrl}/api/parcels/${parcel.id}/images/${google.files[1].id}/content`, {
+    headers: auth,
+  })).status()).toBe(404);
 
   await page.reload();
   await expect.poll(() => page.evaluate(() => window.MapLiffMode.isReady())).toBe(true);
@@ -142,7 +146,7 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   const afterDelete = (await (await request.get(`${backendUrl}/__e2e__/google`)).json());
   expect(afterDelete.files).toHaveLength(0);
   expect(afterDelete.parcels.find((row) => row[2] === parcel.parcelCode)).toBeUndefined();
-  expect((await db.query("SELECT COUNT(*)::int AS count FROM app.parcel_images WHERE parcel_id = $1", [parcel.id])).rows[0].count).toBe(0);
+  expect((await db.query("SELECT to_regclass('app.parcel_images') AS image_table")).rows[0].image_table).toBeNull();
   expect(forbidden).toEqual([]);
   expect(errors).toEqual([]);
 });

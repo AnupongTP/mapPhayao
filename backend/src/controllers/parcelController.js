@@ -64,7 +64,7 @@ async function getParcel(req, res, next) {
   try {
     const appUser = await resolveAppUser(req);
     const parcel = await parcelService.getOwnedParcelById(req.params.parcelId, appUser.id);
-    parcel.images = await parcelImageService.listOwnedImages(parcel.id, appUser.id);
+    parcel.images = await parcelImageService.listOwnedImages(parcel.id, appUser.id, req.googleIntegration);
     return res.status(200).json({
       success: true,
       parcel,
@@ -112,7 +112,7 @@ async function deleteParcel(req, res, next) {
     const appUser = await resolveAppUser(req);
     const google = req.googleIntegration;
     const previous = google?.enabled
-      ? await parcelImageService.getOwnedImageFiles(req.params.parcelId, appUser.id)
+      ? await parcelImageService.getOwnedImageFiles(req.params.parcelId, appUser.id, google)
       : null;
     await parcelService.deleteOwnedParcel(req.params.parcelId, appUser.id);
     if (previous) {
@@ -138,7 +138,6 @@ async function uploadImage(req, res, next) {
     const image = await parcelImageService.uploadOwnedImage(
       req.params.parcelId, appUser.id, req.file, req.googleIntegration,
     );
-    await syncParcelMirror(req, req.params.parcelId, "image-upload");
     return res.status(201).json({ success: true, image });
   } catch (error) {
     return handleParcelError(error, next);
@@ -149,7 +148,7 @@ async function getImageContent(req, res, next) {
   try {
     const appUser = await resolveAppUser(req);
     const fileId = await parcelImageService.getOwnedImageFileId(
-      req.params.parcelId, req.params.imageId, appUser.id,
+      req.params.parcelId, req.params.imageId, appUser.id, req.googleIntegration,
     );
     if (!req.googleIntegration?.enabled) {
       throw createHttpError(503, "ยังไม่ได้ตั้งค่าบริการรูปภาพแปลง");

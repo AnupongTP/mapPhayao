@@ -24,12 +24,7 @@ async function mirrorParcel(parcelId, google) {
   `, [parcelId]);
   const parcel = result.rows[0];
   if (!parcel) return;
-  const images = await db.query(`
-    SELECT id, file_name, link_image, sort_order, created_at
-    FROM app.parcel_images WHERE parcel_id = $1
-    ORDER BY sort_order, created_at, id;
-  `, [parcelId]);
-  await google.upsertParcel(parcel, images.rows);
+  await google.upsertParcel(parcel);
 }
 
 async function bestEffortMirror(entity, operation, context, work) {

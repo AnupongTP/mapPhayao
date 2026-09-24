@@ -6,7 +6,19 @@ function createFakeGoogleParcels() {
   const users = new Map();
   const parcels = new Map();
   let failUploads = 0;
-  const { userCells, parcelCells } = require("../backend/src/services/googleParcelIntegration");
+  const { userCells, parcelCells, parseParcelImages, imageLink } = require("../backend/src/services/googleParcelIntegration");
+  let sheetWrites = Promise.resolve();
+  function serializeWrite(action) {
+    const operation = sheetWrites.then(action);
+    sheetWrites = operation.catch(() => {});
+    return operation;
+  }
+  function ownedImages(code, ownerId) {
+    const row = parcels.get(code);
+    if (!row) throw new Error("Parcel Sheet row is missing");
+    if (row[0] !== ownerId) throw new Error("Parcel Sheet owner mismatch");
+    return parseParcelImages(row);
+  }
   return {
     enabled: true,
     files,
@@ -28,9 +40,22 @@ function createFakeGoogleParcels() {
       return Readable.from(file.bytes);
     },
     async upsertUser(user) { users.set(user.id, userCells(user)); },
-    async upsertParcel(parcel, images) {
+    upsertParcel(parcel) { return serializeWrite(() => {
+      const existing = parcels.get(parcel.parcel_code);
+      const images = existing ? ownedImages(parcel.parcel_code, parcel.owner_user_id) : [];
       parcels.set(parcel.parcel_code, parcelCells(parcel, images));
-    },
+    }); },
+    getParcelImages(code, ownerId) { return serializeWrite(() => ownedImages(code, ownerId)); },
+    appendParcelImage(code, ownerId, fileName, fileId) { return serializeWrite(() => {
+      const images = ownedImages(code, ownerId);
+      if (images.some((item) => item.fileName === fileName)) throw new Error("Duplicate parcel image");
+      const image = { id: fileName, fileName, linkImage: imageLink(fileId), fileId };
+      images.push(image);
+      const row = parcels.get(code);
+      row[11] = JSON.stringify(images.map((item) => item.fileName));
+      row[12] = JSON.stringify(images.map((item) => item.linkImage));
+      return image;
+    }); },
     async deleteParcel(code) { parcels.delete(code); },
     failNextUpload() { failUploads += 1; },
     snapshot() {

@@ -20,21 +20,51 @@ function formatCoordinate(lat, lng) {
   return `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
 }
 
-function parcelCells(parcel, images) {
-  const ordered = [...images].sort((a, b) =>
-    a.sort_order - b.sort_order ||
-    String(a.created_at).localeCompare(String(b.created_at)) ||
-    String(a.id).localeCompare(String(b.id)));
+function parcelCells(parcel, images = []) {
   return [
     parcel.owner_user_id, parcel.display_name || "", parcel.parcel_code, parcel.parcel_name || "",
     parcel.crop_type, parcel.rice_variety || "", parcel.planting_date || "",
     "",
     JSON.stringify(parcel.geometry), Number(parcel.area_sqm), Number(parcel.area_rai),
-    JSON.stringify(ordered.map((image) => image.file_name)),
-    JSON.stringify(ordered.map((image) => image.link_image)),
+    JSON.stringify(images.map((image) => image.fileName)),
+    JSON.stringify(images.map((image) => image.linkImage)),
     "",
     iso(parcel.created_at), iso(parcel.updated_at),
   ];
+}
+
+function imageFileId(link) {
+  let url;
+  try { url = new URL(link); } catch { throw new Error("Invalid parcel image link"); }
+  const id = url.searchParams.get("id");
+  if (url.protocol !== "https:" || url.hostname !== "drive.google.com" ||
+    url.pathname !== "/uc" || url.searchParams.get("export") !== "view" ||
+    !id || !/^[a-zA-Z0-9_-]+$/.test(id)) {
+    throw new Error("Invalid parcel image link");
+  }
+  return id;
+}
+
+function parseParcelImages(cells) {
+  let names;
+  let links;
+  try {
+    names = JSON.parse(cells[11] || "[]");
+    links = JSON.parse(cells[12] || "[]");
+  } catch { throw new Error("Invalid parcel image arrays"); }
+  if (!Array.isArray(names) || !Array.isArray(links) || names.length !== links.length ||
+    names.some((name) => typeof name !== "string" || !/^[a-zA-Z0-9_-]+\.webp$/.test(name)) ||
+    links.some((link) => typeof link !== "string")) {
+    throw new Error("Invalid parcel image arrays");
+  }
+  return names.map((fileName, index) => ({
+    id: fileName, fileName, linkImage: links[index],
+    fileId: imageFileId(links[index]),
+  }));
+}
+
+function imageLink(fileId) {
+  return `https://drive.google.com/uc?export=view&id=${encodeURIComponent(fileId)}`;
 }
 
 function createGoogleParcelIntegration(env = process.env) {
@@ -80,7 +110,7 @@ function createGoogleParcelIntegration(env = process.env) {
     const rows = response.data.values || [];
     const column = tab === SPREADSHEET_TABS.users ? 0 : 2;
     const index = rows.findIndex((row) => row[column] === key);
-    return index < 0 ? null : index + 2;
+    return index < 0 ? null : { number: index + 2, cells: rows[index] };
   }
 
   function serializeWrite(action) {
@@ -96,7 +126,7 @@ function createGoogleParcelIntegration(env = process.env) {
       if (row) {
         await sheets.spreadsheets.values.update({
           spreadsheetId, range: tab === SPREADSHEET_TABS.users
-            ? `users!A${row}:D${row}` : `parcels!A${row}:P${row}`,
+            ? `users!A${row.number}:D${row.number}` : `parcels!A${row.number}:P${row.number}`,
           valueInputOption: "RAW", requestBody: { values: [cells] },
         });
       } else {
@@ -130,8 +160,47 @@ function createGoogleParcelIntegration(env = process.env) {
       return response.data;
     },
     upsertUser(user) { return upsert(SPREADSHEET_TABS.users, user.id, userCells(user)); },
-    upsertParcel(parcel, images) {
-      return upsert(SPREADSHEET_TABS.parcels, parcel.parcel_code, parcelCells(parcel, images));
+    upsertParcel(parcel) {
+      return serializeWrite(async () => {
+        await assertParcelHeaders();
+        const row = await findRow(SPREADSHEET_TABS.parcels, parcel.parcel_code);
+        if (row && row.cells[0] !== parcel.owner_user_id) throw new Error("Parcel Sheet owner mismatch");
+        const cells = parcelCells(parcel, row ? parseParcelImages(row.cells) : []);
+        if (row) {
+          await sheets.spreadsheets.values.update({ spreadsheetId,
+            range: `parcels!A${row.number}:P${row.number}`, valueInputOption: "RAW",
+            requestBody: { values: [cells] } });
+        } else {
+          await sheets.spreadsheets.values.append({ spreadsheetId, range: "parcels!A:P",
+            valueInputOption: "RAW", insertDataOption: "INSERT_ROWS", requestBody: { values: [cells] } });
+        }
+      });
+    },
+    getParcelImages(parcelCode, ownerUserId) {
+      return serializeWrite(async () => {
+        await assertParcelHeaders();
+        const row = await findRow(SPREADSHEET_TABS.parcels, parcelCode);
+        if (!row) throw new Error("Parcel Sheet row is missing");
+        if (row.cells[0] !== ownerUserId) throw new Error("Parcel Sheet owner mismatch");
+        return parseParcelImages(row.cells);
+      });
+    },
+    appendParcelImage(parcelCode, ownerUserId, fileName, fileId) {
+      return serializeWrite(async () => {
+        await assertParcelHeaders();
+        const row = await findRow(SPREADSHEET_TABS.parcels, parcelCode);
+        if (!row) throw new Error("Parcel Sheet row is missing");
+        if (row.cells[0] !== ownerUserId) throw new Error("Parcel Sheet owner mismatch");
+        const images = parseParcelImages(row.cells);
+        if (images.some((image) => image.fileName === fileName)) throw new Error("Duplicate parcel image");
+        const image = { id: fileName, fileName, linkImage: imageLink(fileId), fileId };
+        images.push(image);
+        await sheets.spreadsheets.values.update({ spreadsheetId,
+          range: `parcels!L${row.number}:M${row.number}`, valueInputOption: "RAW",
+          requestBody: { values: [[JSON.stringify(images.map((item) => item.fileName)),
+            JSON.stringify(images.map((item) => item.linkImage))]] } });
+        return image;
+      });
     },
     deleteParcel(parcelCode) {
       return serializeWrite(async () => {
@@ -144,7 +213,7 @@ function createGoogleParcelIntegration(env = process.env) {
         await sheets.spreadsheets.batchUpdate({
           spreadsheetId,
           requestBody: { requests: [{ deleteDimension: {
-            range: { sheetId: sheet.properties.sheetId, dimension: "ROWS", startIndex: row - 1, endIndex: row },
+            range: { sheetId: sheet.properties.sheetId, dimension: "ROWS", startIndex: row.number - 1, endIndex: row.number },
           } }] },
         });
       });
@@ -152,4 +221,5 @@ function createGoogleParcelIntegration(env = process.env) {
   };
 }
 
-module.exports = { createGoogleParcelIntegration, userCells, parcelCells, formatCoordinate, PARCEL_HEADERS };
+module.exports = { createGoogleParcelIntegration, userCells, parcelCells, formatCoordinate,
+  parseParcelImages, imageLink, PARCEL_HEADERS };

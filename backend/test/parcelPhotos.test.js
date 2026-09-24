@@ -6,7 +6,7 @@ const parcelImageService = require("../src/services/parcelImageService");
 const parcelService = require("../src/services/parcelService");
 const db = require("../src/config/database");
 const { bestEffortMirror, mirrorParcel } = require("../src/services/parcelMirrorService");
-const { userCells, parcelCells, formatCoordinate, PARCEL_HEADERS, createGoogleParcelIntegration } = require("../src/services/googleParcelIntegration");
+const { userCells, parcelCells, parseParcelImages, formatCoordinate, PARCEL_HEADERS, createGoogleParcelIntegration } = require("../src/services/googleParcelIntegration");
 const { createFakeGoogleParcels } = require("../../scripts/fake-google-parcels.cjs");
 
 test("parcel photos normalize to metadata-free WebP at 1600px and quality 75", async () => {
@@ -50,9 +50,9 @@ test("Sheet cells keep deterministic aligned JSON arrays and never export pictur
     line_user_id: user.line_user_id,
   };
   const cells = parcelCells(parcel, [
-    { id: "b", sort_order: 2, created_at: "2026-01-01T00:00:00Z", file_name: "second.webp", link_image: "second-url" },
-    { id: "c", sort_order: 1, created_at: "2026-01-02T00:00:00Z", file_name: "third.webp", link_image: "third-url" },
-    { id: "a", sort_order: 1, created_at: "2026-01-01T00:00:00Z", file_name: "first.webp", link_image: "first-url" },
+    { fileName: "first.webp", linkImage: "https://drive.google.com/uc?export=view&id=first" },
+    { fileName: "third.webp", linkImage: "https://drive.google.com/uc?export=view&id=third" },
+    { fileName: "second.webp", linkImage: "https://drive.google.com/uc?export=view&id=second" },
   ]);
   assert.deepEqual(PARCEL_HEADERS, ["user_id", "display_name", "parcel_code", "parcel_name", "crop", "variety",
     "planting_date", "Coordinate", "geometry", "area_m2", "area_rai", "Image", "LinkImage", "note", "created_at", "updated_at"]);
@@ -61,7 +61,12 @@ test("Sheet cells keep deterministic aligned JSON arrays and never export pictur
   assert.deepEqual(JSON.parse(cells[8]), parcel.geometry);
   assert.deepEqual(cells.slice(9, 11), [1600, 1]);
   assert.deepEqual(JSON.parse(cells[11]), ["first.webp", "third.webp", "second.webp"]);
-  assert.deepEqual(JSON.parse(cells[12]), ["first-url", "third-url", "second-url"]);
+  assert.deepEqual(JSON.parse(cells[12]), [
+    "https://drive.google.com/uc?export=view&id=first",
+    "https://drive.google.com/uc?export=view&id=third",
+    "https://drive.google.com/uc?export=view&id=second",
+  ]);
+  assert.deepEqual(parseParcelImages(cells).map((image) => image.fileId), ["first", "third", "second"]);
   assert.equal(cells[13], "");
   assert.deepEqual(cells.slice(14), ["", ""]);
   assert.equal(cells.join(" ").includes("private"), false);
@@ -86,15 +91,16 @@ test("parcel mirror reads trusted display name by owner UUID from app.users", as
       owner_user_id: "internal-uuid", display_name: "Verified", parcel_code: "PY-1",
       crop_type: "rice", geometry: { type: "Polygon", coordinates: [] }, area_sqm: 1600, area_rai: 1,
     }] };
-    return { rows: [] };
+    throw new Error("Unexpected image metadata query");
   };
   try {
-    await mirrorParcel("parcel-id", { enabled: true, async upsertParcel(parcel, images) {
-      mirrored = parcelCells(parcel, images);
+    await mirrorParcel("parcel-id", { enabled: true, async upsertParcel(parcel) {
+      mirrored = parcelCells(parcel);
     } });
     assert.match(calls[0].sql, /JOIN app\.users u ON u\.id = p\.owner_user_id/);
     assert.match(calls[0].sql, /u\.display_name/);
     assert.deepEqual(calls[0].params, ["parcel-id"]);
+    assert.equal(calls.length, 1);
     assert.deepEqual(mirrored.slice(0, 3), ["internal-uuid", "Verified", "PY-1"]);
   } finally {
     db.query = originalQuery;
@@ -106,43 +112,81 @@ test("fake Google integration stores only local bytes and mirrors row cells", as
   const id = await fake.uploadImage(Buffer.from("webp"), "a.webp");
   assert.equal(fake.snapshot().files[0].fileName, "a.webp");
   await fake.upsertUser({ id: "internal", display_name: "A" });
-  await fake.upsertParcel({ owner_user_id: "internal", parcel_code: "PY-1", crop_type: "rice", geometry: {} }, []);
+  const parcel = { owner_user_id: "internal", parcel_code: "PY-1", crop_type: "rice", geometry: {} };
+  await fake.upsertParcel(parcel);
   assert.equal(fake.snapshot().parcels[0].length, 16);
   assert.deepEqual(JSON.parse(fake.snapshot().parcels[0][11]), []);
   assert.deepEqual(JSON.parse(fake.snapshot().parcels[0][12]), []);
+  await fake.appendParcelImage("PY-1", "internal", "a.webp", id);
+  await fake.upsertParcel({ ...parcel, parcel_name: "Updated" });
+  assert.equal(fake.snapshot().parcels[0][3], "Updated");
+  assert.deepEqual((await fake.getParcelImages("PY-1", "internal")).map((image) => image.fileName), ["a.webp"]);
+  await assert.rejects(() => fake.getParcelImages("PY-1", "other"), /owner mismatch/);
   await fake.deleteImage(id);
   await fake.deleteParcel("PY-1");
   assert.deepEqual(fake.snapshot().files, []);
   assert.deepEqual(fake.snapshot().parcels, []);
 });
 
-test("Drive failure creates no DB image row; DB failure deletes uploaded Drive file", async () => {
+test("Drive failure leaves Sheet unchanged; Sheet failure deletes uploaded Drive file", async () => {
   const originalParcelLookup = parcelService.getOwnedParcelById;
-  const originalQuery = db.query;
+  const originalMirror = require("../src/services/parcelMirrorService").mirrorParcel;
   const bytes = await sharp({ create: { width: 20, height: 10, channels: 3, background: "green" } }).png().toBuffer();
   const file = { buffer: bytes };
   const parcelId = "11111111-1111-4111-8111-111111111111";
   const ownerId = "22222222-2222-4222-8222-222222222222";
   const calls = [];
   parcelService.getOwnedParcelById = async () => ({ id: parcelId, parcelCode: "PY-2026-0001" });
-  db.query = async () => { calls.push("db-insert"); throw new Error("DB write failed"); };
+  require("../src/services/parcelMirrorService").mirrorParcel = async () => { calls.push("mirror"); };
   try {
     await assert.rejects(() => parcelImageService.uploadOwnedImage(parcelId, ownerId, file, {
       enabled: true,
       async uploadImage() { throw new Error("Drive unavailable"); },
       async deleteImage() { calls.push("cleanup"); },
     }), /Drive unavailable/);
-    assert.deepEqual(calls, []);
+    assert.deepEqual(calls, ["mirror"]);
     await assert.rejects(() => parcelImageService.uploadOwnedImage(parcelId, ownerId, file, {
       enabled: true,
       async uploadImage() { calls.push("drive-upload"); return "fake-file"; },
+      async appendParcelImage() { calls.push("sheet-append"); throw new Error("Sheet write failed"); },
       async deleteImage(id) { calls.push(`cleanup:${id}`); },
-    }), /DB write failed/);
-    assert.deepEqual(calls, ["drive-upload", "db-insert", "cleanup:fake-file"]);
+    }), /Sheet write failed/);
+    assert.deepEqual(calls, ["mirror", "mirror", "drive-upload", "sheet-append", "cleanup:fake-file"]);
   } finally {
     parcelService.getOwnedParcelById = originalParcelLookup;
-    db.query = originalQuery;
+    require("../src/services/parcelMirrorService").mirrorParcel = originalMirror;
   }
+});
+
+test("photo reads require owned parcel and matching Sheet filename, never arbitrary Drive id", async () => {
+  const originalLookup = parcelService.getOwnedParcelById;
+  const fake = createFakeGoogleParcels();
+  const ownerId = "22222222-2222-4222-8222-222222222222";
+  const parcelId = "11111111-1111-4111-8111-111111111111";
+  const driveId = await fake.uploadImage(Buffer.from("webp"), "a.webp");
+  await fake.upsertParcel({ owner_user_id: ownerId, parcel_code: "PY-1", crop_type: "rice", geometry: {} });
+  await fake.appendParcelImage("PY-1", ownerId, "a.webp", driveId);
+  parcelService.getOwnedParcelById = async (id, owner) => {
+    if (id !== parcelId || owner !== ownerId) throw Object.assign(new Error("Parcel not found"), { statusCode: 404 });
+    return { id, parcelCode: "PY-1" };
+  };
+  try {
+    assert.equal((await parcelImageService.listOwnedImages(parcelId, ownerId, fake))[0].id, "a.webp");
+    assert.equal(await parcelImageService.getOwnedImageFileId(parcelId, "a.webp", ownerId, fake), driveId);
+    await assert.rejects(() => parcelImageService.getOwnedImageFileId(parcelId, driveId, ownerId, fake), { statusCode: 404 });
+    await assert.rejects(() => parcelImageService.getOwnedImageFileId(parcelId, "a.webp", "other", fake), { statusCode: 404 });
+    assert.deepEqual((await parcelImageService.getOwnedImageFiles(parcelId, ownerId, fake)).fileIds, [driveId]);
+  } finally {
+    parcelService.getOwnedParcelById = originalLookup;
+  }
+});
+
+test("malformed or misaligned Sheet image arrays are rejected", () => {
+  const row = parcelCells({ owner_user_id: "owner", parcel_code: "PY-1", crop_type: "rice", geometry: {} });
+  row[11] = '["a.webp"]';
+  assert.throws(() => parseParcelImages(row), /Invalid parcel image arrays/);
+  row[12] = '["https://evil.example/uc?export=view&id=file"]';
+  assert.throws(() => parseParcelImages(row), /Invalid parcel image link/);
 });
 
 test("Google mirror failure stays nonfatal", async () => {

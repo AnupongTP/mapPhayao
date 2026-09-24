@@ -244,7 +244,7 @@
     getParcelImageBlob: async function (parcelId, imageId) {
       const idToken = await getCurrentLiffIdToken();
       const response = await fetch(buildUrl(
-        `/parcels/${encodeURIComponent(assertParcelId(parcelId))}/images/${encodeURIComponent(assertParcelId(imageId))}/content`,
+        `/parcels/${encodeURIComponent(assertParcelId(parcelId))}/images/${encodeURIComponent(imageId)}/content`,
       ), { headers: { Authorization: `Bearer ${idToken}` } });
       if (!response.ok) throw createRequestError(response, await parseJsonSafely(response));
       return response.blob();

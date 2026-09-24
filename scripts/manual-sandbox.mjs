@@ -33,7 +33,7 @@ const migrations = [
   "/migrations/20260615_create_rice_soil_rule_framework.sql",
   "/migrations/20260716_prepare_line_user_parcel_ownership.sql",
   "/migrations/20260716_enforce_line_user_parcel_ownership.sql",
-  "/migrations/20260924_create_parcel_images.sql",
+  "/migrations/20260924_add_user_display_name.sql",
 ];
 
 let frontend;
