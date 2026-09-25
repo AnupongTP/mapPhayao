@@ -584,16 +584,15 @@
     window.addEventListener("resize", handleMobileLayoutChange);
   }
 
-  function appendField(parent, label, value, formatter) {
+  function appendField(parent, label, value, formatter, renderer) {
     const row = createElement("div", "result-field");
-    row.append(
-      createElement("dt", "result-label", label),
-      createElement(
-        "dd",
-        "result-value",
-        formatter ? formatter(value) : formatters.formatValue(value),
-      ),
-    );
+    const display = createElement("dd", "result-value");
+    if (renderer) {
+      display.appendChild(renderer(value));
+    } else {
+      display.textContent = formatter ? formatter(value) : formatters.formatValue(value);
+    }
+    row.append(createElement("dt", "result-label", label), display);
     parent.appendChild(row);
   }
 
@@ -601,13 +600,26 @@
     const section = createElement("section", "result-section");
     section.append(createElement("h3", null, title));
     const list = createElement("dl", "result-list");
-    fields.forEach((field) => appendField(list, field.label, field.value, field.formatter));
+    fields.forEach((field) => appendField(list, field.label, field.value, field.formatter, field.renderer));
     section.appendChild(list);
     parent.appendChild(section);
   }
 
-  function formatCoordinatePair(value) {
-    return `${formatters.formatCoordinate(value?.lat)}, ${formatters.formatCoordinate(value?.lng)}`;
+  function createCoordinateMapLink(point) {
+    const isAndroid = /Android/i.test(window.navigator?.userAgent || "");
+    const href = formatters.coordinateMapHref(point, isAndroid);
+    if (!href) return createElement("span", null, TEXT.empty);
+    const latitude = point.latitude ?? point.lat;
+    const longitude = point.longitude ?? point.lng;
+    const display = formatters.formatRepresentativePoint({ latitude, longitude });
+    const link = createElement("a", "coordinate-map-link", display);
+    link.href = href;
+    link.setAttribute("aria-label", `เปิดพิกัด ${display} ในแผนที่`);
+    if (!isAndroid) {
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+    }
+    return link;
   }
 
   function formatYearRange(dataPeriod) {
@@ -1325,7 +1337,7 @@
       { label: "ตำบล", value: location.tambon },
       { label: "ลุ่มน้ำหลัก", value: location.basin },
       { label: "ลุ่มน้ำย่อย", value: location.subBasin },
-      { label: "พิกัด", value: { lat: clickedPoint.latitude, lng: clickedPoint.longitude }, formatter: formatCoordinatePair },
+      { label: "พิกัด", value: clickedPoint, renderer: createCoordinateMapLink },
     ]);
 
     appendSection(content, "ข้อมูลชุดดิน", [
@@ -2003,7 +2015,7 @@
       { label: "ตำบล", value: location.tambon },
       { label: "ลุ่มน้ำหลัก", value: location.basin },
       { label: "ลุ่มน้ำย่อย", value: location.subBasin },
-      { label: "พิกัด", value: { lat: clickedPoint.latitude, lng: clickedPoint.longitude }, formatter: formatCoordinatePair },
+      { label: "พิกัด", value: clickedPoint, renderer: createCoordinateMapLink },
     ]);
 
     content.appendChild(
@@ -2259,7 +2271,7 @@
     card.append(createElement("h3", "parcel-result-card-title", title));
     const body = createElement("div", "parcel-result-card-body");
     const list = createElement("dl", "result-list");
-    fields.forEach((field) => appendField(list, field.label, field.value, field.formatter));
+    fields.forEach((field) => appendField(list, field.label, field.value, field.formatter, field.renderer));
     if (fields.length) {
       body.appendChild(list);
     } else {
@@ -2484,7 +2496,7 @@
       { label: "ชื่อแปลง", value: analysis.name || parcelState.name },
       { label: "พื้นที่", value: parcel.areaSquareMeters, formatter: formatters.formatThaiLandArea },
       { label: "พื้นที่ตารางเมตร", value: parcel.areaSquareMeters, formatter: formatters.formatAreaSqm },
-      { label: "พิกัดแปลง", value: analysis.representativePoint, formatter: formatters.formatRepresentativePoint },
+      { label: "พิกัดแปลง", value: analysis.representativePoint, renderer: createCoordinateMapLink },
       { label: "ตำบล", value: location.tambons, formatter: formatters.formatList },
       { label: "อำเภอ", value: location.amphoes, formatter: formatters.formatList },
       { label: "ลุ่มน้ำหลัก", value: location.mainBasins, formatter: formatters.formatList },
@@ -2568,7 +2580,7 @@
       { label: "วันที่ปลูก", value: parcel?.plantingDate, formatter: formatters.formatThaiDateOnly },
       { label: "พื้นที่", value: parcel?.areaSqm, formatter: formatters.formatThaiLandArea },
       { label: "พื้นที่ไร่", value: parcel?.areaRai, formatter: formatters.formatAreaRai },
-      { label: "พิกัดแปลง", value: parcel?.representativePoint, formatter: formatters.formatRepresentativePoint },
+      { label: "พิกัดแปลง", value: parcel?.representativePoint, renderer: createCoordinateMapLink },
       { label: "วันที่สร้าง", value: parcel?.createdAt, formatter: formatters.formatThaiDateTime },
       { label: "อัปเดตล่าสุด", value: parcel?.updatedAt, formatter: formatters.formatThaiDateTime },
     ]);

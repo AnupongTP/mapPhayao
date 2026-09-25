@@ -7,10 +7,15 @@ const areaAnalysisService = require("../src/services/areaAnalysisService");
 const db = require("../src/config/database");
 
 const originalQuery = db.query;
+const originalTransport = process.env.WEATHER_OPEN_METEO_TRANSPORT;
+
+test.beforeEach(() => { process.env.WEATHER_OPEN_METEO_TRANSPORT = "direct"; });
 
 test.afterEach(() => {
   db.query = originalQuery;
   weatherService.clearCache();
+  if (originalTransport === undefined) delete process.env.WEATHER_OPEN_METEO_TRANSPORT;
+  else process.env.WEATHER_OPEN_METEO_TRANSPORT = originalTransport;
 });
 
 function createResponse(body, options = {}) {

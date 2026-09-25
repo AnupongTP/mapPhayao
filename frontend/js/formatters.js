@@ -77,6 +77,22 @@
     return `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`;
   }
 
+  function coordinateMapHref(point, isAndroid) {
+    const latitude = point?.latitude ?? point?.lat;
+    const longitude = point?.longitude ?? point?.lng;
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 ||
+        !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+      return null;
+    }
+    const lat = latitude.toFixed(6);
+    const lng = longitude.toFixed(6);
+    if (isAndroid) {
+      return `geo:${lat},${lng}?q=${lat},${lng}`;
+    }
+    return `https://www.openstreetmap.org/?mlat=${encodeURIComponent(lat)}` +
+      `&mlon=${encodeURIComponent(lng)}#map=16/${encodeURIComponent(lat)}/${encodeURIComponent(lng)}`;
+  }
+
   function formatDistance(value) {
     const distance = Number(value);
     if (!Number.isFinite(distance)) {
@@ -401,6 +417,7 @@
     formatValue,
     formatCoordinate,
     formatRepresentativePoint,
+    coordinateMapHref,
     formatDistance,
     formatPercent,
     formatList,

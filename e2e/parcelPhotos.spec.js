@@ -20,7 +20,7 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   const errors = watchPageErrors(page);
   const driveRequests = [];
   let imageProxyRequests = 0;
-  await page.route(/^https:\/\/drive\.google\.com\/uc\?/, (route) => {
+  await page.route(/^https:\/\/drive\.usercontent\.google\.com\/download\?/, (route) => {
     driveRequests.push(route.request().url());
     return route.fulfill({ status: 200, contentType: "image/png", body: readFileSync(fixture) });
   });
@@ -129,7 +129,7 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   expect(JSON.parse(sheetRow[12])).toHaveLength(2);
   expect(JSON.parse(sheetRow[11])).toEqual(google.files.map((file) => file.fileName));
   expect(JSON.parse(sheetRow[12])).toEqual(google.files.map((file) =>
-    `https://drive.google.com/uc?export=view&id=${file.id}`));
+    `https://drive.usercontent.google.com/download?id=${file.id}&export=view`));
   expect(sheetRow[13]).toBe("");
   expect(google.files).toHaveLength(2);
   const denied = await request.post(`${backendUrl}/api/parcels/${parcel.id}/images`, {

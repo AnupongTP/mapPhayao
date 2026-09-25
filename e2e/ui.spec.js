@@ -28,7 +28,7 @@ test("direct parcel photos fail independently and share one fullscreen viewer", 
     proxyCalls += 1;
     return route.abort();
   });
-  await page.route(/^https:\/\/drive\.google\.com\/uc\?/, async (route) => {
+  await page.route(/^https:\/\/drive\.usercontent\.google\.com\/download\?/, async (route) => {
     if (new URL(route.request().url()).searchParams.get("id") === "bad") {
       return route.fulfill({ status: 404, body: "" });
     }
@@ -36,7 +36,7 @@ test("direct parcel photos fail independently and share one fullscreen viewer", 
     return route.fulfill({ status: 200, contentType: "image/png", body: photoFixture });
   });
   await openMap(page);
-  const links = ["bad", "good"].map((id) => `https://drive.google.com/uc?export=view&id=${id}`);
+  const links = ["bad", "good"].map((id) => `https://drive.usercontent.google.com/download?id=${id}&export=view`);
   await page.evaluate((urls) => window.MapUi.renderSavedParcelDetail({
     id: "11111111-1111-4111-8111-111111111111", parcelName: "DIRECT-LINK-TEST",
     photos: urls.map((linkImage, index) => ({ id: `${index}.webp`, linkImage, previewUrl: linkImage })),
@@ -102,6 +102,71 @@ test("mobile parcel weather and empty photo cards retain readable available and 
   });
   await expect(result.locator(".agricultural-weather-card")).toContainText("ไม่สามารถโหลดข้อมูลสภาพอากาศได้ในขณะนี้");
   expect(forbidden).toEqual([]);
+});
+
+test("mobile point and parcel coordinates open a generic map destination without changing the result", async ({ page, context }, testInfo) => {
+  test.skip(!testInfo.project.name.startsWith("mobile"));
+  const forbidden = await prepareContext(context);
+  const errors = watchPageErrors(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openMap(page);
+  await page.evaluate(() => {
+    window.__coordinateMapClicks = 0;
+    window.appMap.on("click", () => { window.__coordinateMapClicks += 1; });
+  });
+  const point = { latitude: 19.037525, longitude: 99.941463 };
+  const android = testInfo.project.name === "mobile-chromium";
+  const expectedHref = android
+    ? "geo:19.037525,99.941463?q=19.037525,99.941463"
+    : "https://www.openstreetmap.org/?mlat=19.037525&mlon=99.941463#map=16/19.037525/99.941463";
+  const result = page.locator("#result-panel-content");
+  async function checkCoordinate(label) {
+    const row = result.locator(".result-field").filter({ has: page.locator(".result-label", { hasText: label }) }).first();
+    const link = row.getByRole("link", { name: "เปิดพิกัด 19.037525, 99.941463 ในแผนที่" });
+    await expect(link).toHaveText("19.037525, 99.941463");
+    await expect(link).toHaveAttribute("href", expectedHref);
+    await expect(link).toHaveClass(/coordinate-map-link/);
+    const metrics = await link.evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const rowBox = node.closest(".result-field").getBoundingClientRect();
+      return { height: box.height, left: box.left, right: box.right,
+        rowLeft: rowBox.left, rowRight: rowBox.right,
+        color: getComputedStyle(node).color };
+    });
+    expect(metrics.height).toBeGreaterThanOrEqual(44);
+    expect(metrics.left).toBeGreaterThanOrEqual(metrics.rowLeft);
+    expect(metrics.right).toBeLessThanOrEqual(metrics.rowRight + 1);
+    expect(metrics.color).toBe("rgb(15, 118, 110)");
+    await link.evaluate((node) => node.addEventListener("click", (event) => event.preventDefault(), { once: true }));
+    await link.click();
+    await expect(page.locator("#result-panel")).toBeVisible();
+    expect(await page.evaluate(() => window.__coordinateMapClicks)).toBe(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
+  }
+
+  await page.evaluate((representativePoint) => window.MapUi.renderParcelResult({
+    name: "Temporary", analysisStatus: "success", photos: [],
+    analysis: { name: "Temporary", parcel: { areaSquareMeters: 1000 }, representativePoint },
+  }), point);
+  await checkCoordinate("พิกัดแปลง");
+  await expect(result.locator(".result-field").filter({ hasText: "ชื่อแปลง" }).getByRole("link")).toHaveCount(0);
+
+  await page.evaluate((representativePoint) => window.MapUi.renderSavedParcelDetail({
+    parcelName: "Saved", representativePoint,
+  }), point);
+  await checkCoordinate("พิกัดแปลง");
+
+  await page.evaluate((clickedPoint) => window.MapUi.renderResultPanel({ clickedPoint }), point);
+  await checkCoordinate("พิกัด");
+
+  await page.evaluate(() => window.MapUi.renderSavedParcelDetail({
+    parcelName: "Invalid", representativePoint: { latitude: 91, longitude: 99 },
+  }));
+  const invalidRow = result.locator(".result-field").filter({ hasText: "พิกัดแปลง" });
+  await expect(invalidRow).toContainText("ไม่มีข้อมูล");
+  await expect(invalidRow.getByRole("link")).toHaveCount(0);
+  expect(forbidden).toEqual([]);
+  expect(errors).toEqual([]);
 });
 
 test("responsive location and semantic Close controls", async ({ page, context }, testInfo) => {
@@ -240,6 +305,35 @@ test("mobile layer drawer fits, toggles, and closes", async ({ page, context }, 
   expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
   expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 1);
   await expectVisualSnapshot(drawer, "mobile-layer-drawer.png");
+  await page.setViewportSize({ width: 390, height: 844 });
+  const scrolledHeader = await page.evaluate(() => {
+    const list = document.querySelector(".is-mobile-drawer-open .leaflet-control-layers-list");
+    const header = list.querySelector(".mobile-layer-drawer-header");
+    const selector = list.querySelector(".leaflet-control-layers-selector");
+    const headerBox = header.getBoundingClientRect();
+    const selectorBox = selector.getBoundingClientRect();
+    list.scrollTop = (selectorBox.top + selectorBox.height / 2) - (headerBox.top + headerBox.height / 2);
+    const scrolledHeaderBox = header.getBoundingClientRect();
+    const scrolledSelectorBox = selector.getBoundingClientRect();
+    const selectorX = scrolledSelectorBox.left + scrolledSelectorBox.width / 2;
+    const selectorY = scrolledSelectorBox.top + scrolledSelectorBox.height / 2;
+    return {
+      scrollTop: list.scrollTop,
+      headerTop: scrolledHeaderBox.top,
+      headerBottom: scrolledHeaderBox.bottom,
+      selectorY,
+      headerOnTop: header.contains(document.elementFromPoint(selectorX, selectorY)),
+      headerBackground: getComputedStyle(header).backgroundColor,
+      headerZIndex: getComputedStyle(header).zIndex,
+      selectorZIndex: getComputedStyle(selector).zIndex,
+    };
+  });
+  expect(scrolledHeader.scrollTop).toBeGreaterThan(0);
+  expect(scrolledHeader.selectorY).toBeGreaterThan(scrolledHeader.headerTop);
+  expect(scrolledHeader.selectorY).toBeLessThan(scrolledHeader.headerBottom);
+  expect(scrolledHeader.headerOnTop).toBe(true);
+  expect(scrolledHeader.headerBackground).toBe("rgb(255, 255, 255)");
+  expect(Number(scrolledHeader.headerZIndex)).toBeGreaterThan(Number(scrolledHeader.selectorZIndex) || 0);
   await page.getByRole("button", { name: "ปิดรายการชั้นข้อมูลแผนที่" }).click();
   await expect(drawer).toBeHidden();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 2)).toBe(true);

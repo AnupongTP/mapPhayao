@@ -782,7 +782,7 @@ test("selecting saved parcels fits and highlights one without removing the other
 
 test("saved detail renders text and trusted LinkImage photos immediately without content proxy calls", async () => {
   const images = ["first", "second"].map((id) => ({ id: `${id}.webp`,
-    linkImage: `https://drive.google.com/uc?export=view&id=${id}` }));
+    linkImage: `https://drive.usercontent.google.com/download?id=${id}&export=view` }));
   const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images };
   const harness = createHarness();
   harness.parcelHandlers.onParcelsLoaded([parcelA]);
@@ -796,19 +796,19 @@ test("saved detail renders text and trusted LinkImage photos immediately without
 });
 
 test("switching saved parcels renders only each parcel's direct image links", async () => {
-  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp", linkImage: "https://drive.google.com/uc?export=view&id=a" }] };
-  const parcelB = { ...parcel(PARCEL_B_ID, "Field B"), images: [{ id: "b.webp", linkImage: "https://drive.google.com/uc?export=view&id=b" }] };
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp", linkImage: "https://drive.usercontent.google.com/download?id=a&export=view" }] };
+  const parcelB = { ...parcel(PARCEL_B_ID, "Field B"), images: [{ id: "b.webp", linkImage: "https://drive.usercontent.google.com/download?id=b&export=view" }] };
   const harness = createHarness();
   harness.parcelHandlers.onParcelsLoaded([parcelA, parcelB]);
   await harness.parcelHandlers.onOpenParcel(parcelA);
   await harness.parcelHandlers.onOpenParcel(parcelB);
   assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.id, PARCEL_B_ID);
   assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.photos[0].previewUrl,
-    "https://drive.google.com/uc?export=view&id=b");
+    "https://drive.usercontent.google.com/download?id=b&export=view");
 });
 
 test("reopening saved parcel still makes no image-content proxy requests", async () => {
-  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp", linkImage: "https://drive.google.com/uc?export=view&id=a" }] };
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp", linkImage: "https://drive.usercontent.google.com/download?id=a&export=view" }] };
   const harness = createHarness();
   harness.parcelHandlers.onParcelsLoaded([parcelA]);
   await harness.parcelHandlers.onOpenParcel(parcelA);
@@ -816,11 +816,11 @@ test("reopening saved parcel still makes no image-content proxy requests", async
   assert.equal(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob").length, 0);
   assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.photosLoading, false);
   assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.photos[0].previewUrl,
-    "https://drive.google.com/uc?export=view&id=a");
+    "https://drive.usercontent.google.com/download?id=a&export=view");
 });
 
 test("saved re-analysis renders direct links without waiting for image content", async () => {
-  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp", linkImage: "https://drive.google.com/uc?export=view&id=a" }] };
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp", linkImage: "https://drive.usercontent.google.com/download?id=a&export=view" }] };
   const harness = createHarness();
   harness.parcelHandlers.onParcelsLoaded([parcelA]);
   await harness.parcelHandlers.onAnalyzeParcel(parcelA);

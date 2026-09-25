@@ -40,8 +40,13 @@ function imageFileId(link) {
   let url;
   try { url = new URL(link); } catch { throw new Error("Invalid parcel image link"); }
   const id = url.searchParams.get("id");
-  if (url.protocol !== "https:" || url.hostname !== "drive.google.com" ||
-    url.pathname !== "/uc" || url.searchParams.get("export") !== "view" ||
+  const oldFormat = url.hostname === "drive.google.com" && url.pathname === "/uc";
+  const newFormat = url.hostname === "drive.usercontent.google.com" && url.pathname === "/download";
+  if (url.protocol !== "https:" || url.port || url.username || url.password || url.hash ||
+    (!oldFormat && !newFormat) || [...url.searchParams].length !== 2 ||
+    url.searchParams.getAll("id").length !== 1 ||
+    url.searchParams.getAll("export").length !== 1 ||
+    url.searchParams.get("export") !== "view" ||
     !id || !/^[a-zA-Z0-9_-]+$/.test(id)) {
     throw new Error("Invalid parcel image link");
   }
@@ -61,13 +66,18 @@ function parseParcelImages(cells) {
     throw new Error("Invalid parcel image arrays");
   }
   return names.map((fileName, index) => ({
-    id: fileName, fileName, linkImage: links[index],
-    fileId: imageFileId(links[index]),
-  }));
+    id: fileName, fileName, fileId: imageFileId(links[index]),
+  })).map((image) => ({ ...image, linkImage: imageLink(image.fileId) }));
 }
 
 function imageLink(fileId) {
-  return `https://drive.google.com/uc?export=view&id=${encodeURIComponent(fileId)}`;
+  if (typeof fileId !== "string" || !/^[a-zA-Z0-9_-]+$/.test(fileId)) {
+    throw new Error("Invalid parcel image file id");
+  }
+  const url = new URL("https://drive.usercontent.google.com/download");
+  url.searchParams.set("id", fileId);
+  url.searchParams.set("export", "view");
+  return url.toString();
 }
 
 function createGoogleParcelIntegration(env = process.env, google = require("googleapis").google,

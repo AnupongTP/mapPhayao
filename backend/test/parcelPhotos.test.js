@@ -6,7 +6,7 @@ const parcelImageService = require("../src/services/parcelImageService");
 const parcelService = require("../src/services/parcelService");
 const db = require("../src/config/database");
 const { bestEffortMirror, mirrorParcel } = require("../src/services/parcelMirrorService");
-const { userCells, parcelCells, parseParcelImages, formatCoordinate, PARCEL_HEADERS, createGoogleParcelIntegration } = require("../src/services/googleParcelIntegration");
+const { userCells, parcelCells, parseParcelImages, imageLink, formatCoordinate, PARCEL_HEADERS, createGoogleParcelIntegration } = require("../src/services/googleParcelIntegration");
 const { createFakeGoogleParcels } = require("../../scripts/fake-google-parcels.cjs");
 const { logGoogleFailure, tagGoogleError } = require("../src/utils/googleError");
 
@@ -69,6 +69,9 @@ test("Sheet cells keep deterministic aligned JSON arrays and never export pictur
     "https://drive.google.com/uc?export=view&id=second",
   ]);
   assert.deepEqual(parseParcelImages(cells).map((image) => image.fileId), ["first", "third", "second"]);
+  assert.deepEqual(parseParcelImages(cells).map((image) => image.linkImage), [
+    imageLink("first"), imageLink("third"), imageLink("second"),
+  ]);
   assert.equal(cells[13], "");
   assert.deepEqual(cells.slice(14), ["", ""]);
   assert.equal(cells.join(" ").includes("private"), false);
@@ -197,6 +200,32 @@ test("malformed or misaligned Sheet image arrays are rejected", () => {
   assert.throws(() => parseParcelImages(row), /Invalid parcel image arrays/);
   row[12] = '["https://evil.example/uc?export=view&id=file"]';
   assert.throws(() => parseParcelImages(row), /Invalid parcel image link/);
+});
+
+test("LinkImage accepts only legacy and canonical Drive shapes, normalizing old rows on read", () => {
+  const row = parcelCells({ owner_user_id: "owner", parcel_code: "PY-1", crop_type: "rice", geometry: {} });
+  row[11] = '["a.webp","b.webp"]';
+  row[12] = JSON.stringify([
+    "https://drive.google.com/uc?export=view&id=ABC123",
+    "https://drive.usercontent.google.com/download?id=DEF_456&export=view",
+  ]);
+  assert.equal(imageLink("ABC123"), "https://drive.usercontent.google.com/download?id=ABC123&export=view");
+  assert.deepEqual(parseParcelImages(row).map((image) => image.linkImage), [
+    imageLink("ABC123"), imageLink("DEF_456"),
+  ]);
+  for (const invalid of [
+    "https://evil.example/download?id=ABC123&export=view",
+    "https://drive.google.com/download?id=ABC123&export=view",
+    "https://drive.usercontent.google.com/uc?id=ABC123&export=view",
+    "https://drive.usercontent.google.com/download?export=view",
+    "https://drive.usercontent.google.com/download?id=bad.id&export=view",
+    "https://drive.usercontent.google.com/download?id=ABC123&export=view&authuser=0",
+    "https://drive.usercontent.google.com/download?id=ABC123&id=DEF&export=view",
+    "https://drive.usercontent.google.com/download?id=ABC123&export=view#fragment",
+  ]) {
+    row[12] = JSON.stringify([invalid, imageLink("DEF_456")]);
+    assert.throws(() => parseParcelImages(row), /Invalid parcel image link/);
+  }
 });
 
 test("Google mirror failure stays nonfatal", async () => {

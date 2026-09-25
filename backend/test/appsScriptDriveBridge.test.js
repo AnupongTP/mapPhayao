@@ -75,6 +75,40 @@ test("default nonce generator is random and changes for consecutive requests", a
   assert.notEqual(calls[0].nonce, calls[1].nonce);
 });
 
+test("weather uses a separate signed canonical form containing both coordinates", async () => {
+  const { bridge, calls } = harness({ success: true, providerStatus: 200, body: { current: {} } });
+  const result = await bridge.getWeather(19.1234564, 99.9876544);
+  assert.equal(result.providerStatus, 200);
+  const payload = calls[0].payload;
+  assert.deepEqual({ v: payload.v, op: payload.op, ts: payload.ts,
+    latitude: payload.latitude, longitude: payload.longitude },
+  { v: "1", op: "weather", ts: 1700000000, latitude: "19.123456", longitude: "99.987654" });
+  const canonical = ["1", "weather", "1700000000", payload.nonce,
+    "19.123456", "99.987654"].join("\n");
+  assert.equal(payload.signature, createHmac("sha256", secret).update(canonical).digest("base64url"));
+  assert.equal("filename" in payload, false);
+  assert.equal("contentBase64" in payload, false);
+  await assert.rejects(() => bridge.getWeather(91, 99), { bridgeCategory: "invalid-coordinates" });
+  await assert.rejects(() => bridge.getWeather(19, 181), { bridgeCategory: "invalid-coordinates" });
+  assert.equal(calls.length, 1);
+});
+
+test("weather bridge validates provider response and sanitizes rejection or network failures", async () => {
+  for (const reply of [{ success: true, body: {} },
+    { success: true, providerStatus: 200, body: null },
+    { success: true, providerStatus: 429, retryAfter: {} }]) {
+    const { bridge } = harness(reply);
+    await assert.rejects(() => bridge.getWeather(19, 99), { bridgeCategory: "invalid-response" });
+  }
+  const rejected = harness({ success: false, error: `secret=${secret}` }).bridge;
+  await assert.rejects(() => rejected.getWeather(19, 99), (error) =>
+    error.bridgeCategory === "rejected" && !error.message.includes(secret));
+  const network = createAppsScriptDriveBridge({ url, secret,
+    fetchImpl: async () => { throw new Error(`signature=${secret}`); } });
+  await assert.rejects(() => network.getWeather(19, 99), (error) =>
+    error.bridgeCategory === "network" && !error.message.includes(secret));
+});
+
 test("read decodes bytes to the existing stream contract; delete signs only trusted file ID", async () => {
   const { bridge, calls } = harness({ success: true, contentBase64: Buffer.from("webp").toString("base64") });
   const chunks = [];

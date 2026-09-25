@@ -316,6 +316,31 @@ body {
   font-weight: 400;
 }
 
+.coordinate-map-link {
+  display: inline-block;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 10px 0;
+  color: #0f766e;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+  touch-action: manipulation;
+}
+
+.coordinate-map-link:hover,
+.coordinate-map-link:active {
+  color: #115e59;
+}
+
+.coordinate-map-link:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
+}
+
 .result-message,
 .popup-message {
   margin: 0;
@@ -2094,7 +2119,6 @@ button.panel-icon-action[hidden] {
 
   .leaflet-control-layers.is-mobile-drawer-open .leaflet-control-layers-selector {
     position: relative;
-    z-index: 1;
     flex: 0 0 20px;
     width: 20px;
     height: 20px;
@@ -2108,7 +2132,7 @@ button.panel-icon-action[hidden] {
   .mobile-layer-drawer-header {
     position: sticky;
     top: 0;
-    z-index: 1;
+    z-index: 2;
     display: flex;
     min-height: 60px;
     align-items: center;

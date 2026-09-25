@@ -1,4 +1,5 @@
 const db = require("../config/database");
+const { createAppsScriptDriveBridge } = require("./appsScriptDriveBridge");
 
 const OPEN_METEO_BASE_URL = "https://api.open-meteo.com/v1/forecast";
 const SOURCE = "Open-Meteo";
@@ -247,57 +248,87 @@ function normalizeWeatherResponse(body) {
   });
 }
 
-async function requestOpenMeteo(latitude, longitude, options = {}) {
+async function fetchDirectWeather(latitude, longitude, options) {
   const fetchImpl = options.fetchImpl || fetch;
-  const now = options.now || Date.now;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
-
   try {
     const response = await fetchImpl(buildUrl(latitude, longitude), {
       method: "GET",
-      headers: {
-        Accept: "application/json",
-      },
+      headers: { Accept: "application/json" },
       signal: controller.signal,
     });
-
-    if (response.status === 429) {
-      const seconds = retryAfterSeconds(response.headers?.get?.("retry-after"), now());
-      rateLimitedUntil = Math.max(rateLimitedUntil, now() + seconds * 1000);
-      console.warn("weather-provider-unavailable", {
-        stage: "rate-limit", status: 429, retryAfterSeconds: seconds,
-      });
-      return buildUnavailableResult();
-    }
-    if (!response.ok) {
-      console.warn("weather-provider-unavailable", {
-        stage: "http", status: Number.isInteger(response.status) ? response.status : undefined,
-      });
-      return buildUnavailableResult();
-    }
-
-    let body;
+    const result = { providerStatus: response.status,
+      retryAfter: response.headers?.get?.("retry-after") ?? null, body: null };
+    if (!response.ok) return result;
     try {
-      body = await response.json();
+      result.body = await response.json();
     } catch (error) {
-      console.warn("weather-provider-unavailable", { stage: "invalid-json" });
-      return buildUnavailableResult();
+      result.invalidJson = true;
     }
-
-    const weather = normalizeWeatherResponse(body);
-    if (weather.status !== "AVAILABLE") {
-      console.warn("weather-provider-unavailable", { stage: "invalid-payload" });
-    }
-    return weather;
+    return result;
   } catch (error) {
-    console.warn("weather-provider-unavailable", {
-      stage: controller.signal.aborted ? "timeout" : "network",
-    });
-    return buildUnavailableResult();
+    return { failureStage: controller.signal.aborted ? "timeout" : "network" };
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function requestOpenMeteo(latitude, longitude, options = {}) {
+  const env = options.env || process.env;
+  const transport = options.transport || env.WEATHER_OPEN_METEO_TRANSPORT;
+  if (transport !== "direct" && transport !== "apps-script") {
+    console.warn("weather-provider-unavailable", { stage: "config" });
+    return buildUnavailableResult();
+  }
+  let result;
+  if (transport === "direct") {
+    result = await fetchDirectWeather(latitude, longitude, options);
+  } else {
+    try {
+      const bridge = options.appsScriptBridge || createAppsScriptDriveBridge({
+        url: env.GOOGLE_DRIVE_APPS_SCRIPT_URL,
+        secret: env.GOOGLE_DRIVE_APPS_SCRIPT_SECRET,
+        fetchImpl: options.bridgeFetchImpl || fetch,
+        now: options.now || Date.now,
+      });
+      result = await bridge.getWeather(latitude, longitude);
+    } catch (error) {
+      const category = error?.bridgeCategory;
+      const stage = ["timeout", "network", "rejected"].includes(category)
+        ? `apps-script-${category}` : "apps-script-invalid-response";
+      console.warn("weather-provider-unavailable", { stage });
+      return buildUnavailableResult();
+    }
+  }
+  if (result.failureStage) {
+    console.warn("weather-provider-unavailable", { stage: result.failureStage });
+    return buildUnavailableResult();
+  }
+  if (result.providerStatus === 429) {
+    const now = options.now || Date.now;
+    const seconds = retryAfterSeconds(result.retryAfter, now());
+    rateLimitedUntil = Math.max(rateLimitedUntil, now() + seconds * 1000);
+    console.warn("weather-provider-unavailable", {
+      stage: "rate-limit", status: 429, retryAfterSeconds: seconds,
+    });
+    return buildUnavailableResult();
+  }
+  if (!Number.isInteger(result.providerStatus) || result.providerStatus < 200 || result.providerStatus >= 300) {
+    console.warn("weather-provider-unavailable", {
+      stage: "http", status: Number.isInteger(result.providerStatus) ? result.providerStatus : undefined,
+    });
+    return buildUnavailableResult();
+  }
+  if (result.invalidJson) {
+    console.warn("weather-provider-unavailable", { stage: "invalid-json" });
+    return buildUnavailableResult();
+  }
+  const weather = normalizeWeatherResponse(result.body);
+  if (weather.status !== "AVAILABLE") {
+    console.warn("weather-provider-unavailable", { stage: "invalid-payload" });
+  }
+  return weather;
 }
 
 async function getWeatherForLocation({ latitude, longitude }, options = {}) {

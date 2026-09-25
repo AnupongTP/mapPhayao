@@ -72,7 +72,7 @@ test("saved parcel detail uses display formatters and generic variety label", ()
   assert.doesNotMatch(detailBlock, /พันธุ์ข้าว/);
   assert.match(detailBlock, /label: "วันที่ปลูก"[\s\S]*formatter: formatters\.formatThaiDateOnly/);
   assert.match(detailBlock, /label: "อัปเดตล่าสุด"[\s\S]*formatter: formatters\.formatThaiDateTime/);
-  assert.match(detailBlock, /label: "พิกัดแปลง"[\s\S]*formatter: formatters\.formatRepresentativePoint/);
+  assert.match(detailBlock, /label: "พิกัดแปลง"[^\n]*renderer: createCoordinateMapLink/);
 });
 
 test("representative point displays latitude first to six places or the normal empty value", () => {
@@ -83,7 +83,37 @@ test("representative point displays latitude first to six places or the normal e
   assert.equal(formatters.formatRepresentativePoint({ latitude: null, longitude: 99.9 }), formatters.EMPTY_TEXT);
   const resultBlock = uiSource.slice(uiSource.indexOf("function renderParcelResult(parcelState)"),
     uiSource.indexOf("function renderSavedParcelDetail(parcel, message)"));
-  assert.match(resultBlock, /label: "พิกัดแปลง"[\s\S]*formatter: formatters\.formatRepresentativePoint/);
+  assert.match(resultBlock, /label: "พิกัดแปลง"[^\n]*renderer: createCoordinateMapLink/);
+});
+
+test("coordinate destinations validate latitude-first values without provider lock-in", () => {
+  const formatters = createFormatters();
+  const point = { latitude: 19.037525, longitude: 99.941463 };
+  assert.equal(formatters.coordinateMapHref(point, true),
+    "geo:19.037525,99.941463?q=19.037525,99.941463");
+  assert.equal(formatters.coordinateMapHref({ lat: 19.037525, lng: 99.941463 }, true),
+    formatters.coordinateMapHref(point, true));
+  assert.equal(formatters.coordinateMapHref(point, false),
+    "https://www.openstreetmap.org/?mlat=19.037525&mlon=99.941463#map=16/19.037525/99.941463");
+  assert.doesNotMatch(formatters.coordinateMapHref(point, true), /google\.com|package=/);
+  for (const invalid of [null, {}, { latitude: null, longitude: 99 },
+    { latitude: 91, longitude: 99 }, { latitude: 19, longitude: -181 },
+    { latitude: "19", longitude: 99 }]) {
+    assert.equal(formatters.coordinateMapHref(invalid, true), null);
+  }
+});
+
+test("coordinate rows alone use the DOM renderer and themed keyboard-accessible links", () => {
+  const css = fs.readFileSync(path.join(frontendRoot, "css/map.css"), "utf8");
+  assert.match(uiSource, /function createCoordinateMapLink\(point\)/);
+  assert.match(uiSource, /display\.appendChild\(renderer\(value\)\)/);
+  assert.match(uiSource, /link\.setAttribute\("aria-label"/);
+  assert.doesNotMatch(uiSource, /coordinateMapHref[\s\S]{0,300}innerHTML/);
+  assert.match(uiSource, /label: "พิกัด"[^\n]*renderer: createCoordinateMapLink/g);
+  assert.equal((uiSource.match(/label: "พิกัด"[^\n]*renderer: createCoordinateMapLink/g) || []).length, 2);
+  assert.equal((uiSource.match(/label: "พิกัดแปลง"[^\n]*renderer: createCoordinateMapLink/g) || []).length, 2);
+  assert.match(css, /\.coordinate-map-link \{[\s\S]*?color: #0f766e;/);
+  assert.match(css, /\.coordinate-map-link:focus-visible \{/);
 });
 
 test("photo section shares the result card in analyzed and saved parcel views", () => {
