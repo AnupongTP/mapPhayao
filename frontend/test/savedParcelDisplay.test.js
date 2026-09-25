@@ -72,6 +72,42 @@ test("saved parcel detail uses display formatters and generic variety label", ()
   assert.doesNotMatch(detailBlock, /พันธุ์ข้าว/);
   assert.match(detailBlock, /label: "วันที่ปลูก"[\s\S]*formatter: formatters\.formatThaiDateOnly/);
   assert.match(detailBlock, /label: "อัปเดตล่าสุด"[\s\S]*formatter: formatters\.formatThaiDateTime/);
+  assert.match(detailBlock, /label: "พิกัดแปลง"[\s\S]*formatter: formatters\.formatRepresentativePoint/);
+});
+
+test("representative point displays latitude first to six places or the normal empty value", () => {
+  const formatters = createFormatters();
+  assert.equal(formatters.formatRepresentativePoint({ latitude: 19.0488924, longitude: 99.9525506 }),
+    "19.048892, 99.952551");
+  assert.equal(formatters.formatRepresentativePoint(null), formatters.EMPTY_TEXT);
+  assert.equal(formatters.formatRepresentativePoint({ latitude: null, longitude: 99.9 }), formatters.EMPTY_TEXT);
+  const resultBlock = uiSource.slice(uiSource.indexOf("function renderParcelResult(parcelState)"),
+    uiSource.indexOf("function renderSavedParcelDetail(parcel, message)"));
+  assert.match(resultBlock, /label: "พิกัดแปลง"[\s\S]*formatter: formatters\.formatRepresentativePoint/);
+});
+
+test("photo section shares the result card in analyzed and saved parcel views", () => {
+  const photoBlock = uiSource.slice(uiSource.indexOf("function createParcelPhotoSection(photos, options = {})"),
+    uiSource.indexOf("function renderParcelResult(parcelState)"));
+  assert.match(photoBlock, /"parcel-result-card parcel-photo-section"/);
+  assert.match(photoBlock, /ยังไม่มีรูปภาพแปลง/);
+  assert.match(photoBlock, /กำลังโหลดรูปภาพ\.\.\./);
+  assert.match(photoBlock, /image\.loading = "lazy"/);
+  const resultBlock = uiSource.slice(uiSource.indexOf("function renderParcelResult(parcelState)"),
+    uiSource.indexOf("function renderSavedParcelDetail(parcel, message)"));
+  const savedBlock = uiSource.slice(uiSource.indexOf("function renderSavedParcelDetail(parcel, message)"),
+    uiSource.indexOf("function addParcelDrawControl", uiSource.indexOf("function renderSavedParcelDetail(parcel, message)")));
+  assert.match(resultBlock, /createParcelPhotoSection\(parcelState\.photos,/);
+  assert.match(savedBlock, /createParcelPhotoSection\(parcel\?\.photos,/);
+});
+
+test("public privacy policy and homepage link require no runtime authentication", () => {
+  const index = fs.readFileSync(path.join(frontendRoot, "index.html"), "utf8");
+  const privacy = fs.readFileSync(path.join(frontendRoot, "privacy.html"), "utf8");
+  assert.match(index, /<a class="privacy-policy-link" href="privacy\.html">นโยบายความเป็นส่วนตัว<\/a>/);
+  assert.match(privacy, /<html lang="th">/);
+  assert.match(privacy, /href="index\.html"/);
+  assert.doesNotMatch(privacy, /<script|liff\.init|Authorization|refresh_token|private_key/i);
 });
 
 test("My Parcels cards use formatted crop type and planting date while forms keep raw date values", () => {

@@ -232,6 +232,33 @@ test("weather service handles non-200, invalid JSON, timeout, and cache", async 
   assert.equal(calls, 1);
 });
 
+test("a failed provider request is retried and diagnostics omit coordinates and provider secrets", async () => {
+  const originalWarn = console.warn;
+  const events = [];
+  console.warn = (...args) => events.push(args);
+  try {
+    let calls = 0;
+    const options = {
+      isInsidePhayao: async () => true,
+      fetchImpl: async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("Bearer SECRET latitude=19.02 longitude=99.97");
+        return createResponse(validWeatherBody());
+      },
+    };
+    assert.equal((await weatherService.getWeatherForLocation(
+      { latitude: 19.02, longitude: 99.97 }, options)).status, "UNAVAILABLE");
+    assert.equal((await weatherService.getWeatherForLocation(
+      { latitude: 19.02, longitude: 99.97 }, options)).status, "AVAILABLE");
+    assert.equal(calls, 2);
+    assert.deepEqual(events[0], ["weather-provider-unavailable", { stage: "network" }]);
+    assert.equal(JSON.stringify(events).includes("SECRET"), false);
+    assert.equal(JSON.stringify(events).includes("19.02"), false);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test("outside Phayao and invalid coordinates do not call Open-Meteo", async () => {
   let calls = 0;
   const outside = await weatherService.getWeatherForLocation(
@@ -335,5 +362,47 @@ test("parcel analysis includes weather from ST_PointOnSurface without exposing g
   );
 
   assert.equal(result.weather.status, "AVAILABLE");
-  assert.ok(!JSON.stringify(result).includes("representative"));
+  assert.deepEqual(result.representativePoint, { latitude: 19.02, longitude: 99.97 });
+});
+
+test("parcel analysis keeps a failed weather request nonfatal and retains the canonical point", async () => {
+  db.query = async (sql) => {
+    if (/ST_GeometryType\(geom\)/.test(sql)) return { rows: [{ is_empty: false, is_valid: true,
+      area_sqm: 1600, area_square_meters: 1600, area_rai: 1 }] };
+    if (/ST_PointOnSurface/.test(sql)) return { rows: [{ latitude: 19.02, longitude: 99.97 }] };
+    return { rows: [] };
+  };
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const result = await areaAnalysisService.analyzePolygon({ name: "parcel", geometry: {
+      type: "Polygon", coordinates: [[[99.9, 19], [99.91, 19], [99.91, 19.01], [99.9, 19]]],
+    } }, { weatherService: { getWeatherForLocation: async () => { throw new Error("provider secret"); } } });
+    assert.equal(result.weather.status, "UNAVAILABLE");
+    assert.deepEqual(result.representativePoint, { latitude: 19.02, longitude: 99.97 });
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test("representative-point lookup failure does not abort otherwise valid parcel analysis", async () => {
+  db.query = async (sql) => {
+    if (/ST_GeometryType\(geom\)/.test(sql)) return { rows: [{ is_empty: false, is_valid: true,
+      area_sqm: 1600, area_square_meters: 1600, area_rai: 1 }] };
+    if (/ST_PointOnSurface/.test(sql)) throw new Error("private coordinates and credentials");
+    return { rows: [] };
+  };
+  const originalWarn = console.warn;
+  const events = [];
+  console.warn = (...args) => events.push(args);
+  try {
+    const result = await areaAnalysisService.analyzePolygon({ name: "parcel", geometry: {
+      type: "Polygon", coordinates: [[[99.9, 19], [99.91, 19], [99.91, 19.01], [99.9, 19]]],
+    } });
+    assert.equal(result.representativePoint, null);
+    assert.equal(result.weather.status, "UNAVAILABLE");
+    assert.deepEqual(events, [["parcel-weather-unavailable", { stage: "representative-point" }]]);
+  } finally {
+    console.warn = originalWarn;
+  }
 });

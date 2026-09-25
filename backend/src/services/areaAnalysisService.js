@@ -173,14 +173,14 @@ async function getParcelRepresentativePoint(geometryJson) {
   return { latitude, longitude };
 }
 
-async function getWeatherForParcel(geometryJson, service = weatherService) {
+async function getWeatherForParcel(point, service = weatherService) {
   try {
-    const point = await getParcelRepresentativePoint(geometryJson);
     if (!point) {
       return weatherService.buildUnavailableResult();
     }
     return await service.getWeatherForLocation(point);
   } catch (error) {
+    console.warn("parcel-weather-unavailable", { stage: "weather-service" });
     return weatherService.buildUnavailableResult();
   }
 }
@@ -696,6 +696,12 @@ async function analyzePolygon({ name, geometry }, dependencies = {}) {
 
   try {
     const parcel = await getParcelMeta(geometryJson);
+    let representativePoint = null;
+    try {
+      representativePoint = await getParcelRepresentativePoint(geometryJson);
+    } catch (error) {
+      console.warn("parcel-weather-unavailable", { stage: "representative-point" });
+    }
     const [
       administrativeRows,
       riceResult,
@@ -711,7 +717,7 @@ async function analyzePolygon({ name, geometry }, dependencies = {}) {
       getSoilRows(geometryJson),
       getNearestWaterRows(geometryJson),
       getHistoricalHazards(geometryJson, parcel.areaSquareMeters),
-      getWeatherForParcel(geometryJson, agriWeatherService),
+      getWeatherForParcel(representativePoint, agriWeatherService),
     ]);
 
     return {
@@ -722,6 +728,7 @@ async function analyzePolygon({ name, geometry }, dependencies = {}) {
         areaRai: parcel.areaRai,
         geometryType: geometry.type,
       },
+      representativePoint,
       location: buildLocationResponse(administrativeRows),
       riceLandSuitability: buildSuitabilityResponse(riceResult.rows, {
         evaluationMethod: "LDD_RICE_POTENTIAL_AREA_OVERLAY",

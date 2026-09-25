@@ -27,6 +27,7 @@
   let pendingSavedParcelController = null;
   const savedParcelAnalysisById = new Map();
   const savedImageObjectUrls = new Map();
+  const pendingSavedImageLoads = new Map();
   const deletedSavedParcelIds = new Set();
   let ownedParcelLayerRevision = 0;
   let currentSavedParcel = null;
@@ -771,22 +772,53 @@
   }
 
   async function prepareSavedPhotos(parcel) {
-    const photos = [];
-    for (const image of parcel.images || []) {
-      let previewUrl = savedImageObjectUrls.get(image.id);
+    return Promise.all((parcel.images || []).map(async (image) => {
+      const key = `${parcel.id}:${image.id}`;
+      let previewUrl = savedImageObjectUrls.get(key);
       if (!previewUrl) {
+        let pending = pendingSavedImageLoads.get(key);
+        if (!pending) {
+          pending = window.MapApi.getParcelImageBlob(parcel.id, image.id)
+            .then((blob) => {
+              const url = URL.createObjectURL(blob);
+              savedImageObjectUrls.set(key, url);
+              return url;
+            })
+            .finally(() => pendingSavedImageLoads.delete(key));
+          pendingSavedImageLoads.set(key, pending);
+        }
         try {
-          const blob = await window.MapApi.getParcelImageBlob(parcel.id, image.id);
-          previewUrl = URL.createObjectURL(blob);
-          savedImageObjectUrls.set(image.id, previewUrl);
+          previewUrl = await pending;
         } catch (error) {
-          photos.push({ ...image, loadError: true });
-          continue;
+          return { ...image, loadError: true };
         }
       }
-      photos.push({ ...image, previewUrl });
-    }
-    return photos;
+      return { ...image, previewUrl };
+    }));
+  }
+
+  function startSavedPhotoLoad(parcel, requestRevision) {
+    if (!parcel.images?.length || !parcel.photosLoading) return;
+    prepareSavedPhotos(parcel).then((photos) => {
+      parcel.photos = photos;
+      parcel.photosLoading = false;
+      if (currentSavedParcel?.id === parcel.id) {
+        currentSavedParcel.photos = photos;
+        currentSavedParcel.photosLoading = false;
+      }
+      if (deletedSavedParcelIds.has(parcel.id) || openedSavedParcelId !== parcel.id ||
+        pendingSavedParcelId !== parcel.id || savedParcelDetailRevision !== requestRevision) return;
+      window.MapUi.updateSavedParcelPhotos(parcel.id, photos);
+    });
+  }
+
+  function setInitialSavedPhotos(parcel) {
+    const images = parcel.images || [];
+    const cached = images.map((image) => savedImageObjectUrls.get(`${parcel.id}:${image.id}`));
+    parcel.photosLoading = images.length > 0 && cached.some((url) => !url);
+    parcel.photos = parcel.photosLoading ? [] : images.map((image, index) => ({
+      ...image, previewUrl: cached[index],
+    }));
   }
 
   async function openSavedParcel(parcel, options = {}) {
@@ -824,11 +856,9 @@
         focusSavedParcelLayer(detail);
       }
       window.MapParcelManagement.closeMyParcelsSheet();
-      detail.photos = await prepareSavedPhotos(detail);
-      if (deletedSavedParcelIds.has(parcel.id) || !window.MapParcelState.shouldAcceptDetailResponse(
-        parcel.id, pendingSavedParcelId, requestRevision, savedParcelDetailRevision,
-      )) return;
+      setInitialSavedPhotos(detail);
       window.MapUi.renderSavedParcelDetail(detail);
+      startSavedPhotoLoad(detail, requestRevision);
     } catch (error) {
       if (deletedSavedParcelIds.has(parcel.id) || !window.MapParcelState.shouldAcceptDetailResponse(
         parcel.id, pendingSavedParcelId, requestRevision, savedParcelDetailRevision,
@@ -879,17 +909,16 @@
         return;
       }
       savedParcelAnalysisById.set(detail.id, { updatedAt: detail.updatedAt, analysis });
-      const photos = await prepareSavedPhotos(detail);
-      if (deletedSavedParcelIds.has(parcel.id) || openedSavedParcelId !== detail.id || !window.MapParcelState.shouldAcceptDetailResponse(
-        parcel.id, pendingSavedParcelId, requestRevision, savedParcelDetailRevision,
-      )) return;
+      setInitialSavedPhotos(detail);
       window.MapUi.renderParcelResult({
         id: detail.id,
         name: detail.parcelName || detail.parcelCode,
         analysisStatus: "success",
         analysis,
-        photos,
+        photos: detail.photos,
+        photosLoading: detail.photosLoading,
       });
+      startSavedPhotoLoad(detail, requestRevision);
     } catch (error) {
       if (deletedSavedParcelIds.has(parcel.id) || !window.MapParcelState.shouldAcceptDetailResponse(
         parcel.id, pendingSavedParcelId, requestRevision, savedParcelDetailRevision,

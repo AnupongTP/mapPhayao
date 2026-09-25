@@ -1533,6 +1533,10 @@ body {
   padding: 2px 2px 8px;
 }
 
+.parcel-photo-section .parcel-photo-strip {
+  margin-top: 0;
+}
+
 .parcel-photo-item {
   position: relative;
   flex: 0 0 120px;
@@ -1581,9 +1585,21 @@ body {
   font-size: 13px;
 }
 
-.parcel-photo-section {
-  padding: 12px 14px;
-  border-bottom: 1px solid #e5e7eb;
+.privacy-policy-link {
+  position: fixed;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  left: calc(12px + env(safe-area-inset-left));
+  z-index: 850;
+  padding: 5px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #0f172a;
+  font: 12px "Sarabun", sans-serif;
+  text-decoration: underline;
+}
+
+.privacy-policy-link:focus-visible {
+  outline: 3px solid #0d9488;
 }
 
 .mobile-temporary-parcels-button {

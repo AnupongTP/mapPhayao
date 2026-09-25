@@ -2353,9 +2353,14 @@
     return section;
   }
 
-  function createParcelPhotoSection(photos) {
-    const section = createElement("section", "parcel-photo-section");
+  function createParcelPhotoSection(photos, options = {}) {
+    const section = createElement("section", "parcel-result-card parcel-photo-section");
+    if (options.parcelId) section.dataset.parcelId = options.parcelId;
     section.appendChild(createElement("h3", "parcel-result-card-title", "รูปภาพแปลง"));
+    if (options.loading) {
+      section.appendChild(createElement("p", "parcel-photo-empty", "กำลังโหลดรูปภาพ..."));
+      return section;
+    }
     if (!Array.isArray(photos) || photos.length === 0) {
       section.appendChild(createElement("p", "parcel-photo-empty", "ยังไม่มีรูปภาพแปลง"));
       return section;
@@ -2428,13 +2433,16 @@
       { label: "ชื่อแปลง", value: analysis.name || parcelState.name },
       { label: "พื้นที่", value: parcel.areaSquareMeters, formatter: formatters.formatThaiLandArea },
       { label: "พื้นที่ตารางเมตร", value: parcel.areaSquareMeters, formatter: formatters.formatAreaSqm },
+      { label: "พิกัดแปลง", value: analysis.representativePoint, formatter: formatters.formatRepresentativePoint },
       { label: "ตำบล", value: location.tambons, formatter: formatters.formatList },
       { label: "อำเภอ", value: location.amphoes, formatter: formatters.formatList },
       { label: "ลุ่มน้ำหลัก", value: location.mainBasins, formatter: formatters.formatList },
       { label: "ลุ่มน้ำย่อย", value: location.subBasins, formatter: formatters.formatList },
     ]);
 
-    content.appendChild(createParcelPhotoSection(parcelState.photos));
+    content.appendChild(createParcelPhotoSection(parcelState.photos, {
+      loading: parcelState.photosLoading, parcelId: parcelState.id,
+    }));
 
     const riceSection = createParcelCropSection(
       TEXT.riceSuitabilityTitle,
@@ -2509,11 +2517,14 @@
       { label: "วันที่ปลูก", value: parcel?.plantingDate, formatter: formatters.formatThaiDateOnly },
       { label: "พื้นที่", value: parcel?.areaSqm, formatter: formatters.formatThaiLandArea },
       { label: "พื้นที่ไร่", value: parcel?.areaRai, formatter: formatters.formatAreaRai },
+      { label: "พิกัดแปลง", value: parcel?.representativePoint, formatter: formatters.formatRepresentativePoint },
       { label: "วันที่สร้าง", value: parcel?.createdAt, formatter: formatters.formatThaiDateTime },
       { label: "อัปเดตล่าสุด", value: parcel?.updatedAt, formatter: formatters.formatThaiDateTime },
     ]);
 
-    content.appendChild(createParcelPhotoSection(parcel?.photos));
+    content.appendChild(createParcelPhotoSection(parcel?.photos, {
+      loading: parcel?.photosLoading, parcelId: parcel?.id,
+    }));
 
     if (parcel?.id && !message) {
       savedParcelPanelParcel = parcel;
@@ -2527,6 +2538,13 @@
     }
 
     openResultPanel(panel);
+  }
+
+  function updateSavedParcelPhotos(parcelId, photos) {
+    const panel = document.getElementById("result-panel");
+    const section = panel?.querySelector(".parcel-photo-section");
+    if (!panel || panel.hidden || section?.dataset.parcelId !== parcelId) return;
+    section.replaceWith(createParcelPhotoSection(photos, { parcelId }));
   }
 
   function addParcelDrawControl(map, handlers) {
@@ -2850,6 +2868,7 @@
     renderResultPanel,
     renderParcelResult,
     renderSavedParcelDetail,
+    updateSavedParcelPhotos,
     setSavedParcelPanelActions: function (actions) {
       savedParcelPanelActions = actions || {};
     },

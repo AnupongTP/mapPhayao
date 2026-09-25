@@ -384,6 +384,8 @@ function createHarness(options = {}) {
   const uiState = {
     renderedSavedDetails: [],
     renderedParcelResults: [],
+    updatedSavedPhotos: [],
+    revokedImageUrls: [],
     closeResultPanelCalls: 0,
     closedMyParcelSheets: 0,
     refreshedOpenLists: 0,
@@ -460,6 +462,10 @@ function createHarness(options = {}) {
       };
     },
     getLocationReport: async () => ({ success: true }),
+    getParcelImageBlob: async (parcelId, imageId) => {
+      apiCalls.push({ method: "getParcelImageBlob", parcelId, imageId });
+      return options.imageLoadHandler ? options.imageLoadHandler(parcelId, imageId) : { imageId };
+    },
   };
 
   const window = {
@@ -541,6 +547,9 @@ function createHarness(options = {}) {
       renderSavedParcelDetail(parcel, message) {
         uiState.renderedSavedDetails.push({ parcel, message });
       },
+      updateSavedParcelPhotos(parcelId, photos) {
+        uiState.updatedSavedPhotos.push({ parcelId, photos });
+      },
       renderParcelResult(parcel) {
         uiState.renderedParcelResults.push(parcel);
       },
@@ -579,6 +588,14 @@ function createHarness(options = {}) {
     navigator: { geolocation: {} },
     L: createLeafletStub(leafletState),
     URLSearchParams,
+    URL: {
+      createObjectURL(blob) {
+        return `blob:${blob.imageId}`;
+      },
+      revokeObjectURL(url) {
+        uiState.revokedImageUrls.push(url);
+      },
+    },
     AbortController,
     Error,
     TypeError,
@@ -761,6 +778,90 @@ test("selecting saved parcels fits and highlights one without removing the other
   assert.equal(layerB.style.color, "#ea580c");
   assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.id, PARCEL_B_ID);
   assert.equal(harness.uiState.closedMyParcelSheets, 2);
+});
+
+test("saved detail renders text and loading state before concurrent images complete in original order", async () => {
+  const first = createDeferred();
+  const second = createDeferred();
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "first.webp" }, { id: "second.webp" }] };
+  const harness = createHarness({ imageLoadHandler: (_, imageId) =>
+    imageId === "first.webp" ? first.promise : second.promise });
+  harness.parcelHandlers.onParcelsLoaded([parcelA]);
+  await harness.parcelHandlers.onOpenParcel(parcelA);
+  const initial = harness.uiState.renderedSavedDetails.at(-1).parcel;
+  assert.equal(initial.parcelName, "Field A");
+  assert.equal(initial.photosLoading, true);
+  assert.equal(harness.uiState.updatedSavedPhotos.length, 0);
+  assert.deepEqual(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob")
+    .map((call) => call.imageId), ["first.webp", "second.webp"]);
+  second.resolve({ imageId: "second.webp" });
+  await nextTick();
+  assert.equal(harness.uiState.updatedSavedPhotos.length, 0);
+  first.resolve({ imageId: "first.webp" });
+  await nextTick();
+  assert.deepEqual(harness.uiState.updatedSavedPhotos.at(-1).photos.map((photo) => photo.id),
+    ["first.webp", "second.webp"]);
+  assert.deepEqual(harness.uiState.updatedSavedPhotos.at(-1).photos.map((photo) => photo.previewUrl),
+    ["blob:first.webp", "blob:second.webp"]);
+});
+
+test("one saved image failure leaves the other image visible", async () => {
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "bad.webp" }, { id: "good.webp" }] };
+  const harness = createHarness({ imageLoadHandler: (_, imageId) => imageId === "bad.webp"
+    ? Promise.reject(new Error("failed")) : Promise.resolve({ imageId }) });
+  harness.parcelHandlers.onParcelsLoaded([parcelA]);
+  await harness.parcelHandlers.onOpenParcel(parcelA);
+  await nextTick();
+  const photos = harness.uiState.updatedSavedPhotos.at(-1).photos;
+  assert.equal(photos[0].loadError, true);
+  assert.equal(photos[1].previewUrl, "blob:good.webp");
+});
+
+test("switching saved parcels ignores stale image completion", async () => {
+  const first = createDeferred();
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp" }] };
+  const parcelB = { ...parcel(PARCEL_B_ID, "Field B"), images: [{ id: "b.webp" }] };
+  const harness = createHarness({ imageLoadHandler: (_, imageId) => imageId === "a.webp"
+    ? first.promise : Promise.resolve({ imageId }) });
+  harness.parcelHandlers.onParcelsLoaded([parcelA, parcelB]);
+  await harness.parcelHandlers.onOpenParcel(parcelA);
+  await harness.parcelHandlers.onOpenParcel(parcelB);
+  await nextTick();
+  first.resolve({ imageId: "a.webp" });
+  await nextTick();
+  assert.deepEqual(harness.uiState.updatedSavedPhotos.map((item) => item.parcelId), [PARCEL_B_ID]);
+  assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.id, PARCEL_B_ID);
+});
+
+test("reopening a saved parcel shares pending image requests and reuses the object URL cache", async () => {
+  const pending = createDeferred();
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp" }] };
+  const harness = createHarness({ imageLoadHandler: () => pending.promise });
+  harness.parcelHandlers.onParcelsLoaded([parcelA]);
+  await harness.parcelHandlers.onOpenParcel(parcelA);
+  await harness.parcelHandlers.onOpenParcel(parcelA);
+  assert.equal(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob").length, 1);
+  pending.resolve({ imageId: "a.webp" });
+  await nextTick();
+  await harness.parcelHandlers.onOpenParcel(parcelA);
+  assert.equal(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob").length, 1);
+  assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.photosLoading, false);
+  assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.photos[0].previewUrl, "blob:a.webp");
+});
+
+test("saved re-analysis renders its result before image content resolves", async () => {
+  const pending = createDeferred();
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp" }] };
+  const harness = createHarness({ imageLoadHandler: () => pending.promise });
+  harness.parcelHandlers.onParcelsLoaded([parcelA]);
+  await harness.parcelHandlers.onAnalyzeParcel(parcelA);
+  const result = harness.uiState.renderedParcelResults.at(-1);
+  assert.equal(result.analysisStatus, "success");
+  assert.equal(result.photosLoading, true);
+  assert.equal(harness.uiState.updatedSavedPhotos.length, 0);
+  pending.resolve({ imageId: "a.webp" });
+  await nextTick();
+  assert.equal(harness.uiState.updatedSavedPhotos.at(-1).parcelId, PARCEL_A_ID);
 });
 
 test("reopening the list rebuilds owned parcel layers without duplicates", () => {

@@ -1,6 +1,45 @@
 const { test, expect } = require("@playwright/test");
 const { prepareContext, watchPageErrors, openMap, panMap, expectVisualSnapshot } = require("./support");
 
+test("public privacy page and map link work at a mobile viewport without LIFF authentication", async ({ page, context }) => {
+  const forbidden = await prepareContext(context, { loggedIn: false });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  const link = page.getByRole("link", { name: "นโยบายความเป็นส่วนตัว" });
+  await expect(link).toBeVisible();
+  await expect(link).toHaveAttribute("href", "privacy.html");
+  await link.click();
+  await expect(page).toHaveURL(/\/privacy\.html$/);
+  await expect(page.getByRole("heading", { name: "นโยบายความเป็นส่วนตัว" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
+  expect(forbidden).toEqual([]);
+});
+
+test("mobile parcel weather and empty photo cards retain readable available and unavailable states", async ({ page, context }) => {
+  const forbidden = await prepareContext(context);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openMap(page);
+  const base = { name: "Test parcel", analysisStatus: "success", photos: [], analysis: {
+    name: "Test parcel", parcel: { areaSquareMeters: 1600 },
+    representativePoint: { latitude: 19.048892, longitude: 99.952551 },
+    weather: { status: "AVAILABLE", temperatureC: 28.5,
+      nextHourPrecipitationProbabilityPercent: 82, source: "Open-Meteo" },
+  } };
+  await page.evaluate((parcel) => window.MapUi.renderParcelResult(parcel), base);
+  const result = page.locator("#result-panel-content");
+  await expect(result.locator(".agricultural-weather-card")).toContainText("28.5");
+  await expect(result.locator(".agricultural-weather-card")).toContainText("82%");
+  await expect(result.locator(".parcel-photo-section")).toContainText("ยังไม่มีรูปภาพแปลง");
+  await expect(result.locator(".parcel-photo-section")).toHaveClass(/parcel-result-card/);
+  await expect(result).toContainText("19.048892, 99.952551");
+  expect(await result.evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(0);
+  await page.evaluate((parcel) => window.MapUi.renderParcelResult(parcel), {
+    ...base, analysis: { ...base.analysis, weather: { status: "UNAVAILABLE", source: "Open-Meteo" } },
+  });
+  await expect(result.locator(".agricultural-weather-card")).toContainText("ไม่สามารถโหลดข้อมูลสภาพอากาศได้ในขณะนี้");
+  expect(forbidden).toEqual([]);
+});
+
 test("responsive location and semantic Close controls", async ({ page, context }, testInfo) => {
   const mobile = testInfo.project.name.startsWith("mobile");
   const forbidden = await prepareContext(context, { token: "e2e-line-token-user-a" });

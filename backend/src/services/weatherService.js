@@ -246,6 +246,9 @@ async function requestOpenMeteo(latitude, longitude, options = {}) {
     });
 
     if (!response.ok) {
+      console.warn("weather-provider-unavailable", {
+        stage: "http", status: Number.isInteger(response.status) ? response.status : undefined,
+      });
       return buildUnavailableResult();
     }
 
@@ -253,11 +256,19 @@ async function requestOpenMeteo(latitude, longitude, options = {}) {
     try {
       body = await response.json();
     } catch (error) {
+      console.warn("weather-provider-unavailable", { stage: "invalid-json" });
       return buildUnavailableResult();
     }
 
-    return normalizeWeatherResponse(body);
+    const weather = normalizeWeatherResponse(body);
+    if (weather.status !== "AVAILABLE") {
+      console.warn("weather-provider-unavailable", { stage: "invalid-payload" });
+    }
+    return weather;
   } catch (error) {
+    console.warn("weather-provider-unavailable", {
+      stage: controller.signal.aborted ? "timeout" : "network",
+    });
     return buildUnavailableResult();
   } finally {
     clearTimeout(timeoutId);
@@ -283,7 +294,7 @@ async function getWeatherForLocation({ latitude, longitude }, options = {}) {
   }
 
   const weather = await requestOpenMeteo(latitude, longitude, options);
-  setCached(cacheKey, weather);
+  if (weather.status === "AVAILABLE") setCached(cacheKey, weather);
   return weather;
 }
 

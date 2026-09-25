@@ -70,6 +70,13 @@
     return coordinate.toFixed(6);
   }
 
+  function formatRepresentativePoint(point) {
+    if (!point || !Number.isFinite(point.latitude) || !Number.isFinite(point.longitude)) {
+      return EMPTY_TEXT;
+    }
+    return `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`;
+  }
+
   function formatDistance(value) {
     const distance = Number(value);
     if (!Number.isFinite(distance)) {
@@ -393,6 +400,7 @@
     PARCEL_EMPTY_TEXT,
     formatValue,
     formatCoordinate,
+    formatRepresentativePoint,
     formatDistance,
     formatPercent,
     formatList,

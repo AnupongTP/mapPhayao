@@ -68,16 +68,23 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   await modal.locator('input[type="text"]').fill("PHOTO-E2E");
   const analyze = page.waitForResponse((response) => response.url().includes("/api/area-analysis/polygon"));
   await modal.getByRole("button", { name: "เริ่มวิเคราะห์" }).click();
-  expect((await analyze).status()).toBe(200);
+  const analysisResponse = await analyze;
+  expect(analysisResponse.status()).toBe(200);
+  const analysisPayload = await analysisResponse.json();
   await page.locator(".leaflet-popup").getByRole("button", { name: "เปิดรายละเอียด" }).click();
   const result = page.locator("#result-panel-content");
+  const analyzedCoordinate = `${analysisPayload.representativePoint.latitude.toFixed(6)}, ${analysisPayload.representativePoint.longitude.toFixed(6)}`;
+  await expect(result).toContainText(`พิกัดแปลง${analyzedCoordinate}`);
   await expect(result.locator(".parcel-photo-section .parcel-photo-item")).toHaveCount(2);
   await expect(result.locator(".parcel-photo-section")).toBeVisible();
+  await expect(result.locator(".parcel-photo-section")).toHaveClass(/parcel-result-card/);
+  expect(await result.evaluate((node) => node.scrollWidth - node.clientWidth)).toBe(0);
   await page.locator("#mobile-parcel-save-button").click();
   const sheet = page.locator("#parcel-save-sheet");
   const created = page.waitForResponse((response) => response.url().endsWith("/api/parcels") && response.request().method() === "POST");
   await sheet.locator('button[type="submit"]').click();
   const parcel = (await (await created).json()).parcel;
+  expect(parcel.representativePoint).not.toBeNull();
   await expect(sheet).toHaveCount(0);
   expect(await page.evaluate(() => window.__revokedPhotoUrls.length)).toBe(3);
   const detail = await request.get(`${backendUrl}/api/parcels/${parcel.id}`, { headers: auth });
@@ -137,11 +144,25 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
 
   await page.reload();
   await expect.poll(() => page.evaluate(() => window.MapLiffMode.isReady())).toBe(true);
+  let releaseImages;
+  const imageGate = new Promise((resolve) => { releaseImages = resolve; });
+  let imageRequests = 0;
+  await page.route("**/api/parcels/*/images/*/content", async (route) => {
+    imageRequests += 1;
+    await imageGate;
+    await route.continue();
+  });
   await page.locator("#saved-parcels-control-button").click();
   const card = page.locator(".saved-parcel-card").filter({ hasText: "PHOTO-E2E" });
   await card.locator(".saved-parcel-header").click();
   await card.getByRole("button", { name: "ดูแปลง" }).click();
+  await expect(page.locator("#result-panel-content")).toContainText("PHOTO-E2E");
+  await expect(page.locator("#result-panel-content .parcel-photo-empty")).toHaveText("กำลังโหลดรูปภาพ...");
+  await expect.poll(() => imageRequests).toBe(2);
+  releaseImages();
   await expect(page.locator("#result-panel-content .parcel-photo-section img")).toHaveCount(2);
+  await page.unroute("**/api/parcels/*/images/*/content");
+  await expect(page.locator("#result-panel-content")).toContainText(`พิกัดแปลง${sheetRow[7]}`);
   const updated = await request.patch(`${backendUrl}/api/parcels/${parcel.id}`, {
     headers: auth, data: { parcelName: "PHOTO-E2E-EDITED" },
   });

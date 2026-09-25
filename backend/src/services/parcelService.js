@@ -82,6 +82,11 @@ function mapParcelRow(row) {
     plantingDate: row.planting_date,
     areaSqm: row.area_sqm === null ? null : Number(row.area_sqm),
     areaRai: row.area_rai === null ? null : Number(row.area_rai),
+    representativePoint: !Number.isFinite(Number(row.representative_lat)) ||
+      !Number.isFinite(Number(row.representative_lng)) ||
+      row.representative_lat == null || row.representative_lng == null
+      ? null
+      : { latitude: Number(row.representative_lat), longitude: Number(row.representative_lng) },
     geometry: row.geometry,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -98,6 +103,8 @@ const PARCEL_SELECT_FIELDS = `
   ROUND(ST_Area(geom)::numeric, 2) AS area_sqm,
   ROUND((ST_Area(geom) / 1600.0)::numeric, 2) AS area_rai,
   ST_AsGeoJSON(ST_Transform(geom, 4326))::json AS geometry,
+  ST_Y(ST_Transform(ST_PointOnSurface(geom), 4326)) AS representative_lat,
+  ST_X(ST_Transform(ST_PointOnSurface(geom), 4326)) AS representative_lng,
   created_at,
   updated_at
 `;
@@ -399,6 +406,8 @@ async function updateOwnedParcel(id, payload, appUserId) {
           ROUND(ST_Area(app.parcels.geom)::numeric, 2) AS area_sqm,
           ROUND((ST_Area(app.parcels.geom) / 1600.0)::numeric, 2) AS area_rai,
           ST_AsGeoJSON(ST_Transform(app.parcels.geom, 4326))::json AS geometry,
+          ST_Y(ST_Transform(ST_PointOnSurface(app.parcels.geom), 4326)) AS representative_lat,
+          ST_X(ST_Transform(ST_PointOnSurface(app.parcels.geom), 4326)) AS representative_lng,
           app.parcels.created_at,
           app.parcels.updated_at,
           checked.is_empty AS was_empty,

@@ -30,10 +30,20 @@ const sampleRow = {
   area_sqm: "1600.25",
   area_rai: "1.00",
   geometry: sampleGeometry,
+  representative_lat: 19.048892,
+  representative_lng: 99.952551,
   created_at: "2026-07-16T00:00:00.000Z",
   updated_at: "2026-07-16T00:00:00.000Z",
   owner_user_id: OWNER_USER_ID,
 };
+
+test("owned parcel mapper exposes a server-derived point without changing geometry or owner data", () => {
+  const parcel = parcelService._private.mapParcelRow(sampleRow);
+  assert.deepEqual(parcel.representativePoint, { latitude: 19.048892, longitude: 99.952551 });
+  assert.deepEqual(parcel.geometry, sampleGeometry);
+  assertNoOwnerLeak(parcel);
+  assert.equal(parcelService._private.mapParcelRow({ ...sampleRow, representative_lat: null }).representativePoint, null);
+});
 
 const originalDbQuery = db.query;
 const originalPoolConnect = db.pool.connect;
