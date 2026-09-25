@@ -5,6 +5,8 @@ const { normalizeImage, MAX_RAW_BYTES, MAX_LONG_EDGE, WEBP_QUALITY } = require("
 const parcelImageService = require("../src/services/parcelImageService");
 const parcelService = require("../src/services/parcelService");
 const db = require("../src/config/database");
+const PHOTO_ID = "11111111-1111-4111-8111-111111111111";
+const OTHER_PHOTO_ID = "22222222-2222-4222-8222-222222222222";
 const { bestEffortMirror, mirrorParcel } = require("../src/services/parcelMirrorService");
 const { userCells, parcelCells, parseParcelImages, imageLink, formatCoordinate, PARCEL_HEADERS, createGoogleParcelIntegration } = require("../src/services/googleParcelIntegration");
 const { createFakeGoogleParcels } = require("../../scripts/fake-google-parcels.cjs");
@@ -29,6 +31,139 @@ test("invalid and oversized images are rejected", async () => {
   await assert.rejects(() => normalizeImage({ buffer: Buffer.alloc(MAX_RAW_BYTES + 1) }), { statusCode: 413 });
 });
 
+test("clientPhotoId accepts only bounded UUIDv4 values before database access", async () => {
+  assert.equal(parcelImageService.validateClientPhotoId(PHOTO_ID.toUpperCase()), PHOTO_ID);
+  for (const value of [undefined, "", "a".repeat(200), "../image", "not-a-uuid",
+    "11111111-1111-1111-8111-111111111111"]) {
+    await assert.rejects(() => parcelImageService.uploadOwnedImage("parcel", "owner", null,
+      { enabled: true }, value), { statusCode: 400 });
+  }
+});
+
+test("deterministic parcel filename resolves from Sheet before a second Drive upload", async () => {
+  const mirrorService = require("../src/services/parcelMirrorService");
+  const originalParcelLookup = parcelService.getOwnedParcelById;
+  const originalMirrorLookup = mirrorService.getParcelMirrorRecord;
+  const fake = createFakeGoogleParcels();
+  const ownerId = "22222222-2222-4222-8222-222222222222";
+  const parcelId = "33333333-3333-4333-8333-333333333333";
+  const code = "PY-2026-0001";
+  parcelService.getOwnedParcelById = async () => ({ id: parcelId, parcelCode: code });
+  mirrorService.getParcelMirrorRecord = async () => ({ id: parcelId, owner_user_id: ownerId,
+    parcel_code: code, crop_type: "rice", geometry: {}, area_sqm: 1600, area_rai: 1 });
+  const bytes = await sharp({ create: { width: 4, height: 4, channels: 3, background: "green" } }).png().toBuffer();
+  try {
+    await fake.upsertParcel(await mirrorService.getParcelMirrorRecord(parcelId));
+    const first = await parcelImageService.uploadOwnedImage(parcelId, ownerId, { buffer: bytes }, fake, PHOTO_ID);
+    const again = await parcelImageService.uploadOwnedImage(parcelId, ownerId, { buffer: bytes }, fake, PHOTO_ID);
+    const different = await parcelImageService.uploadOwnedImage(parcelId, ownerId, { buffer: bytes }, fake, OTHER_PHOTO_ID);
+    assert.equal(first.id, `${code}_${PHOTO_ID}.webp`);
+    assert.deepEqual(again, first);
+    assert.equal(different.id, `${code}_${OTHER_PHOTO_ID}.webp`);
+    assert.equal(fake.snapshot().files.length, 2);
+    assert.deepEqual((await fake.getParcelImages(code, ownerId)).map((image) => image.fileName),
+      [first.id, different.id]);
+    for (const digit of ["3", "4", "5"]) {
+      await parcelImageService.uploadOwnedImage(parcelId, ownerId, { buffer: bytes }, fake,
+        `${digit.repeat(8)}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}`);
+    }
+    await assert.rejects(() => parcelImageService.uploadOwnedImage(parcelId, ownerId,
+      { buffer: bytes }, fake, "66666666-6666-4666-8666-666666666666"), { statusCode: 400 });
+    assert.equal(fake.snapshot().files.length, 5);
+  } finally {
+    parcelService.getOwnedParcelById = originalParcelLookup;
+    mirrorService.getParcelMirrorRecord = originalMirrorLookup;
+  }
+});
+
+test("an ambiguous Apps Script upload is not replayed or cleaned up", async () => {
+  const originalParcelLookup = parcelService.getOwnedParcelById;
+  const originalMirrorLookup = require("../src/services/parcelMirrorService").getParcelMirrorRecord;
+  const mirrorService = require("../src/services/parcelMirrorService");
+  const bytes = await sharp({ create: { width: 4, height: 4, channels: 3,
+    background: "green" } }).png().toBuffer();
+  const ownerId = "22222222-2222-4222-8222-222222222222";
+  const parcelId = "33333333-3333-4333-8333-333333333333";
+  const calls = [];
+  parcelService.getOwnedParcelById = async () => ({ id: parcelId, parcelCode: "PY-1" });
+  mirrorService.getParcelMirrorRecord = async () => ({ owner_user_id: ownerId, parcel_code: "PY-1" });
+  try {
+    const google = { enabled: true,
+      async findParcelImage() { calls.push("sheet-read"); return null; },
+      async uploadImage() {
+        calls.push("drive-create");
+        throw Object.assign(new Error("private provider detail"), {
+          googleStage: "apps-script-upload", bridgeCategory: "timeout",
+        });
+      },
+      async appendParcelImage() { calls.push("sheet-append"); },
+      async deleteImage() { calls.push("drive-delete"); },
+    };
+    await assert.rejects(() => parcelImageService.uploadOwnedImage(parcelId, ownerId,
+      { buffer: bytes }, google, PHOTO_ID), (error) => error.photoAmbiguous === true);
+    assert.deepEqual(calls, ["sheet-read", "drive-create"]);
+  } finally {
+    parcelService.getOwnedParcelById = originalParcelLookup;
+    mirrorService.getParcelMirrorRecord = originalMirrorLookup;
+  }
+});
+
+test("Sheet preflight temporary failure is retryable without any Drive write", async () => {
+  const originalParcelLookup = parcelService.getOwnedParcelById;
+  const originalMirrorLookup = require("../src/services/parcelMirrorService").getParcelMirrorRecord;
+  const mirrorService = require("../src/services/parcelMirrorService");
+  const bytes = await sharp({ create: { width: 4, height: 4, channels: 3,
+    background: "green" } }).png().toBuffer();
+  const ownerId = "22222222-2222-4222-8222-222222222222";
+  const parcelId = "33333333-3333-4333-8333-333333333333";
+  let driveWrites = 0;
+  parcelService.getOwnedParcelById = async () => ({ id: parcelId, parcelCode: "PY-1" });
+  mirrorService.getParcelMirrorRecord = async () => ({ owner_user_id: ownerId, parcel_code: "PY-1" });
+  try {
+    await assert.rejects(() => parcelImageService.uploadOwnedImage(parcelId, ownerId,
+      { buffer: bytes }, { enabled: true,
+        async findParcelImage() {
+          throw Object.assign(new Error("transient"), { googleStage: "sheets-read", statusCode: 503 });
+        },
+        async uploadImage() { driveWrites += 1; },
+      }, PHOTO_ID), (error) => error.photoRetryable === true && !error.photoAmbiguous);
+    assert.equal(driveWrites, 0);
+  } finally {
+    parcelService.getOwnedParcelById = originalParcelLookup;
+    mirrorService.getParcelMirrorRecord = originalMirrorLookup;
+  }
+});
+
+test("only positively classified Sheet failures can retry; Drive write timeout stays ambiguous", () => {
+  for (const status of [408, 429, 500, 502, 503, 504]) {
+    const error = tagGoogleError(Object.assign(new Error("provider failed"), { statusCode: status }), "sheets-read");
+    assert.equal(parcelImageService.safeSheetRetry(error), true);
+    assert.equal(parcelImageService.safeSheetRetry({ ...error, googleStage: "apps-script-upload" }), false);
+  }
+  for (const code of ["EAI_AGAIN", "ECONNRESET", "ETIMEDOUT"]) {
+    assert.equal(parcelImageService.safeSheetRetry({ googleStage: "sheets-read", code }), true);
+  }
+  for (const status of [400, 401, 403, 404, 409, 413, 415]) {
+    assert.equal(parcelImageService.safeSheetRetry({ googleStage: "sheets-read", statusCode: status }), false);
+  }
+  assert.equal(parcelImageService.safeSheetRetry({ statusCode: 500 }), false);
+  assert.equal(parcelImageService.ambiguousDriveWrite({ googleStage: "apps-script-upload",
+    bridgeCategory: "timeout" }), true);
+  assert.equal(parcelImageService.ambiguousDriveWrite({ googleStage: "apps-script-upload",
+    bridgeCategory: "network" }), true);
+  assert.equal(parcelImageService.ambiguousDriveWrite({ googleStage: "apps-script-http",
+    statusCode: 503 }), true);
+  assert.equal(parcelImageService.ambiguousDriveWrite({ googleStage: "apps-script-http",
+    statusCode: 403 }), false);
+});
+
+test("duplicate filenames in Sheet are an integrity conflict, not an upload instruction", () => {
+  const row = parcelCells({ owner_user_id: "owner", parcel_code: "PY-1", geometry: {} });
+  row[11] = '["same.webp","same.webp"]';
+  row[12] = JSON.stringify([imageLink("file_a"), imageLink("file_b")]);
+  assert.throws(() => parseParcelImages(row), { statusCode: 409, code: "PARCEL_IMAGE_CONFLICT" });
+});
+
 test("EXIF orientation is applied before WebP resize and metadata is omitted", async () => {
   const input = await sharp({ create: { width: 2000, height: 1000, channels: 3, background: "blue" } })
     .jpeg().withMetadata({ orientation: 6 }).toBuffer();
@@ -42,7 +177,7 @@ test("EXIF orientation is applied before WebP resize and metadata is omitted", a
 
 test("Sheet cells keep deterministic aligned JSON arrays and never export picture_url", () => {
   const user = { id: "internal-uuid", display_name: "Verified", picture_url: "private", line_user_id: "U_PRIVATE", created_at: "2026-01-01T00:00:00Z" };
-  assert.deepEqual(userCells(user), ["internal-uuid", "Verified", "2026-01-01T00:00:00.000Z", ""]);
+  assert.deepEqual(userCells(user), ["internal-uuid", "Verified", "2026-01-01T07:00:00+07:00", ""]);
   const parcel = {
     owner_user_id: user.id, display_name: user.display_name, parcel_code: "PY-2026-0001",
     parcel_name: "Field", crop_type: "rice", rice_variety: "Khao Dawk Mali",
@@ -72,13 +207,16 @@ test("Sheet cells keep deterministic aligned JSON arrays and never export pictur
   assert.deepEqual(parseParcelImages(cells).map((image) => image.linkImage), [
     imageLink("first"), imageLink("third"), imageLink("second"),
   ]);
-  assert.equal(cells[13], "");
+  assert.equal(cells[13], "untrusted note");
   assert.deepEqual(cells.slice(14), ["", ""]);
   assert.equal(cells.join(" ").includes("private"), false);
   assert.equal(cells.join(" ").includes("U_PRIVATE"), false);
   assert.equal(parcelCells(parcel, [])[11], "[]");
   assert.equal(parcelCells(parcel, [])[12], "[]");
   assert.equal(parcelCells({ ...parcel, representative_lat: null })[7], "");
+  assert.deepEqual(parcelCells({ ...parcel, created_at: "2026-09-25T17:49:00Z",
+    updated_at: "2026-09-25T17:49:00Z" }).slice(14),
+  ["2026-09-26T00:49:00+07:00", "2026-09-26T00:49:00+07:00"]);
 });
 
 test("Coordinate formatter uses EPSG:4326 latitude, longitude with six decimals", () => {
@@ -106,6 +244,7 @@ test("parcel mirror reads trusted display name by owner UUID from app.users", as
     } });
     assert.match(calls[0].sql, /JOIN app\.users u ON u\.id = p\.owner_user_id/);
     assert.match(calls[0].sql, /u\.display_name/);
+    assert.match(calls[0].sql, /p\.note/);
     assert.match(calls[0].sql, /ST_Transform\(ST_PointOnSurface\(p\.geom\), 4326\)/);
     assert.match(calls[0].sql, /ST_X\(representative\.point\) AS representative_lng/);
     assert.match(calls[0].sql, /ST_Y\(representative\.point\) AS representative_lat/);
@@ -123,7 +262,7 @@ test("fake Google integration stores only local bytes and mirrors row cells", as
   const id = await fake.uploadImage(Buffer.from("webp"), "a.webp");
   assert.equal(fake.snapshot().files[0].fileName, "a.webp");
   await fake.upsertUser({ id: "internal", display_name: "A" });
-  const parcel = { owner_user_id: "internal", parcel_code: "PY-1", crop_type: "rice", geometry: {} };
+  const parcel = { owner_user_id: "internal", parcel_code: "PY-1", crop_type: "rice", note: "Keep note", geometry: {} };
   await fake.upsertParcel(parcel);
   assert.equal(fake.snapshot().parcels[0].length, 16);
   assert.deepEqual(JSON.parse(fake.snapshot().parcels[0][11]), []);
@@ -133,12 +272,24 @@ test("fake Google integration stores only local bytes and mirrors row cells", as
     representative_lng: 99.910682 });
   assert.equal(fake.snapshot().parcels[0][3], "Updated");
   assert.equal(fake.snapshot().parcels[0][7], "19.024858, 99.910682");
+  assert.equal(fake.snapshot().parcels[0][13], "Keep note");
   assert.deepEqual((await fake.getParcelImages("PY-1", "internal")).map((image) => image.fileName), ["a.webp"]);
   await assert.rejects(() => fake.getParcelImages("PY-1", "other"), /owner mismatch/);
   await fake.deleteImage(id);
   await fake.deleteParcel("PY-1");
   assert.deepEqual(fake.snapshot().files, []);
   assert.deepEqual(fake.snapshot().parcels, []);
+});
+
+test("fake provider rejects a sixth parcel photo without changing Sheet arrays", async () => {
+  const fake = createFakeGoogleParcels();
+  await fake.upsertParcel({ owner_user_id: "owner", parcel_code: "PY-1", crop_type: "rice", geometry: {} });
+  for (let index = 0; index < 5; index += 1) {
+    await fake.appendParcelImage("PY-1", "owner", `image_${index}.webp`, `file_${index}`);
+  }
+  await assert.rejects(() => fake.appendParcelImage("PY-1", "owner", "image_5.webp", "file_5"),
+    { statusCode: 400 });
+  assert.equal((await fake.getParcelImages("PY-1", "owner")).length, 5);
 });
 
 test("photo append restores a missing full Sheet row and retries are idempotent", async () => {
@@ -165,23 +316,59 @@ test("photo append restores a missing full Sheet row and retries are idempotent"
     GOOGLE_SERVICE_ACCOUNT_JSON: "{}", GOOGLE_SHEETS_SPREADSHEET_ID: "fake-sheet",
   }, google);
   const record = { owner_user_id: "owner", parcel_code: "PY-1", parcel_name: "Field",
-    crop_type: "rice", geometry: { type: "Polygon", coordinates: [] }, area_sqm: 1600, area_rai: 1 };
+    crop_type: "rice", note: "Stored note", created_at: "2026-09-25T00:00:00Z",
+    updated_at: "2026-09-25T00:00:00Z",
+    geometry: { type: "Polygon", coordinates: [] }, area_sqm: 1600, area_rai: 1 };
   await assert.rejects(() => integration.appendParcelImage("PY-1", "other", "a.webp", "file_a", record),
     /row is missing/);
   const first = await integration.appendParcelImage("PY-1", "owner", "a.webp", "file_a", record);
   assert.equal(first.fileId, "file_a");
   assert.equal(rows[0].length, 16);
   assert.equal(rows[0][3], "Field");
+  assert.equal(rows[0][13], "Stored note");
+  assert.deepEqual(rows[0].slice(14), ["2026-09-25T07:00:00+07:00", "2026-09-25T07:00:00+07:00"]);
   assert.deepEqual(JSON.parse(rows[0][11]), ["a.webp"]);
   assert.deepEqual(JSON.parse(rows[0][12]), [imageLink("file_a")]);
   assert.deepEqual(await integration.appendParcelImage("PY-1", "owner", "a.webp", "file_a", record), first);
   await assert.rejects(() => integration.appendParcelImage("PY-1", "owner", "a.webp", "different", record),
-    /Duplicate parcel image/);
+    { statusCode: 409, code: "PARCEL_IMAGE_CONFLICT" });
   await integration.appendParcelImage("PY-1", "owner", "b.webp", "file_b", record);
-  assert.deepEqual(JSON.parse(rows[0][11]), ["a.webp", "b.webp"]);
-  assert.deepEqual(JSON.parse(rows[0][12]), [imageLink("file_a"), imageLink("file_b")]);
+  for (const letter of ["c", "d", "e"]) {
+    await integration.appendParcelImage("PY-1", "owner", `${letter}.webp`, `file_${letter}`, record);
+  }
+  await assert.rejects(() => integration.appendParcelImage("PY-1", "owner", "f.webp", "file_f", record),
+    { statusCode: 400 });
+  assert.deepEqual(JSON.parse(rows[0][11]), ["a.webp", "b.webp", "c.webp", "d.webp", "e.webp"]);
+  assert.deepEqual(JSON.parse(rows[0][12]), ["a", "b", "c", "d", "e"].map((letter) => imageLink(`file_${letter}`)));
+  assert.equal(rows[0][13], "Stored note");
+  assert.deepEqual(rows[0].slice(14), ["2026-09-25T07:00:00+07:00", "2026-09-25T07:00:00+07:00"]);
   assert.equal(calls.filter((call) => call === "append").length, 1);
-  assert.equal(calls.filter((call) => call === "update").length, 1);
+  assert.equal(calls.filter((call) => call === "update").length, 4);
+});
+
+test("Sheet parcel cleanup removes its row once and treats an absent row as complete", async () => {
+  const rows = [parcelCells({ owner_user_id: "owner", parcel_code: "PY-1", geometry: {} }),
+    parcelCells({ owner_user_id: "other", parcel_code: "PY-2", geometry: {} })];
+  const deletes = [];
+  const google = { auth: { GoogleAuth: class {} },
+    sheets() { return { spreadsheets: {
+      values: { async get({ range }) {
+        return { data: { values: range === "parcels!A1:P1" ? [PARCEL_HEADERS] : rows } };
+      } },
+      async get() { return { data: { sheets: [{ properties: { sheetId: 7, title: "parcels" } }] } }; },
+      async batchUpdate({ requestBody }) {
+        const range = requestBody.requests[0].deleteDimension.range;
+        deletes.push(range);
+        rows.splice(range.startIndex - 1, 1);
+      },
+    } }; },
+  };
+  const integration = createGoogleParcelIntegration({ GOOGLE_MIRROR_ENABLED: "true",
+    GOOGLE_SERVICE_ACCOUNT_JSON: "{}", GOOGLE_SHEETS_SPREADSHEET_ID: "fake-sheet" }, google);
+  await integration.deleteParcel("PY-1");
+  await integration.deleteParcel("PY-1");
+  assert.deepEqual(deletes, [{ sheetId: 7, dimension: "ROWS", startIndex: 1, endIndex: 2 }]);
+  assert.deepEqual(rows.map((row) => row[2]), ["PY-2"]);
 });
 
 test("transient Sheet retry reuses one Drive upload and never retries auth failures", async () => {
@@ -212,7 +399,7 @@ test("transient Sheet retry reuses one Drive upload and never retries auth failu
         return { id: filename, fileName: filename, linkImage: imageLink(fileId), fileId };
       },
       async deleteImage() { deletions += 1; },
-    });
+    }, PHOTO_ID);
     assert.equal(result.id.endsWith(".webp"), true);
     assert.deepEqual([uploads, appends, deletions], [1, 2, 0]);
     appends = 0;
@@ -226,7 +413,7 @@ test("transient Sheet retry reuses one Drive upload and never retries auth failu
         throw error;
       },
       async deleteImage() { deletions += 1; },
-    }), { statusCode: 403 });
+    }, PHOTO_ID), { statusCode: 403 });
     assert.deepEqual([uploads, appends, deletions], [2, 1, 1]);
   } finally {
     parcelService.getOwnedParcelById = originalParcelLookup;
@@ -253,14 +440,14 @@ test("Drive failure leaves Sheet unchanged; Sheet failure deletes uploaded Drive
       enabled: true,
       async uploadImage() { throw new Error("Drive unavailable"); },
       async deleteImage() { calls.push("cleanup"); },
-    }), /Drive unavailable/);
+    }, PHOTO_ID), /Drive unavailable/);
     assert.deepEqual(calls, ["lookup-record"]);
     await assert.rejects(() => parcelImageService.uploadOwnedImage(parcelId, ownerId, file, {
       enabled: true,
       async uploadImage() { calls.push("drive-upload"); return "fake-file"; },
       async appendParcelImage() { calls.push("sheet-append"); throw new Error("Sheet write failed"); },
       async deleteImage(id) { calls.push(`cleanup:${id}`); },
-    }), /Sheet write failed/);
+    }, PHOTO_ID), /Sheet write failed/);
     assert.deepEqual(calls, ["lookup-record", "lookup-record", "drive-upload", "sheet-append", "cleanup:fake-file"]);
   } finally {
     parcelService.getOwnedParcelById = originalParcelLookup;

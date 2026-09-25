@@ -1533,6 +1533,45 @@ body {
   }
 }
 
+.parcel-details-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.parcel-details-fields > * {
+  min-width: 0;
+}
+
+.parcel-modal select,
+.parcel-modal textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.parcel-modal textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.parcel-save-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0 0 16px;
+}
+
+.parcel-save-summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .parcel-photo-picker h4 {
   margin: 16px 0 8px;
   font-size: 15px;
@@ -1875,7 +1914,8 @@ button.panel-icon-action[hidden] {
 }
 
 .parcel-form-field input,
-.parcel-form-field select {
+.parcel-form-field select,
+.parcel-form-field textarea {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
@@ -2359,7 +2399,8 @@ button.panel-icon-action[hidden] {
 .mobile-parcel-save-button:focus-visible,
 .parcel-sheet .panel-button:focus-visible,
 .parcel-form-field input:focus-visible,
-.parcel-form-field select:focus-visible {
+.parcel-form-field select:focus-visible,
+.parcel-form-field textarea:focus-visible {
   outline: 3px solid #99f6e4;
   outline-offset: 2px;
 }

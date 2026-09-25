@@ -227,7 +227,7 @@ test("parcel name dialog is reused and becomes a mobile bottom sheet only", () =
   assert.match(uiSource, /error\.textContent = TEXT\.parcelNameRequired/);
   assert.match(uiSource, /cancelButton\.addEventListener\("click", \(\) => close\(null\)\)/);
   assert.match(uiSource, /confirmButton\.addEventListener\("click", submit\)/);
-  assert.match(mapSource, /title: "ตั้งชื่อพื้นที่แปลง"/);
+  assert.match(mapSource, /title: "รายละเอียดแปลง"/);
   assert.match(mapSource, /confirmText: "เริ่มวิเคราะห์"/);
 
   assert.match(desktopCss, /\.parcel-modal-backdrop \{[\s\S]*align-items: center;[\s\S]*justify-content: center;/);

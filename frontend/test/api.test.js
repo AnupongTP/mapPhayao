@@ -60,12 +60,33 @@ test("parcel photo upload uses authenticated multipart without client owner fiel
   const { calls, MapApi } = createApiHarness({ image: { id: "image-id" } });
   const parcelId = "11111111-1111-4111-8111-111111111111";
   const file = new Blob(["fixture"], { type: "image/png" });
-  const result = await MapApi.uploadParcelImage(parcelId, file);
+  const clientPhotoId = "11111111-1111-4111-8111-111111111111";
+  const result = await MapApi.uploadParcelImage(parcelId, file, clientPhotoId, { attempt: 2 });
   assert.equal(result.id, "image-id");
   assert.equal(calls[0].url, `https://backend.example.test/api/parcels/${parcelId}/images`);
   assert.equal(calls[0].options.headers.Authorization, "Bearer test-id-token");
+  assert.equal(calls[0].options.headers["X-Photo-Attempt"], "2");
   assert.equal(calls[0].options.headers["Content-Type"], undefined);
-  assert.deepEqual([...calls[0].options.body.keys()], ["image"]);
+  assert.deepEqual([...calls[0].options.body.keys()], ["image", "clientPhotoId"]);
+  assert.equal(calls[0].options.body.get("clientPhotoId"), clientPhotoId);
+});
+
+test("photo API exposes only explicit retry classification and treats lost responses as ambiguous", async () => {
+  const parcelId = "11111111-1111-4111-8111-111111111111";
+  const file = new Blob(["fixture"], { type: "image/png" });
+  const photoId = "11111111-1111-4111-8111-111111111111";
+  const transient = createApiHarness({ error: "Temporary", retryable: true }, { ok: false, status: 503 });
+  await assert.rejects(() => transient.MapApi.uploadParcelImage(parcelId, file, photoId),
+    (error) => error.statusCode === 503 && error.retryable === true && !error.ambiguous);
+  const unclassified = createApiHarness({ error: "Unknown" }, { ok: false, status: 500 });
+  await assert.rejects(() => unclassified.MapApi.uploadParcelImage(parcelId, file, photoId),
+    (error) => error.statusCode === 500 && !error.retryable && !error.ambiguous);
+  const ambiguous = createApiHarness(new TypeError("network failed"));
+  await assert.rejects(() => ambiguous.MapApi.uploadParcelImage(parcelId, file, photoId),
+    (error) => error.ambiguous === true);
+  const aborted = createApiHarness(Object.assign(new Error("aborted"), { name: "AbortError" }));
+  await assert.rejects(() => aborted.MapApi.uploadParcelImage(parcelId, file, photoId),
+    (error) => error.name === "AbortError" && !error.ambiguous);
 });
 
 test("saved photo content uses the owned backend route and existing LINE token provider", async () => {
@@ -190,6 +211,7 @@ test("createParcel uses Authorization bearer token and strips owner and user fie
     cropType: " rice ",
     riceVariety: " KDML105 ",
     plantingDate: "2026-07-16",
+    note: " field note ",
     geometry: sampleGeometry,
     userId: "client-user",
     user_id: "client-user",
@@ -215,6 +237,7 @@ test("createParcel uses Authorization bearer token and strips owner and user fie
   assert.deepEqual(Object.keys(body).sort(), [
     "cropType",
     "geometry",
+    "note",
     "parcelName",
     "plantingDate",
     "riceVariety",
@@ -223,6 +246,7 @@ test("createParcel uses Authorization bearer token and strips owner and user fie
   assert.equal(JSON.stringify(body).includes("body-token"), false);
   assert.equal(JSON.stringify(body).includes("client-user"), false);
   assert.equal(JSON.stringify(body).includes("owner"), false);
+  assert.equal(body.note, "field note");
 });
 
 test("parcel list, detail, update, delete, and re-analysis use the Phase 4 paths and methods", async () => {
@@ -235,6 +259,7 @@ test("parcel list, detail, update, delete, and re-analysis use the Phase 4 paths
     cropType: "rice",
     riceVariety: "RD",
     plantingDate: "2026-07-16",
+    note: "",
     geometry: sampleGeometry,
     owner_user_id: "ignored",
   });
@@ -250,11 +275,13 @@ test("parcel list, detail, update, delete, and re-analysis use the Phase 4 paths
   assert.deepEqual(Object.keys(JSON.parse(calls[2].options.body)).sort(), [
     "cropType",
     "geometry",
+    "note",
     "parcelName",
     "plantingDate",
     "riceVariety",
   ]);
   assert.deepEqual(JSON.parse(calls[2].options.body).geometry, sampleGeometry);
+  assert.equal(JSON.parse(calls[2].options.body).note, "");
   assert.equal(calls[3].options.method, "DELETE");
   assert.equal(calls[3].options.body, undefined);
   assert.equal(calls[4].url, `https://backend.example.test/api/parcels/${PARCEL_ID}/analyze`);

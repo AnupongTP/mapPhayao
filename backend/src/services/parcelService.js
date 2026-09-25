@@ -46,6 +46,14 @@ function validateUuid(value) {
   return text;
 }
 
+function validateNote(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "string" || value.length > 5000) {
+    throw createHttpError(400, "หมายเหตุต้องเป็นข้อความไม่เกิน 5000 ตัวอักษร");
+  }
+  return value.trim() || null;
+}
+
 function validateAppUserId(value) {
   return validateUuid(value);
 }
@@ -80,6 +88,7 @@ function mapParcelRow(row) {
     cropType: row.crop_type,
     riceVariety: row.rice_variety,
     plantingDate: row.planting_date,
+    note: row.note,
     areaSqm: row.area_sqm === null ? null : Number(row.area_sqm),
     areaRai: row.area_rai === null ? null : Number(row.area_rai),
     representativePoint: !Number.isFinite(Number(row.representative_lat)) ||
@@ -100,6 +109,7 @@ const PARCEL_SELECT_FIELDS = `
   crop_type,
   rice_variety,
   to_char(planting_date, 'YYYY-MM-DD') AS planting_date,
+  note,
   ROUND(ST_Area(geom)::numeric, 2) AS area_sqm,
   ROUND((ST_Area(geom) / 1600.0)::numeric, 2) AS area_rai,
   ST_AsGeoJSON(ST_Transform(geom, 4326))::json AS geometry,
@@ -116,6 +126,7 @@ async function createParcel(payload, options = {}) {
   const cropType = normalizeText(payload.cropType);
   const riceVariety = normalizeText(payload.riceVariety);
   const plantingDate = validateDate(payload.plantingDate);
+  const note = validateNote(payload.note);
   const lineUserId = normalizeText(options.lineUserId);
   const userService = options.appUserService || appUserService;
 
@@ -165,6 +176,7 @@ async function createParcel(payload, options = {}) {
           crop_type,
           rice_variety,
           planting_date,
+          note,
           geom,
           owner_user_id
         )
@@ -177,6 +189,7 @@ async function createParcel(payload, options = {}) {
           $3,
           $4,
           $5::date,
+          $8,
           geom,
           $7::uuid
         FROM checked
@@ -200,6 +213,7 @@ async function createParcel(payload, options = {}) {
         plantingDate,
         MIN_PARCEL_AREA_SQM,
         ownerUserId,
+        note,
       ],
     );
 
@@ -265,11 +279,11 @@ async function createParcel(payload, options = {}) {
   }
 }
 
-async function getOwnedParcelById(id, appUserId) {
+async function getOwnedParcelById(id, appUserId, database = db) {
   // UUID ไม่ถูกต้องต้องตัดทิ้งก่อน ไม่ปล่อยให้ PostgreSQL โยน error ดิบ
   const parcelId = validateUuid(id);
   const ownerUserId = validateAppUserId(appUserId);
-  const result = await db.query(
+  const result = await database.query(
     `
     SELECT ${PARCEL_SELECT_FIELDS}
     FROM app.parcels
@@ -307,21 +321,37 @@ async function listOwnedParcels(appUserId, { limit } = {}) {
   return result.rows.map(mapParcelRow);
 }
 
-async function deleteOwnedParcel(id, appUserId) {
+async function deleteOwnedParcel(id, appUserId, cleanup, databaseClient) {
   const parcelId = validateUuid(id);
   const ownerUserId = validateAppUserId(appUserId);
-  const result = await db.query(
-    `
-    DELETE FROM app.parcels
-    WHERE id = $1
-      AND owner_user_id = $2
-    RETURNING id;
-    `,
-    [parcelId, ownerUserId],
-  );
-
-  if (result.rows.length === 0) {
-    throw createHttpError(404, PARCEL_NOT_FOUND_MESSAGE);
+  if (!cleanup || typeof cleanup.parcelCode !== "string" ||
+    !/^[A-Za-z0-9_-]{1,30}$/.test(cleanup.parcelCode) ||
+    !Array.isArray(cleanup.fileIds) || cleanup.fileIds.length > 100 ||
+    cleanup.fileIds.some((fileId) => typeof fileId !== "string" || !/^[A-Za-z0-9_-]+$/.test(fileId)) ||
+    new Set(cleanup.fileIds).size !== cleanup.fileIds.length) {
+    throw createHttpError(503, "ไม่สามารถเตรียมข้อมูลลบรูปภาพแปลงได้");
+  }
+  const client = databaseClient || await db.pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(`
+      DELETE FROM app.parcels
+      WHERE id = $1 AND owner_user_id = $2 AND parcel_code = $3
+      RETURNING id;
+    `, [parcelId, ownerUserId, cleanup.parcelCode]);
+    if (result.rows.length === 0) throw createHttpError(404, PARCEL_NOT_FOUND_MESSAGE);
+    const queued = await client.query(`
+      INSERT INTO app.cleanup_jobs (parcel_id, parcel_code, remaining_file_ids)
+      VALUES ($1, $2, $3::text[])
+      RETURNING id;
+    `, [parcelId, cleanup.parcelCode, cleanup.fileIds]);
+    await client.query("COMMIT");
+    return queued.rows[0].id;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    if (!databaseClient) client.release();
   }
 }
 
@@ -332,9 +362,10 @@ async function updateOwnedParcel(id, payload, appUserId) {
   const hasCropType = Object.prototype.hasOwnProperty.call(payload, "cropType");
   const hasRiceVariety = Object.prototype.hasOwnProperty.call(payload, "riceVariety");
   const hasPlantingDate = Object.prototype.hasOwnProperty.call(payload, "plantingDate");
+  const hasNote = Object.prototype.hasOwnProperty.call(payload, "note");
   const hasGeometry = Object.prototype.hasOwnProperty.call(payload, "geometry");
 
-  if (!hasParcelName && !hasCropType && !hasRiceVariety && !hasPlantingDate && !hasGeometry) {
+  if (!hasParcelName && !hasCropType && !hasRiceVariety && !hasPlantingDate && !hasNote && !hasGeometry) {
     throw createHttpError(400, "ไม่มีข้อมูลสำหรับแก้ไข");
   }
 
@@ -342,6 +373,7 @@ async function updateOwnedParcel(id, payload, appUserId) {
   const cropType = hasCropType ? normalizeText(payload.cropType) : null;
   const riceVariety = hasRiceVariety ? normalizeText(payload.riceVariety) : null;
   const plantingDate = hasPlantingDate ? validateDate(payload.plantingDate) : null;
+  const note = hasNote ? validateNote(payload.note) : null;
   const geometry = hasGeometry ? validateGeometry(payload.geometry) : null;
 
   if (hasCropType && !cropType) {
@@ -387,6 +419,7 @@ async function updateOwnedParcel(id, payload, appUserId) {
             crop_type = CASE WHEN $4 THEN $5 ELSE crop_type END,
             rice_variety = CASE WHEN $6 THEN $7 ELSE rice_variety END,
             planting_date = CASE WHEN $8 THEN $9::date ELSE planting_date END,
+            note = CASE WHEN $13 THEN $14 ELSE note END,
             geom = checked.geom,
             updated_at = now()
           FROM checked, matched
@@ -403,6 +436,7 @@ async function updateOwnedParcel(id, payload, appUserId) {
           app.parcels.crop_type,
           app.parcels.rice_variety,
           to_char(app.parcels.planting_date, 'YYYY-MM-DD') AS planting_date,
+          app.parcels.note,
           ROUND(ST_Area(app.parcels.geom)::numeric, 2) AS area_sqm,
           ROUND((ST_Area(app.parcels.geom) / 1600.0)::numeric, 2) AS area_rai,
           ST_AsGeoJSON(ST_Transform(app.parcels.geom, 4326))::json AS geometry,
@@ -431,6 +465,8 @@ async function updateOwnedParcel(id, payload, appUserId) {
           geometryJson,
           ownerUserId,
           MIN_PARCEL_AREA_SQM,
+          hasNote,
+          note,
         ],
       );
 
@@ -480,6 +516,7 @@ async function updateOwnedParcel(id, payload, appUserId) {
       crop_type = CASE WHEN $4 THEN $5 ELSE crop_type END,
       rice_variety = CASE WHEN $6 THEN $7 ELSE rice_variety END,
       planting_date = CASE WHEN $8 THEN $9::date ELSE planting_date END,
+      note = CASE WHEN $11 THEN $12 ELSE note END,
       updated_at = now()
     WHERE id = $1
       AND owner_user_id = $10
@@ -496,6 +533,8 @@ async function updateOwnedParcel(id, payload, appUserId) {
       hasPlantingDate,
       plantingDate,
       ownerUserId,
+      hasNote,
+      note,
     ],
   );
 
@@ -535,6 +574,23 @@ async function getOwnedParcelAnalysisInput(id, appUserId) {
   };
 }
 
+async function withParcelMutationLock(id, work) {
+  const parcelId = validateUuid(id);
+  const client = await db.pool.connect();
+  let locked = false;
+  try {
+    await client.query("SELECT pg_advisory_lock(hashtextextended($1::text, 0))", [parcelId]);
+    locked = true;
+    return await work(client);
+  } finally {
+    try {
+      if (locked) await client.query("SELECT pg_advisory_unlock(hashtextextended($1::text, 0))", [parcelId]);
+    } finally {
+      client.release();
+    }
+  }
+}
+
 module.exports = {
   createParcel,
   getOwnedParcelById,
@@ -542,6 +598,7 @@ module.exports = {
   updateOwnedParcel,
   deleteOwnedParcel,
   getOwnedParcelAnalysisInput,
+  withParcelMutationLock,
   _private: {
     mapParcelRow,
     normalizeText,

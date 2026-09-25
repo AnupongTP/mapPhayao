@@ -223,7 +223,7 @@ test("failed Sheet append triggers a signed Apps Script delete of the uploaded f
       uploadImage: bridge.uploadImage,
       deleteImage: bridge.deleteImage,
       async appendParcelImage() { throw new Error("Sheet append failed"); },
-    }), /Sheet append failed/);
+    }, "11111111-1111-4111-8111-111111111111"), /Sheet append failed/);
     assert.deepEqual(operations.map((operation) => operation.op), ["upload", "delete"]);
     assert.equal(operations[1].fileId, "uploaded_file");
     assert.equal(operations[0].filename.endsWith(".webp"), true);

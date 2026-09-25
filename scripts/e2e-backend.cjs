@@ -11,7 +11,9 @@ process.env.GOOGLE_MIRROR_ENABLED = "false";
 const { createApp } = require("../backend/src/server");
 const { createLineController } = require("../backend/src/controllers/lineController");
 const { createFakeGoogleParcels } = require("./fake-google-parcels.cjs");
+const { createParcelCleanupWorker } = require("../backend/src/services/parcelCleanupWorker");
 const googleIntegration = createFakeGoogleParcels();
+const cleanupWorker = createParcelCleanupWorker({ google: googleIntegration });
 
 const identities = new Map([
   ["e2e-line-token-user-a", "U_E2E_USER_A"],
@@ -51,6 +53,9 @@ const app = createApp({
   registerRoutes(testApp) {
     testApp.get("/__e2e__/messages", (req, res) => res.json(sentMessages));
     testApp.get("/__e2e__/google", (req, res) => res.json(googleIntegration.snapshot()));
+    testApp.post("/__e2e__/cleanup/run", async (req, res, next) => {
+      try { res.json({ processed: await cleanupWorker.runCycle() }); } catch (error) { next(error); }
+    });
     testApp.post("/__e2e__/google/fail-next-upload", (req, res) => {
       googleIntegration.failNextUpload();
       res.json({ ok: true });
@@ -59,6 +64,7 @@ const app = createApp({
 });
 const server = app.listen(3100, "127.0.0.1", () => {
   console.log("E2E backend ready on 127.0.0.1:3100");
+  if (process.env.MANUAL_SANDBOX_CLEANUP === "1") cleanupWorker.start();
 });
-process.on("SIGINT", () => server.close());
-process.on("SIGTERM", () => server.close());
+process.on("SIGINT", () => { cleanupWorker.stop(); server.close(); });
+process.on("SIGTERM", () => { cleanupWorker.stop(); server.close(); });

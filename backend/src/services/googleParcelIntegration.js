@@ -10,8 +10,19 @@ const PARCEL_HEADERS = Object.freeze([
   "Image", "LinkImage", "note", "created_at", "updated_at",
 ]);
 
+function imageConflict() {
+  const error = createHttpError(409, "ข้อมูลรูปภาพแปลงขัดแย้งกัน");
+  error.code = "PARCEL_IMAGE_CONFLICT";
+  return error;
+}
+
 function iso(value) {
-  return value ? new Date(value).toISOString() : "";
+  if (!value) return "";
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date(value)).map(({ type, value: part }) => [type, part]));
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}+07:00`;
 }
 
 function userCells(user) {
@@ -31,7 +42,7 @@ function parcelCells(parcel, images = []) {
     JSON.stringify(parcel.geometry), Number(parcel.area_sqm), Number(parcel.area_rai),
     JSON.stringify(images.map((image) => image.fileName)),
     JSON.stringify(images.map((image) => image.linkImage)),
-    "",
+    parcel.note || "",
     iso(parcel.created_at), iso(parcel.updated_at),
   ];
 }
@@ -65,6 +76,7 @@ function parseParcelImages(cells) {
     links.some((link) => typeof link !== "string")) {
     throw new Error("Invalid parcel image arrays");
   }
+  if (new Set(names).size !== names.length) throw imageConflict();
   return names.map((fileName, index) => ({
     id: fileName, fileName, fileId: imageFileId(links[index]),
   })).map((image) => ({ ...image, linkImage: imageLink(image.fileId) }));
@@ -229,6 +241,24 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
         return parseParcelImages(row.cells);
       }));
     },
+    findParcelImage(parcelCode, ownerUserId, fileName) {
+      return atGoogleStage("sheets-read", () => serializeWrite(async () => {
+        await assertParcelHeaders();
+        const row = await findRow(SPREADSHEET_TABS.parcels, parcelCode);
+        if (!row) return null;
+        if (row.cells[0] !== ownerUserId) throw createHttpError(404, "Parcel not found");
+        return parseParcelImages(row.cells).find((image) => image.fileName === fileName) || null;
+      }));
+    },
+    getParcelImageCount(parcelCode, ownerUserId) {
+      return atGoogleStage("sheets-read", () => serializeWrite(async () => {
+        await assertParcelHeaders();
+        const row = await findRow(SPREADSHEET_TABS.parcels, parcelCode);
+        if (!row) return 0;
+        if (row.cells[0] !== ownerUserId) throw createHttpError(404, "Parcel not found");
+        return parseParcelImages(row.cells).length;
+      }));
+    },
     appendParcelImage(parcelCode, ownerUserId, fileName, fileId, parcelRecord) {
       return atGoogleStage("sheets-append-image", () => serializeWrite(async () => {
         await assertParcelHeaders();
@@ -239,9 +269,10 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
         const images = row ? parseParcelImages(row.cells) : [];
         const existing = images.find((item) => item.fileName === fileName);
         if (existing) {
-          if (existing.fileId !== fileId) throw new Error("Duplicate parcel image");
+          if (existing.fileId !== fileId) throw imageConflict();
           return existing;
         }
+        if (images.length >= 5) throw createHttpError(400, "เลือกได้สูงสุด 5 รูป");
         const image = { id: fileName, fileName, linkImage: imageLink(fileId), fileId };
         images.push(image);
         if (row) {

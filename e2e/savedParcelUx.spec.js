@@ -67,6 +67,90 @@ function parcelPayload(name, index) {
   };
 }
 
+test("saved parcel edit keeps metadata and supports optional notes without photo controls", async ({ page, context, request }) => {
+  test.setTimeout(120000);
+  const forbidden = await prepareContext(context, { token });
+  const errors = watchPageErrors(page);
+  const name = "E2E-NOTE-EDIT";
+  const response = await request.post(`${backendUrl}/api/parcels`, {
+    headers,
+    data: parcelPayload(name, 0),
+  });
+  expect(response.status()).toBe(201);
+  const id = (await response.json()).parcel.id;
+  const patchBodies = [];
+  page.on("request", (item) => {
+    if (item.method() === "PATCH" && item.url().endsWith(`/api/parcels/${id}`)) {
+      patchBodies.push(item.postDataJSON());
+    }
+  });
+
+  try {
+    await openMap(page, true);
+    await expect.poll(() => page.evaluate(() => window.MapLiffMode.isReady())).toBe(true);
+    await page.locator("#saved-parcels-control-button").click();
+    const card = page.locator(`.saved-parcel-card[data-parcel-id="${id}"]`);
+    const sheet = page.locator("#parcel-edit-sheet");
+    const openEdit = async () => {
+      if (await card.locator(".saved-parcel-header").getAttribute("aria-expanded") === "false") {
+        await card.locator(".saved-parcel-header").click();
+      }
+      await card.getByRole("button", { name: "แก้ไขข้อมูล" }).click();
+      await expect(sheet).toBeVisible();
+    };
+    const saveEdit = async () => {
+      const updated = page.waitForResponse((item) =>
+        item.url().endsWith(`/api/parcels/${id}`) && item.request().method() === "PATCH");
+      await sheet.getByRole("button", { name: "บันทึกแก้ไข" }).click();
+      expect((await updated).status()).toBe(200);
+      await expect(sheet).toBeHidden();
+    };
+
+    await openEdit();
+    await expect(sheet.getByLabel("หมายเหตุ")).toHaveValue("");
+    await expect(sheet.locator("#parcel-edit-name")).toHaveValue(name);
+    await expect(sheet.locator("#parcel-edit-crop")).toHaveValue("rice");
+    await expect(sheet.locator("#parcel-edit-rice-variety")).toHaveValue("TEST-RICE");
+    await expect(sheet.locator("#parcel-edit-planting-date")).toHaveValue("2026-01-15");
+    await expect(sheet.locator("#parcel-edit-note")).toHaveJSProperty("required", false);
+    await expect(sheet.locator("input[type=file]")).toHaveCount(0);
+    await expect(sheet.getByRole("button", { name: /รูปภาพ|อัปโหลด/ })).toHaveCount(0);
+    await sheet.getByLabel("หมายเหตุ").fill("หมายเหตุใหม่");
+    await saveEdit();
+    expect(patchBodies[0]).toEqual({ note: "หมายเหตุใหม่" });
+
+    await openEdit();
+    await expect(sheet.getByLabel("หมายเหตุ")).toHaveValue("หมายเหตุใหม่");
+    await sheet.locator("#parcel-edit-name").fill(`${name}-RENAMED`);
+    await saveEdit();
+    expect(patchBodies[1]).toEqual({ parcelName: `${name}-RENAMED` });
+
+    await openEdit();
+    await expect(sheet.getByLabel("หมายเหตุ")).toHaveValue("หมายเหตุใหม่");
+    await sheet.getByLabel("หมายเหตุ").fill("   ");
+    await saveEdit();
+    expect(patchBodies[2]).toEqual({ note: "" });
+    const cleared = await request.get(`${backendUrl}/api/parcels/${id}`, { headers });
+    const parcel = (await cleared.json()).parcel;
+    expect(parcel.note).toBeNull();
+    expect(parcel.parcelName).toBe(`${name}-RENAMED`);
+    expect(parcel.cropType).toBe("rice");
+    expect(parcel.riceVariety).toBe("TEST-RICE");
+    expect(parcel.plantingDate).toBe("2026-01-15");
+
+    await openEdit();
+    await expect(sheet.getByLabel("หมายเหตุ")).toHaveValue("");
+    await sheet.getByLabel("หมายเหตุ").fill("ไม่บันทึก");
+    await sheet.getByRole("button", { name: "ยกเลิก" }).click();
+    await expect(sheet).toBeHidden();
+    expect(patchBodies).toHaveLength(3);
+    expect(forbidden).toEqual([]);
+    expect(errors).toEqual([]);
+  } finally {
+    await request.delete(`${backendUrl}/api/parcels/${id}`, { headers });
+  }
+});
+
 test("saved parcels share a scrollable list, show stored details, and survive a delete race", async ({ page, context, request }, testInfo) => {
   test.setTimeout(120000);
   if (testInfo.project.name.startsWith("mobile")) {
@@ -262,9 +346,14 @@ test("saved parcels share a scrollable list, show stored details, and survive a 
     await expect(editSheet.getByRole("button", { name: "ยกเลิก" })).toBeVisible();
     await expect(editSheet.locator("button[type=submit]")).toBeVisible();
     await editSheet.locator("#parcel-edit-name").fill(`${prefix}-EDITED`);
+    await editSheet.locator("#parcel-edit-note").fill("บันทึกเพิ่มเติม");
     await editSheet.locator("button[type=submit]").click();
     await expect(list).toContainText(`${prefix}-EDITED`);
     await expect(editSheet).toBeHidden();
+    const noted = await request.get(`${backendUrl}/api/parcels/${ids[0]}`, { headers });
+    const notedParcel = (await noted.json()).parcel;
+    expect(notedParcel.note).toBe("บันทึกเพิ่มเติม");
+    expect(notedParcel.plantingDate).toBe("2026-01-15");
 
     const deleteCard = list.locator(".saved-parcel-card").filter({ hasText: `${prefix}-1` });
     await deleteCard.locator(".saved-parcel-header").click();
@@ -320,10 +409,10 @@ test("a UI-drawn saved parcel deletes once without stale follow-up requests", as
   await drawMobileParcel(page, name);
   await page.locator("#mobile-parcel-save-button").click();
   const saveSheet = page.locator("#parcel-save-sheet");
-  await saveSheet.locator("#parcel-save-name").fill(name);
+  await expect(saveSheet).toContainText(name);
   const createdResponse = page.waitForResponse((response) =>
     response.url().endsWith("/api/parcels") && response.request().method() === "POST");
-  await saveSheet.locator("button[type=submit]").click();
+  await saveSheet.getByRole("button", { name: "บันทึกแปลง" }).click();
   const created = await createdResponse;
   expect(created.status()).toBe(201);
   const id = (await created.json()).parcel.id;
@@ -343,6 +432,22 @@ test("a UI-drawn saved parcel deletes once without stale follow-up requests", as
   await card.getByRole("button", { name: "ลบ", exact: true }).click();
   const dialog = page.locator("#parcel-delete-dialog");
   await expect(dialog).toBeVisible();
+  let failFirstDelete = true;
+  await page.route(`**/api/parcels/${id}`, async (route) => {
+    if (route.request().method() === "DELETE" && failFirstDelete) {
+      failFirstDelete = false;
+      return route.fulfill({ status: 503, contentType: "application/json",
+        body: JSON.stringify({ success: false, error: "Temporary delete failure" }) });
+    }
+    return route.continue();
+  });
+  const failedResponse = page.waitForResponse((response) =>
+    response.url().endsWith(`/api/parcels/${id}`) && response.request().method() === "DELETE");
+  await dialog.getByRole("button", { name: "ลบแปลง" }).click();
+  expect((await failedResponse).status()).toBe(503);
+  await expect(dialog).toBeVisible();
+  await expect(card).toBeVisible();
+  expect((await (await request.get(`${backendUrl}/api/parcels/${id}`, { headers })).json()).parcel.id).toBe(id);
   const deletedResponse = page.waitForResponse((response) =>
     response.url().endsWith(`/api/parcels/${id}`) && response.request().method() === "DELETE");
   await dialog.getByRole("button", { name: "ลบแปลง" }).click();
@@ -352,14 +457,19 @@ test("a UI-drawn saved parcel deletes once without stale follow-up requests", as
   await expect(page.locator("#result-panel")).toBeHidden();
   await expect(page.getByText("ไม่พบแปลงนี้หรือไม่มีสิทธิ์เข้าถึง")).toHaveCount(0);
   await page.waitForTimeout(500);
-  expect(requestsForParcel).toEqual([`DELETE ${backendUrl}/api/parcels/${id}`]);
+  expect(requestsForParcel).toEqual([
+    `DELETE ${backendUrl}/api/parcels/${id}`,
+    `DELETE ${backendUrl}/api/parcels/${id}`,
+  ]);
   await page.reload();
   await expect.poll(() => page.evaluate(() => window.MapLiffMode.isReady())).toBe(true);
   await expect(page.locator("#saved-parcels-control-button")).toBeHidden();
   const remaining = await request.get(`${backendUrl}/api/parcels/mine`, { headers });
   expect((await remaining.json()).parcels.map((item) => item.id)).not.toContain(id);
   expect(forbidden).toEqual([]);
-  expect(errors).toEqual([]);
+  expect(errors).toEqual([
+    "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+  ]);
 });
 
 test("short mobile save sheet keeps controls reachable after drawing", async ({ page, context }, testInfo) => {
@@ -379,23 +489,22 @@ test("short mobile save sheet keeps controls reachable after drawing", async ({ 
   await expect(sheet).toBeVisible();
   const layout = await sheet.evaluate((element) => {
     const sheetRect = element.querySelector(".parcel-sheet").getBoundingClientRect();
-    const fields = element.querySelector(".parcel-form-fields");
-    const fieldRect = fields.getBoundingClientRect();
-    const controls = [...element.querySelectorAll("input, select")];
+    const summary = element.querySelector(".parcel-save-summary");
+    const summaryRect = summary.getBoundingClientRect();
     const actions = element.querySelector(".parcel-sheet-actions").getBoundingClientRect();
     return {
       sheetBottom: sheetRect.bottom,
-      fieldsRight: fieldRect.right,
-      controlsRight: Math.max(...controls.map((control) => control.getBoundingClientRect().right)),
+      summaryRight: summaryRect.right,
+      sheetRight: sheetRect.right,
       actionsBottom: actions.bottom,
-      scrollHeight: fields.scrollHeight,
-      clientHeight: fields.clientHeight,
+      hasEditableFields: Boolean(element.querySelector("input, select, textarea")),
     };
   });
-  expect(layout.controlsRight).toBeLessThanOrEqual(layout.fieldsRight + 1);
+  expect(layout.summaryRight).toBeLessThanOrEqual(layout.sheetRight + 1);
+  expect(layout.hasEditableFields).toBe(false);
   expect(layout.actionsBottom).toBeLessThanOrEqual(layout.sheetBottom + 1);
   expect(layout.sheetBottom).toBeLessThanOrEqual(page.viewportSize().height + 1);
-  expect(layout.scrollHeight).toBeGreaterThan(layout.clientHeight);
+  await expect(sheet).toContainText("UX-SAVE-FORM");
   await sheet.getByRole("button", { name: "ยกเลิก" }).click();
   await expect(sheet).toBeHidden();
   expect(forbidden).toEqual([]);

@@ -27,6 +27,7 @@ const sampleRow = {
   crop_type: "rice",
   rice_variety: "KDML105",
   planting_date: "2026-07-16",
+  note: "Owner note",
   area_sqm: "1600.25",
   area_rai: "1.00",
   geometry: sampleGeometry,
@@ -41,6 +42,7 @@ test("owned parcel mapper exposes a server-derived point without changing geomet
   const parcel = parcelService._private.mapParcelRow(sampleRow);
   assert.deepEqual(parcel.representativePoint, { latitude: 19.048892, longitude: 99.952551 });
   assert.deepEqual(parcel.geometry, sampleGeometry);
+  assert.equal(parcel.note, "Owner note");
   assertNoOwnerLeak(parcel);
   assert.equal(parcelService._private.mapParcelRow({ ...sampleRow, representative_lat: null }).representativePoint, null);
 });
@@ -117,6 +119,7 @@ test("createParcel writes owner_user_id from the resolved app user and ignores c
       cropType: "rice",
       riceVariety: "KDML105",
       plantingDate: "2026-07-16",
+      note: "  field note  ",
       geometry: sampleGeometry,
       owner_user_id: OTHER_OWNER_USER_ID,
       ownerUserId: OTHER_OWNER_USER_ID,
@@ -142,6 +145,8 @@ test("createParcel writes owner_user_id from the resolved app user and ignores c
   });
   assert.match(insertCall.text, /owner_user_id/is);
   assert.equal(insertCall.params[6], OWNER_USER_ID);
+  assert.match(insertCall.text, /note,/i);
+  assert.equal(insertCall.params[7], "field note");
   assert.equal(insertCall.params.includes(OTHER_OWNER_USER_ID), false);
   assert.equal(insertCall.params.includes("client-supplied-line-user"), false);
   assert.equal(insertCall.params.includes("client-supplied-display-name"), false);
@@ -190,14 +195,13 @@ test("listOwnedParcels filters by owner and returns parcels without owner fields
   assert.match(calls[0].text, /ORDER BY created_at DESC, id DESC/i);
   assert.match(calls[0].text, /LIMIT \$2/i);
   assert.deepEqual(calls[0].params, [OWNER_USER_ID, 25]);
+  assert.match(calls[0].text, /\bnote\b/);
+  assert.equal(parcels[0].note, "Owner note");
   assertNoOwnerLeak(parcels[0]);
 });
 
-test("owned parcel read, update, delete, and analysis queries include id and owner predicates", async () => {
+test("owned parcel read, update, and analysis queries include id and owner predicates", async () => {
   const calls = installDbQuery(async (text) => {
-    if (/DELETE FROM app\.parcels/is.test(text)) {
-      return { rows: [{ id: PARCEL_ID }] };
-    }
     if (/ST_AsGeoJSON\(ST_Transform\(geom, 4326\)\)::json AS geometry/is.test(text)) {
       return {
         rows: [{
@@ -212,7 +216,6 @@ test("owned parcel read, update, delete, and analysis queries include id and own
 
   await parcelService.getOwnedParcelById(PARCEL_ID, OWNER_USER_ID);
   await parcelService.updateOwnedParcel(PARCEL_ID, { parcelName: "Parcel B" }, OWNER_USER_ID);
-  await parcelService.deleteOwnedParcel(PARCEL_ID, OWNER_USER_ID);
   const analysisInput = await parcelService.getOwnedParcelAnalysisInput(PARCEL_ID, OWNER_USER_ID);
 
   for (const call of calls) {
@@ -223,8 +226,6 @@ test("owned parcel read, update, delete, and analysis queries include id and own
     assert.equal(call.params.includes(OWNER_USER_ID), true);
   }
   assert.match(calls[1].text, /updated_at = now\(\)/i);
-  assert.match(calls[2].text, /DELETE FROM app\.parcels/i);
-  assert.doesNotMatch(calls[2].text, /app\.users|CASCADE/i);
   assert.deepEqual(analysisInput, {
     id: PARCEL_ID,
     name: "Parcel A",
@@ -244,13 +245,60 @@ test("owned parcel operations use the same not-found response for missing and ot
     { statusCode: 404, message: "Parcel not found" },
   );
   await assert.rejects(
-    () => parcelService.deleteOwnedParcel(OTHER_PARCEL_ID, OWNER_USER_ID),
-    { statusCode: 404, message: "Parcel not found" },
-  );
-  await assert.rejects(
     () => parcelService.getOwnedParcelAnalysisInput(OTHER_PARCEL_ID, OWNER_USER_ID),
     { statusCode: 404, message: "Parcel not found" },
   );
+});
+
+test("owned parcel deletion and durable cleanup insertion commit in one transaction", async () => {
+  const cleanup = { parcelCode: "PY-2026-0001", fileIds: ["drive_1", "drive_2"] };
+  const client = createTransactionalClient(async (sql) => {
+    if (/DELETE FROM app\.parcels/i.test(sql)) return { rows: [{ id: PARCEL_ID }] };
+    if (/INSERT INTO app\.cleanup_jobs/i.test(sql)) return { rows: [{ id: OTHER_PARCEL_ID }] };
+    throw new Error("Unexpected SQL");
+  });
+  db.pool.connect = async () => client;
+  assert.equal(await parcelService.deleteOwnedParcel(PARCEL_ID, OWNER_USER_ID, cleanup), OTHER_PARCEL_ID);
+  assert.deepEqual(client.calls.map((call) => call.text === "BEGIN" || call.text === "COMMIT"
+    ? call.text : /DELETE FROM/.test(call.text) ? "DELETE" : "INSERT"),
+  ["BEGIN", "DELETE", "INSERT", "COMMIT"]);
+  assert.match(client.calls[1].text, /id = \$1 AND owner_user_id = \$2 AND parcel_code = \$3/i);
+  assert.deepEqual(client.calls[1].params, [PARCEL_ID, OWNER_USER_ID, cleanup.parcelCode]);
+  assert.deepEqual(client.calls[2].params, [PARCEL_ID, cleanup.parcelCode, cleanup.fileIds]);
+  assert.equal(client.released, true);
+});
+
+test("cleanup insert failure rolls back parcel delete and never commits", async () => {
+  const client = createTransactionalClient(async (sql) => {
+    if (/DELETE FROM app\.parcels/i.test(sql)) return { rows: [{ id: PARCEL_ID }] };
+    throw new Error("Queue insert failed");
+  });
+  db.pool.connect = async () => client;
+  await assert.rejects(() => parcelService.deleteOwnedParcel(PARCEL_ID, OWNER_USER_ID,
+    { parcelCode: "PY-2026-0001", fileIds: [] }), /Queue insert failed/);
+  assert.equal(client.calls.at(-1).text, "ROLLBACK");
+  assert.equal(client.calls.some((call) => call.text === "COMMIT"), false);
+  assert.equal(client.released, true);
+});
+
+test("missing or unowned parcel rolls back without enqueuing cleanup", async () => {
+  const client = createTransactionalClient(async () => ({ rows: [] }));
+  db.pool.connect = async () => client;
+  await assert.rejects(() => parcelService.deleteOwnedParcel(OTHER_PARCEL_ID, OWNER_USER_ID,
+    { parcelCode: "PY-2026-0001", fileIds: [] }),
+  { statusCode: 404, message: "Parcel not found" });
+  assert.equal(client.calls.some((call) => /INSERT INTO app\.cleanup_jobs/i.test(call.text)), false);
+  assert.equal(client.calls.at(-1).text, "ROLLBACK");
+  assert.equal(client.released, true);
+});
+
+test("deletion rejects missing or untrusted cleanup metadata before PostgreSQL mutation", async () => {
+  db.pool.connect = async () => { throw new Error("Database should not be touched"); };
+  for (const cleanup of [undefined, { parcelCode: "PY-1", fileIds: ["../bad"] },
+    { parcelCode: "PY-1", fileIds: ["same", "same"] }]) {
+    await assert.rejects(() => parcelService.deleteOwnedParcel(PARCEL_ID, OWNER_USER_ID, cleanup),
+      { statusCode: 503 });
+  }
 });
 
 test("owned parcel operations reject invalid ids before SQL", async () => {
@@ -300,13 +348,43 @@ test("owned parcel geometry update is owner scoped and recalculates area from tr
   assert.match(calls[0].text, /ST_Transform\([\s\S]*32647/i);
   assert.match(calls[0].text, /owner_user_id = \$11/i);
   assert.match(calls[0].text, /ST_Area\(app\.parcels\.geom\)/i);
+  assert.match(calls[0].text, /note = CASE WHEN \$13 THEN \$14 ELSE note END/);
+  assert.equal(calls[0].params[12], false);
+  assert.equal(calls[0].params[13], null);
   assert.equal(calls[0].params[0], PARCEL_ID);
   assert.equal(calls[0].params[9], JSON.stringify(updatedGeometry));
   assert.equal(calls[0].params[10], OWNER_USER_ID);
   assert.equal(parcel.areaSqm, 3200.5);
   assert.equal(parcel.areaRai, 2);
   assert.deepEqual(parcel.geometry, updatedGeometry);
+  assert.equal(parcel.note, "Owner note");
   assertNoOwnerLeak(parcel);
+});
+
+test("owned note updates support text and deterministic blank-to-null without changing geometry", async () => {
+  const calls = installDbQuery(async () => ({ rows: [{ ...sampleRow, note: null }] }));
+  const updated = await parcelService.updateOwnedParcel(PARCEL_ID, { note: "   " }, OWNER_USER_ID);
+  assert.equal(updated.note, null);
+  assert.match(calls[0].text, /note = CASE WHEN \$11 THEN \$12 ELSE note END/);
+  assert.equal(calls[0].params[10], true);
+  assert.equal(calls[0].params[11], null);
+  assert.deepEqual(updated.geometry, sampleGeometry);
+  await parcelService.updateOwnedParcel(PARCEL_ID, { note: "  changed  " }, OWNER_USER_ID);
+  assert.equal(calls[1].params[11], "changed");
+  await assert.rejects(() => parcelService.updateOwnedParcel(PARCEL_ID,
+    { note: "x".repeat(5001) }, OWNER_USER_ID), { statusCode: 400 });
+});
+
+test("owned geometry and note can be updated together without changing timestamp storage semantics", async () => {
+  const calls = installDbQuery(async () => ({ rows: [{ ...sampleRow, note: "New note",
+    was_empty: false, was_valid: true, checked_area_sqm: "1600", matched_count: 1 }] }));
+  const parcel = await parcelService.updateOwnedParcel(PARCEL_ID,
+    { geometry: sampleGeometry, note: " New note " }, OWNER_USER_ID);
+  assert.equal(parcel.note, "New note");
+  assert.equal(parcel.createdAt, sampleRow.created_at);
+  assert.equal(calls[0].params[12], true);
+  assert.equal(calls[0].params[13], "New note");
+  assert.match(calls[0].text, /app\.parcels\.note/);
 });
 
 test("owned parcel geometry update rejects invalid, missing, and other-user geometry safely", async () => {

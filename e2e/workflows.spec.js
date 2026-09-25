@@ -61,9 +61,9 @@ test("two LIFF users persist separate parcels and cannot access one another", as
       await page.locator("#mobile-parcel-save-button").click();
       const sheet = page.locator("#parcel-save-sheet");
       await expect(sheet).toBeVisible();
-      await sheet.locator("#parcel-save-name").fill(name);
+      await expect(sheet.locator("input, select, textarea")).toHaveCount(0);
       const responsePromise = page.waitForResponse((response) => response.url().endsWith("/api/parcels") && response.request().method() === "POST");
-      await sheet.locator("button[type=submit]").click();
+      await sheet.getByRole("button", { name: "บันทึกแปลง" }).click();
       const response = await responsePromise;
       expect(response.status()).toBe(201);
       return (await response.json()).parcel;

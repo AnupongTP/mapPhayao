@@ -125,6 +125,7 @@
       cropType: savedParcel.cropType || null,
       riceVariety: savedParcel.riceVariety || null,
       plantingDate: savedParcel.plantingDate || null,
+      note: savedParcel.note || null,
       areaSqm: savedParcel.areaSqm ?? null,
       areaRai: savedParcel.areaRai ?? null,
       geometry: cloneGeometry(savedParcel.geometry),

@@ -94,9 +94,18 @@ return app;
 }
 
 if (require.main === module) {
-  createApp().listen(port, () => {
+  const { createParcelCleanupWorker } = require("./services/parcelCleanupWorker");
+  const cleanupWorker = createParcelCleanupWorker({ google: parcelRoutes.googleIntegration });
+  const server = createApp().listen(port, () => {
     console.log(`Server is running on port ${port}`);
+    cleanupWorker.start();
   });
+  const shutdown = () => {
+    cleanupWorker.stop();
+    server.close();
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
 }
 
 module.exports = { createApp };

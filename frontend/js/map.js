@@ -540,7 +540,7 @@
     }
 
     window.MapParcelManagement.renderSaveAction(parcel, {
-      onSave: (metadata, onProgress) => saveTemporaryParcel(parcel.id, metadata, onProgress),
+      onSave: (onProgress) => saveTemporaryParcel(parcel.id, onProgress),
     });
   }
 
@@ -1280,7 +1280,7 @@
     finishSavedBoundaryEdit(options);
   }
 
-  async function saveTemporaryParcel(parcelId, metadata, onProgress = () => {}) {
+  async function saveTemporaryParcel(parcelId, onProgress = () => {}) {
     const parcel = temporaryParcels.get(parcelId);
     if (!parcel) {
       throw new Error("ไม่พบแปลงชั่วคราว");
@@ -1293,10 +1293,11 @@
       let savedParcel;
       try {
         const result = await window.MapApi.createParcel({
-          parcelName: metadata.parcelName,
-          cropType: metadata.cropType,
-          riceVariety: metadata.riceVariety,
-          plantingDate: metadata.plantingDate,
+          parcelName: parcel.name,
+          cropType: parcel.cropType,
+          riceVariety: parcel.riceVariety,
+          plantingDate: parcel.plantingDate,
+          note: parcel.note,
           geometry: snapshot.geometry,
         });
         savedParcel = result.parcel;
@@ -1314,21 +1315,34 @@
 
     const pendingPhotos = (parcel.photos || []).filter((photo) => !photo.image);
     let failed = 0;
+    let ambiguous = 0;
     for (const [index, photo] of pendingPhotos.entries()) {
       const count = index + 1;
       try {
-        onProgress(`กำลังเตรียมรูป ${count}/${pendingPhotos.length}...`);
-        photo.uploadFile ||= await window.MapParcelPhotoProcessing.prepareFile(photo.file);
-        onProgress(`กำลังอัปโหลดรูป ${count}/${pendingPhotos.length}...`);
-        photo.image = await window.MapApi.uploadParcelImage(parcel.savedParcelId, photo.uploadFile);
+        if (photo.uploadState === "ambiguous") {
+          onProgress(`กำลังตรวจสอบรูป ${count}/${pendingPhotos.length}...`);
+          try {
+            const detail = await window.MapApi.getMyParcel(parcel.savedParcelId);
+            const fileName = `${parcel.savedParcelRecord.parcelCode}_${photo.clientPhotoId}.webp`;
+            photo.image = detail.parcel?.images?.find((image) => image.id === fileName);
+          } catch { /* An unresolved write must never be replayed. */ }
+          if (photo.image) continue;
+        }
+        await window.MapParcelPhotoProcessing.uploadWithRetry(photo, parcel.savedParcelId,
+          count, pendingPhotos.length, onProgress);
       } catch (error) {
         failed += 1;
-        onProgress(`รูปที่ ${count} อัปโหลดไม่สำเร็จ`);
+        if (error.ambiguous) ambiguous += 1;
+        onProgress(error.ambiguous
+          ? `รูปที่ ${count} ไม่ทราบผลการอัปโหลด กรุณาติดต่อผู้ดูแล`
+          : `รูปที่ ${count} อัปโหลดไม่สำเร็จ กรุณาลองบันทึกอีกครั้ง`);
       }
     }
     if (failed) {
       renderTemporaryParcelSaveAction(parcel);
-      const error = new Error(`บันทึกแปลงแล้ว แต่มีรูปภาพ ${failed} รูปอัปโหลดไม่สำเร็จ กดบันทึกอีกครั้งเพื่อลองใหม่`);
+      const error = new Error(ambiguous
+        ? `บันทึกแปลงแล้ว แต่มีรูปภาพ ${ambiguous} รูปไม่ทราบผลการอัปโหลด กรุณาตรวจสอบและติดต่อผู้ดูแล ห้ามอัปโหลดรูปเดิมซ้ำ`
+        : `บันทึกแปลงแล้ว แต่มีรูปภาพ ${failed} รูปอัปโหลดไม่สำเร็จ กดบันทึกอีกครั้งเพื่อลองใหม่`);
       error.partialSuccess = true;
       throw error;
     }
@@ -1406,6 +1420,7 @@
       onSelect: selectTemporaryParcelFromList,
       onFocus: focusTemporaryParcel,
       onRename: renameTemporaryParcel,
+      onEditDetails: editTemporaryParcelDetails,
       onEdit: startTemporaryParcelEdit,
       onRetry: retryTemporaryParcelAnalysis,
       onDelete: deleteTemporaryParcel,
@@ -1582,11 +1597,30 @@
 
   async function requestParcelName(defaultName) {
     return window.MapUi.promptParcelName({
-      title: "ตั้งชื่อพื้นที่แปลง",
+      title: "รายละเอียดแปลง",
       initialValue: defaultName,
       confirmText: "เริ่มวิเคราะห์",
       allowPhotos: true,
     });
+  }
+
+  async function editTemporaryParcelDetails(parcelId) {
+    const parcel = temporaryParcels.get(parcelId);
+    if (!parcel || parcel.savedParcelId) return;
+    const details = await window.MapUi.promptParcelName({
+      title: "รายละเอียดแปลง",
+      initialValue: parcel.name,
+      initialDetails: parcel,
+      confirmText: "บันทึกรายละเอียด",
+      allowPhotos: true,
+    });
+    if (!details) return;
+    Object.assign(parcel, { name: details.name, photos: details.photos, cropType: details.cropType,
+      riceVariety: details.riceVariety, plantingDate: details.plantingDate, note: details.note });
+    if (parcel.analysis) parcel.analysis.name = parcel.name;
+    updateTemporaryParcelPopup(parcel, false);
+    refreshTemporaryParcelList();
+    renderOpenParcelDetailIfCurrent(parcel);
   }
 
   async function analyzeTemporaryParcel(parcelId) {
@@ -1661,12 +1695,16 @@
     }
   }
 
-  async function registerTemporaryParcel(layer, requestedName, photos = []) {
+  async function registerTemporaryParcel(layer, details) {
     const parcelId = createFrontendId();
     const parcel = {
       id: parcelId,
-      name: requestedName,
-      photos,
+      name: details.name,
+      photos: details.photos,
+      cropType: details.cropType,
+      riceVariety: details.riceVariety,
+      plantingDate: details.plantingDate,
+      note: details.note,
       layer,
       geometry: layer.toGeoJSON().geometry,
       analysis: null,
@@ -2061,7 +2099,7 @@
       return;
     }
 
-    await registerTemporaryParcel(layer, selection.name.trim(), selection.photos);
+    await registerTemporaryParcel(layer, selection);
   }
 
   function startParcelDrawing() {

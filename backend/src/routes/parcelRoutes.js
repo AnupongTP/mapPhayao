@@ -10,8 +10,9 @@ function createParcelRoutes(dependencies = {}) {
 const router = express.Router();
 const requireLineAuth = createLineAuthMiddleware(dependencies);
 const googleIntegration = dependencies.googleIntegration || createGoogleParcelIntegration();
+router.googleIntegration = googleIntegration;
 const parseImage = multer({ storage: multer.memoryStorage(), limits: {
-  fileSize: MAX_RAW_BYTES, files: 1, fields: 0, parts: 1,
+  fileSize: MAX_RAW_BYTES, files: 1, fields: 1, parts: 2,
 } }).single("image");
 
 router.use(requireLineAuth);

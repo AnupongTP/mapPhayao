@@ -1543,6 +1543,7 @@
         makeButton("เลือก", () => handlers.onSelect(parcel.id)),
         makeButton("ซูม", () => handlers.onFocus(parcel.id)),
         makeButton("เปลี่ยนชื่อ", () => handlers.onRename(parcel.id)),
+        makeButton("แก้ไขรายละเอียด", () => handlers.onEditDetails(parcel.id)),
         makeButton("แก้ไขขอบเขต", () => handlers.onEdit(parcel.id)),
         makeButton("วิเคราะห์ใหม่", () => handlers.onRetry(parcel.id)),
         makeButton("ลบ", () => handlers.onDelete(parcel.id)),
@@ -1559,13 +1560,50 @@
       const modal = createElement("div", "parcel-modal");
       const title = createElement("h3", null, options?.title || TEXT.parcelNameField);
       const label = createElement("label");
-      label.appendChild(createElement("span", null, TEXT.parcelNameField));
+      label.appendChild(createElement("span", null, options?.allowPhotos ? "ชื่อแปลง" : TEXT.parcelNameField));
       const input = document.createElement("input");
       input.type = "text";
+      input.name = "parcelName";
       input.value = options?.initialValue || "";
       input.maxLength = 120;
       label.appendChild(input);
-      const photos = [];
+      const initialPhotos = options?.initialDetails?.photos || [];
+      const photos = [...initialPhotos];
+      const addedPhotos = [];
+      const details = options?.allowPhotos ? createElement("div", "parcel-details-fields") : null;
+      const detailInputs = {};
+      if (details) {
+        const today = new Date();
+        const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+        const fields = [
+          { key: "cropType", label: "ชนิดพืช", tag: "select" },
+          { key: "riceVariety", label: "พันธุ์", tag: "input" },
+          { key: "plantingDate", label: "วันที่ปลูก", tag: "input" },
+        ];
+        fields.forEach(({ key, label: fieldLabel, tag }) => {
+          const field = createElement("label");
+          field.appendChild(createElement("span", null, fieldLabel));
+          const control = document.createElement(tag);
+          control.name = key;
+          if (key === "cropType") {
+            [["rice", "ข้าว"], ["maize", "ข้าวโพด"]].forEach(([value, text]) => {
+              const option = document.createElement("option");
+              option.value = value;
+              option.textContent = text;
+              control.appendChild(option);
+            });
+          } else {
+            control.type = key === "plantingDate" ? "date" : "text";
+            if (key === "riceVariety") control.maxLength = 120;
+          }
+          control.value = options.initialDetails?.[key] ?? (key === "plantingDate"
+            ? localDate
+            : key === "cropType" ? "rice" : "");
+          detailInputs[key] = control;
+          field.appendChild(control);
+          details.appendChild(field);
+        });
+      }
       let photoSection = null;
       let photoStrip = null;
       let photoCount = null;
@@ -1583,22 +1621,62 @@
           picker.className = "parcel-photo-file-input";
           if (capture) picker.setAttribute("capture", "environment");
           if (multiple) picker.multiple = true;
-          button.addEventListener("click", () => picker.click());
+          button.addEventListener("click", () => {
+            if (photos.length >= 5) {
+              error.textContent = "เลือกได้สูงสุด 5 รูป";
+              return;
+            }
+            picker.click();
+          });
           picker.addEventListener("change", () => {
+            let exceeded = false;
+            let idUnavailable = false;
             for (const file of picker.files || []) {
               if (!file.type.startsWith("image/")) continue;
-              photos.push({ file, previewUrl: URL.createObjectURL(file) });
+              if (photos.length >= 5) {
+                exceeded = true;
+                continue;
+              }
+              const random = window.crypto;
+              if (!random?.getRandomValues && !random?.randomUUID) {
+                idUnavailable = true;
+                break;
+              }
+              const clientPhotoId = random.randomUUID ? random.randomUUID() : (() => {
+                const bytes = random.getRandomValues(new Uint8Array(16));
+                bytes[6] = (bytes[6] & 0x0f) | 0x40;
+                bytes[8] = (bytes[8] & 0x3f) | 0x80;
+                const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+                return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+              })();
+              const photo = { file, previewUrl: URL.createObjectURL(file), clientPhotoId };
+              photos.push(photo);
+              addedPhotos.push(photo);
             }
             picker.value = "";
             renderPendingPhotos();
+            error.textContent = idUnavailable ? "ไม่สามารถสร้างรหัสรูปภาพได้ กรุณาลองใหม่" :
+              exceeded ? "เลือกได้สูงสุด 5 รูป" : "";
           });
           photoActions.append(button, picker);
         }
         addInput("ถ่ายรูป", "camera", true, false);
         addInput("เลือกรูป", "images", false, true);
         photoStrip = createElement("div", "parcel-photo-strip");
-        photoCount = createElement("p", "parcel-photo-count", "รูปภาพ 0 รูป");
+        photoCount = createElement("p", "parcel-photo-count", "รูปภาพ 0/5 รูป");
         photoSection.append(photoActions, photoStrip, photoCount);
+      }
+
+      if (details) {
+        const noteLabel = createElement("label");
+        noteLabel.appendChild(createElement("span", null, "หมายเหตุ"));
+        const noteInput = document.createElement("textarea");
+        noteInput.name = "note";
+        noteInput.maxLength = 5000;
+        noteInput.value = options.initialDetails?.note || "";
+        detailInputs.note = noteInput;
+        noteLabel.appendChild(noteInput);
+        details.append(photoSection, noteLabel);
       }
 
       function renderPendingPhotos() {
@@ -1615,15 +1693,16 @@
           remove.setAttribute("aria-label", `ลบรูปภาพแปลง ${index + 1}`);
           remove.title = "ลบรูปภาพ";
           remove.addEventListener("click", () => {
-            const [removed] = photos.splice(index, 1);
-            URL.revokeObjectURL(removed.previewUrl);
+            photos.splice(index, 1);
             renderPendingPhotos();
+            error.textContent = "";
           });
           card.append(image, remove);
           photoStrip.appendChild(card);
         });
-        photoCount.textContent = `รูปภาพ ${photos.length} รูป`;
+        photoCount.textContent = `รูปภาพ ${photos.length}/5 รูป`;
       }
+      renderPendingPhotos();
       const error = createElement("p", "parcel-modal-error", "");
       const actions = createElement("div", "parcel-modal-actions");
       const cancelButton = createElement("button", "panel-button secondary", "ยกเลิก");
@@ -1639,8 +1718,15 @@
 
       const close = (result) => {
         backdrop.remove();
-        if (!result) photos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
-        resolve(result && options?.allowPhotos ? { name: result, photos } : result);
+        if (!result) addedPhotos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
+        else [...initialPhotos, ...addedPhotos].filter((photo) => !photos.includes(photo)).forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
+        resolve(result && options?.allowPhotos ? {
+          name: result, photos,
+          cropType: detailInputs.cropType.value,
+          riceVariety: detailInputs.riceVariety.value.trim(),
+          plantingDate: detailInputs.plantingDate.value,
+          note: detailInputs.note.value.trim(),
+        } : result);
       };
 
       const submit = () => {
@@ -1668,7 +1754,7 @@
 
       actions.append(cancelButton, confirmButton);
       modal.append(title, label);
-      if (photoSection) modal.appendChild(photoSection);
+      if (details) modal.appendChild(details);
       modal.append(error, actions);
       backdrop.appendChild(modal);
       document.body.appendChild(backdrop);
@@ -2586,6 +2672,7 @@
       { label: "ชนิดพืช", value: parcel?.cropType, formatter: formatters.getCropTypeLabel },
       { label: "พันธุ์", value: parcel?.riceVariety },
       { label: "วันที่ปลูก", value: parcel?.plantingDate, formatter: formatters.formatThaiDateOnly },
+      { label: "หมายเหตุ", value: parcel?.note },
       { label: "พื้นที่", value: parcel?.areaSqm, formatter: formatters.formatThaiLandArea },
       { label: "พื้นที่ไร่", value: parcel?.areaRai, formatter: formatters.formatAreaRai },
       { label: "พิกัดแปลง", value: parcel?.representativePoint, renderer: createCoordinateMapLink },

@@ -46,6 +46,12 @@ function createFakeGoogleParcels() {
       parcels.set(parcel.parcel_code, parcelCells(parcel, images));
     }); },
     getParcelImages(code, ownerId) { return serializeWrite(() => ownedImages(code, ownerId)); },
+    findParcelImage(code, ownerId, fileName) { return serializeWrite(() => {
+      if (!parcels.has(code)) return null;
+      return ownedImages(code, ownerId).find((image) => image.fileName === fileName) || null;
+    }); },
+    getParcelImageCount(code, ownerId) { return serializeWrite(() =>
+      parcels.has(code) ? ownedImages(code, ownerId).length : 0); },
     appendParcelImage(code, ownerId, fileName, fileId, parcelRecord) { return serializeWrite(() => {
       const row = parcels.get(code);
       if (!row && (!parcelRecord || parcelRecord.owner_user_id !== ownerId ||
@@ -53,8 +59,18 @@ function createFakeGoogleParcels() {
       const images = row ? ownedImages(code, ownerId) : [];
       const existing = images.find((item) => item.fileName === fileName);
       if (existing) {
-        if (existing.fileId !== fileId) throw new Error("Duplicate parcel image");
+        if (existing.fileId !== fileId) {
+          const error = new Error("ข้อมูลรูปภาพแปลงขัดแย้งกัน");
+          error.statusCode = 409;
+          error.code = "PARCEL_IMAGE_CONFLICT";
+          throw error;
+        }
         return existing;
+      }
+      if (images.length >= 5) {
+        const error = new Error("เลือกได้สูงสุด 5 รูป");
+        error.statusCode = 400;
+        throw error;
       }
       const image = { id: fileName, fileName, linkImage: imageLink(fileId), fileId };
       images.push(image);

@@ -26,6 +26,7 @@ const serviceEnv = {
   PORT: "3100",
   CORS_ORIGINS: "http://127.0.0.1:4173",
   GOOGLE_MIRROR_ENABLED: "false",
+  MANUAL_SANDBOX_CLEANUP: "1",
 };
 const migrations = [
   "/migrations/20260614_create_app_parcels.sql",
@@ -34,6 +35,8 @@ const migrations = [
   "/migrations/20260716_prepare_line_user_parcel_ownership.sql",
   "/migrations/20260716_enforce_line_user_parcel_ownership.sql",
   "/migrations/20260924_add_user_display_name.sql",
+  "/migrations/20260925_add_parcel_note.sql",
+  "/migrations/20260925_create_cleanup_jobs.sql",
 ];
 
 let frontend;

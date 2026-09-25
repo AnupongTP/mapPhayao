@@ -24,6 +24,7 @@ const originalParcelService = {
   listOwnedParcels: parcelService.listOwnedParcels,
   updateOwnedParcel: parcelService.updateOwnedParcel,
   deleteOwnedParcel: parcelService.deleteOwnedParcel,
+  withParcelMutationLock: parcelService.withParcelMutationLock,
   getOwnedParcelAnalysisInput: parcelService.getOwnedParcelAnalysisInput,
 };
 const originalAnalyzePolygon = areaAnalysisService.analyzePolygon;
@@ -39,8 +40,15 @@ test.afterEach(() => {
 
 function createApp() {
   const app = express();
+  const googleIntegration = {
+    enabled: false,
+    async getParcelImages() { return []; },
+    async deleteParcel() { throw new Error("Cleanup must not run in the request"); },
+    async deleteImage() { throw new Error("Cleanup must not run in the request"); },
+  };
+  app.locals.googleIntegration = googleIntegration;
   app.use(express.json());
-  app.use("/api/parcels", parcelRoutes);
+  app.use("/api/parcels", parcelRoutes.createParcelRoutes({ googleIntegration }));
   app.use((err, req, res, next) => {
     res.status(err.statusCode || 500).json({
       success: false,
@@ -119,6 +127,7 @@ function installAuthAndUsers() {
 }
 
 function installParcelService(calls) {
+  parcelService.withParcelMutationLock = async (id, work) => work({});
   const storedGeometryA = {
     type: "Polygon",
     coordinates: [[
@@ -147,6 +156,7 @@ function installParcelService(calls) {
   function toPublicParcel(parcel) {
     return {
       id: parcel.id,
+      parcelCode: parcel.id === PARCEL_A ? "PY-A" : "PY-B",
       parcelName: parcel.parcelName,
       geometry: parcel.geometry,
     };
@@ -192,9 +202,10 @@ function installParcelService(calls) {
     }
     return toPublicParcel(parcel);
   };
-  parcelService.deleteOwnedParcel = async (id, appUserId) => {
-    calls.deleteInputs.push({ id, appUserId });
+  parcelService.deleteOwnedParcel = async (id, appUserId, cleanup) => {
+    calls.deleteInputs.push({ id, appUserId, cleanup });
     findOwned(id, appUserId);
+    return "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
   };
   parcelService.getOwnedParcelAnalysisInput = async (id, appUserId) => {
     calls.analysisInputCalls.push({ id, appUserId });
@@ -337,6 +348,7 @@ test("parcel routes create, list, read, update, delete, and analyze only the aut
     appUserId: APP_USER_A,
   });
 
+  app.locals.googleIntegration.enabled = true;
   for (const [method, path, body] of [
     ["GET", `/api/parcels/${PARCEL_B}`, undefined],
     ["PATCH", `/api/parcels/${PARCEL_B}`, { parcelName: "Denied" }],
@@ -384,13 +396,47 @@ test("parcel routes create, list, read, update, delete, and analyze only the aut
   response = await request(app, `/api/parcels/${PARCEL_A}`, {
     method: "DELETE",
     authorization: "Bearer token-a",
+    body: { fileIds: ["attacker-file"], parcelCode: "attacker-code", owner_user_id: APP_USER_B },
   });
   assert.equal(response.status, 200);
   assert.deepEqual(response.body, { success: true });
   assert.deepEqual(calls.deleteInputs.at(-1), {
     id: PARCEL_A,
     appUserId: APP_USER_A,
+    cleanup: { parcelCode: "PY-A", fileIds: [] },
   });
+});
+
+test("delete refuses missing trusted Sheet metadata without deleting the parcel", async () => {
+  const app = createApp();
+  installAuthAndUsers();
+  const calls = makeCalls();
+  installParcelService(calls);
+  let response = await request(app, `/api/parcels/${PARCEL_A}`, {
+    method: "DELETE", authorization: "Bearer token-a",
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(calls.deleteInputs, []);
+  app.locals.googleIntegration.enabled = true;
+  app.locals.googleIntegration.getParcelImages = async () => { throw new Error("Private Sheet content"); };
+  response = await request(app, `/api/parcels/${PARCEL_A}`, {
+    method: "DELETE", authorization: "Bearer token-a",
+  });
+  assert.equal(response.status, 500);
+  assert.deepEqual(response.body, { success: false, error: "Server error" });
+  assert.deepEqual(calls.deleteInputs, []);
+  app.locals.googleIntegration.getParcelImages = async () => {
+    const error = createHttpError(403, "private_key=DO_NOT_EXPOSE");
+    error.googleStage = "sheets-read";
+    throw error;
+  };
+  response = await request(app, `/api/parcels/${PARCEL_A}`, {
+    method: "DELETE", authorization: "Bearer token-a",
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(response.body, { success: false, error: "ไม่สามารถเตรียมข้อมูลลบรูปภาพแปลงได้" });
+  assert.equal(JSON.stringify(response.body).includes("DO_NOT_EXPOSE"), false);
+  assert.deepEqual(calls.deleteInputs, []);
 });
 
 test("parcel controller converts unexpected backend failures to sanitized server errors", async () => {

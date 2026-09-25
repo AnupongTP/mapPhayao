@@ -22,6 +22,7 @@
     cropType: "ชนิดพืช",
     riceVariety: "พันธุ์",
     plantingDate: "วันที่ปลูก",
+    note: "หมายเหตุ",
     cancel: "ยกเลิก",
     saving: "กำลังบันทึก...",
     saved: "บันทึกแปลงเรียบร้อย",
@@ -173,6 +174,7 @@
       cropType: form.elements.cropType.value.trim(),
       riceVariety: form.elements.riceVariety.value.trim(),
       plantingDate: form.elements.plantingDate.value,
+      note: form.elements.note.value.trim(),
     };
   }
 
@@ -214,6 +216,12 @@
     dateInput.name = "plantingDate";
     dateInput.value = parcel?.plantingDate || "";
     createField(fields, `${idPrefix}-planting-date`, TEXT.plantingDate, dateInput);
+
+    const noteInput = document.createElement("textarea");
+    noteInput.name = "note";
+    noteInput.maxLength = 5000;
+    noteInput.value = parcel?.note || "";
+    createField(fields, `${idPrefix}-note`, TEXT.note, noteInput);
 
     const status = createElement("p", "parcel-sheet-status");
     status.id = `${idPrefix}-status`;
@@ -269,13 +277,46 @@
   }
 
   function openSaveSheet(parcel, onSubmit) {
-    return createParcelForm({
-      idPrefix: "parcel-save",
-      title: TEXT.saveParcel,
-      confirmText: TEXT.saveParcel,
-      parcel,
-      onSubmit,
+    const { backdrop, body } = createSheet("parcel-save-sheet", TEXT.saveParcel);
+    const summary = createElement("dl", "parcel-save-summary");
+    const values = [
+      [TEXT.parcelName, parcel.name],
+      [TEXT.cropType, CROP_OPTIONS.find((option) => option.value === parcel.cropType)?.label || parcel.cropType],
+      [TEXT.riceVariety, parcel.riceVariety],
+      [TEXT.plantingDate, parcel.plantingDate],
+      ["รูปภาพ", `${parcel.photos?.length || 0}/5 รูป`],
+      [TEXT.note, parcel.note],
+    ];
+    values.forEach(([label, value]) => {
+      summary.append(createElement("dt", null, label), createElement("dd", null, value || "-"));
     });
+    const status = createElement("p", "parcel-sheet-status");
+    status.id = "parcel-save-status";
+    status.hidden = true;
+    status.setAttribute("aria-live", "polite");
+    const actions = createElement("div", "parcel-sheet-actions");
+    const cancel = createElement("button", "panel-button secondary", TEXT.cancel);
+    cancel.type = "button";
+    cancel.addEventListener("click", () => closeSheet(backdrop));
+    const confirm = createElement("button", "panel-button", TEXT.saveParcel);
+    confirm.type = "button";
+    confirm.addEventListener("click", async () => {
+      cancel.disabled = true;
+      confirm.disabled = true;
+      setStatus(status, TEXT.saving);
+      try {
+        await onSubmit((message) => setStatus(status, message));
+        setStatus(status, TEXT.saved, "success");
+        window.setTimeout(() => closeSheet(backdrop), 700);
+      } catch (error) {
+        cancel.disabled = false;
+        confirm.disabled = false;
+        setStatus(status, error.partialSuccess ? error.message : TEXT.saveFailed, "error");
+      }
+    });
+    actions.append(cancel, confirm);
+    body.append(summary, status, actions);
+    return backdrop;
   }
 
   function openEditSheet(parcel, onSubmit) {
@@ -322,9 +363,9 @@
       if (!(pendingPhotos && state.savedParcelId) && !window.MapParcelState.canSaveAnalyzedParcel(parcel)) {
         return;
       }
-      openSaveSheet(parcel, async (metadata, onProgress) => {
+      openSaveSheet(parcel, async (onProgress) => {
         if (typeof options.onSave === "function") {
-          await options.onSave(metadata, onProgress);
+          await options.onSave(onProgress);
         }
       });
     });
@@ -439,7 +480,7 @@
         makeButton("แก้ไขข้อมูล", () => {
           openEditSheet(parcel, async (metadata) => {
             const patch = {};
-            ["parcelName", "cropType", "riceVariety", "plantingDate"].forEach((key) => {
+            ["parcelName", "cropType", "riceVariety", "plantingDate", "note"].forEach((key) => {
               if ((metadata[key] || "") !== (parcel[key] || "")) {
                 patch[key] = metadata[key] || "";
               }

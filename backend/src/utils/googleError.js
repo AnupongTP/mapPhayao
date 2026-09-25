@@ -4,6 +4,7 @@ const SAFE_CODES = new Set([
   "invalid_grant", "insufficientPermissions", "storageQuotaExceeded",
   "insufficientFilePermissions", "rateLimitExceeded", "userRateLimitExceeded",
   "notFound", "forbidden",
+  "PARCEL_IMAGE_CONFLICT",
 ]);
 const SAFE_STAGES = new Set([
   "sheets-read", "sheets-header-check", "sheets-upsert-user", "sheets-upsert-parcel",
@@ -55,6 +56,8 @@ function logGoogleFailure(event, error, context = {}) {
     ...(["user", "parcel"].includes(context.entity) ? { entity: context.entity } : {}),
     ...(["create", "update", "delete"].includes(context.operation) ? { operation: context.operation } : {}),
     ...(UUID.test(context.parcelId || "") ? { parcelId: context.parcelId } : {}),
+    ...(Number.isInteger(context.attempt) && context.attempt >= 0 && context.attempt <= 3
+      ? { attempt: context.attempt } : {}),
     ...googleErrorDetails(error),
   });
 }

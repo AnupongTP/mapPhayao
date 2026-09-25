@@ -23,6 +23,8 @@
         : `API request failed: ${response.status}`;
     const requestError = new Error(message);
     requestError.statusCode = response.status;
+    requestError.retryable = body?.retryable === true;
+    requestError.ambiguous = body?.ambiguous === true;
     return requestError;
   }
 
@@ -110,6 +112,7 @@
     const cropType = normalizeString(source.cropType);
     const riceVariety = normalizeString(source.riceVariety);
     const plantingDate = normalizeString(source.plantingDate);
+    const note = normalizeString(source.note);
     const geometry = cloneGeometry(source.geometry);
 
     if (parcelName) {
@@ -124,6 +127,9 @@
     if (plantingDate) {
       body.plantingDate = plantingDate;
     }
+    if (note) {
+      body.note = note;
+    }
     if (geometry) {
       body.geometry = geometry;
     }
@@ -135,7 +141,7 @@
     const source = payload && typeof payload === "object" ? payload : {};
     const body = {};
 
-    ["parcelName", "cropType", "riceVariety", "plantingDate"].forEach((key) => {
+    ["parcelName", "cropType", "riceVariety", "plantingDate", "note"].forEach((key) => {
       if (!Object.prototype.hasOwnProperty.call(source, key)) {
         return;
       }
@@ -228,15 +234,23 @@
         options,
       );
     },
-    uploadParcelImage: async function (parcelId, file) {
+    uploadParcelImage: async function (parcelId, file, clientPhotoId, options = {}) {
       const idToken = await getCurrentLiffIdToken();
       const body = new FormData();
       body.append("image", file);
-      const response = await fetch(buildUrl(`/parcels/${encodeURIComponent(assertParcelId(parcelId))}/images`), {
-        method: "POST",
-        headers: { Authorization: `Bearer ${idToken}` },
-        body,
-      });
+      body.append("clientPhotoId", clientPhotoId);
+      let response;
+      try {
+        response = await fetch(buildUrl(`/parcels/${encodeURIComponent(assertParcelId(parcelId))}/images`), {
+          method: "POST",
+          headers: { Authorization: `Bearer ${idToken}`, "X-Photo-Attempt": String(options.attempt || 0) },
+          body,
+          ...(options.signal ? { signal: options.signal } : {}),
+        });
+      } catch (error) {
+        if (error?.name !== "AbortError") error.ambiguous = true;
+        throw error;
+      }
       const result = await parseJsonSafely(response);
       if (!response.ok) throw createRequestError(response, result);
       return result.image;

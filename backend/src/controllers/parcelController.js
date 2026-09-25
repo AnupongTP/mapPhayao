@@ -28,13 +28,20 @@ async function resolveAppUser(req) {
   return user;
 }
 
-async function syncParcelMirror(req, parcelId, operation) {
+async function syncParcelMirror(req, parcelId, operation, appUser) {
   const google = req.googleIntegration;
   if (!google?.enabled) return;
   await parcelMirrorService.bestEffortMirror("parcel", operation, { parcelId }, async () => {
-    const user = await resolveAppUser(req);
-    await parcelMirrorService.mirrorUser(user.id, google);
-    await parcelMirrorService.mirrorParcel(parcelId, google);
+    const user = appUser || await resolveAppUser(req);
+    const mirror = async (database) => {
+      await parcelMirrorService.mirrorUser(user.id, google, database);
+      await parcelMirrorService.mirrorParcel(parcelId, google, database);
+    };
+    if (operation === "update") {
+      await parcelService.withParcelMutationLock(parcelId, mirror);
+    } else {
+      await mirror();
+    }
   });
 }
 
@@ -99,7 +106,7 @@ async function updateParcel(req, res, next) {
       req.body || {},
       appUser.id,
     );
-    await syncParcelMirror(req, parcel.id, "update");
+    await syncParcelMirror(req, parcel.id, "update", appUser);
     return res.status(200).json({
       success: true,
       parcel,
@@ -113,36 +120,49 @@ async function deleteParcel(req, res, next) {
   try {
     const appUser = await resolveAppUser(req);
     const google = req.googleIntegration;
-    const previous = google?.enabled
-      ? await parcelImageService.getOwnedImageFiles(req.params.parcelId, appUser.id, google)
-      : null;
-    await parcelService.deleteOwnedParcel(req.params.parcelId, appUser.id);
-    if (previous) {
-      await parcelMirrorService.bestEffortMirror("parcel", "delete", { parcelId: req.params.parcelId },
-        () => google.deleteParcel(previous.parcelCode));
-      for (const fileId of previous.fileIds) {
-        try { await google.deleteImage(fileId); } catch (error) {
-          logGoogleFailure("parcel-image-cleanup-failed", tagGoogleError(error, "drive-delete-cleanup"),
-            { parcelId: req.params.parcelId });
-        }
-      }
-    }
+    if (!google?.enabled) throw createHttpError(503, "ยังไม่ได้ตั้งค่าบริการรูปภาพแปลง");
+    const { jobId, previous } = await parcelService.withParcelMutationLock(req.params.parcelId, async (client) => {
+      const previous = await parcelImageService.getOwnedImageFiles(req.params.parcelId, appUser.id, google, client);
+      const jobId = await parcelService.deleteOwnedParcel(req.params.parcelId, appUser.id,
+        { parcelCode: previous.parcelCode, fileIds: previous.fileIds }, client);
+      return { jobId, previous };
+    });
+    console.info("parcel-cleanup-job-created", { parcelId: req.params.parcelId, jobId,
+      remainingFiles: previous.fileIds.length });
     return res.status(200).json({
       success: true,
     });
   } catch (error) {
+    if (error?.googleStage) {
+      logGoogleFailure("parcel-cleanup-metadata-failed", error, { parcelId: req.params.parcelId });
+      return next(createHttpError(503, "ไม่สามารถเตรียมข้อมูลลบรูปภาพแปลงได้"));
+    }
     return handleParcelError(error, next, req.params.parcelId);
   }
 }
 
 async function uploadImage(req, res, next) {
+  const attempt = Number(req.get?.("X-Photo-Attempt"));
+  const safeAttempt = Number.isInteger(attempt) && attempt >= 0 && attempt <= 3 ? attempt : 0;
   try {
     const appUser = await resolveAppUser(req);
-    const image = await parcelImageService.uploadOwnedImage(
-      req.params.parcelId, appUser.id, req.file, req.googleIntegration,
-    );
+    const image = await parcelService.withParcelMutationLock(req.params.parcelId, (client) =>
+      parcelImageService.uploadOwnedImage(req.params.parcelId, appUser.id, req.file,
+        req.googleIntegration, req.body?.clientPhotoId, client));
     return res.status(201).json({ success: true, image });
   } catch (error) {
+    if (error.photoAmbiguous || error.photoRetryable || error.code === "PARCEL_IMAGE_CONFLICT") {
+      logGoogleFailure(error.photoAmbiguous ? "parcel-image-upload-ambiguous" :
+        error.photoRetryable ? "parcel-image-upload-safe-transient" : "parcel-image-integrity-conflict",
+      error, { parcelId: req.params.parcelId, attempt: safeAttempt });
+      return res.status(error.code === "PARCEL_IMAGE_CONFLICT" ? 409 : 503).json({
+        success: false,
+        error: error.photoAmbiguous ? "ไม่ทราบผลการอัปโหลดรูปภาพ กรุณาติดต่อผู้ดูแล" :
+          error.photoRetryable ? "บริการรูปภาพขัดข้องชั่วคราว" : "ข้อมูลรูปภาพแปลงขัดแย้งกัน",
+        ...(error.photoAmbiguous ? { ambiguous: true } : {}),
+        ...(error.photoRetryable ? { retryable: true } : {}),
+      });
+    }
     return handleParcelError(error, next, req.params.parcelId);
   }
 }

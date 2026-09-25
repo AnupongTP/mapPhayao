@@ -43,5 +43,33 @@
     }
   }
 
-  window.MapParcelPhotoProcessing = { prepareFile };
+  async function uploadWithRetry(photo, parcelId, position, total, onProgress, options = {}) {
+    if (photo.image) return photo.image;
+    if (photo.uploadState === "ambiguous") {
+      const error = new Error("Photo upload result is ambiguous");
+      error.ambiguous = true;
+      throw error;
+    }
+    onProgress(`กำลังเตรียมรูป ${position}/${total}...`);
+    photo.uploadFile ||= await prepareFile(photo.file);
+    const wait = options.wait || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    for (let attempt = 0; attempt <= 3; attempt += 1) {
+      if (attempt) {
+        onProgress(`กำลังลองอัปโหลดรูป ${position}/${total} อีกครั้ง... (${attempt}/3)`);
+        await wait(500 * (2 ** (attempt - 1)));
+      } else {
+        onProgress(`กำลังอัปโหลดรูป ${position}/${total}...`);
+      }
+      try {
+        photo.image = await window.MapApi.uploadParcelImage(parcelId, photo.uploadFile, photo.clientPhotoId,
+          { attempt });
+        return photo.image;
+      } catch (error) {
+        if (error.ambiguous) photo.uploadState = "ambiguous";
+        if (!error.retryable || attempt === 3) throw error;
+      }
+    }
+  }
+
+  window.MapParcelPhotoProcessing = { prepareFile, uploadWithRetry };
 })(window, document);
