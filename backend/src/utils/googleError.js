@@ -9,6 +9,12 @@ const SAFE_STAGES = new Set([
   "sheets-read", "sheets-header-check", "sheets-upsert-user", "sheets-upsert-parcel",
   "sheets-append-image", "sheets-delete-parcel", "drive-config", "drive-upload",
   "drive-read", "drive-delete", "drive-delete-cleanup",
+  "apps-script-upload", "apps-script-read", "apps-script-delete",
+  "apps-script-http", "apps-script-invalid-response",
+]);
+const SAFE_BRIDGE_CATEGORIES = new Set([
+  "invalid-config", "timeout", "network", "http", "invalid-json", "rejected",
+  "invalid-file-id", "invalid-content",
 ]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -35,8 +41,9 @@ function googleErrorDetails(error) {
     ...(safeCode(apiError?.status ?? error?.code) ? { code: safeCode(apiError?.status ?? error?.code) } : {}),
     ...(error?.code === "SHEET_HEADER_MISMATCH" ? { reason: "sheet-header-mismatch" } :
       safeCode(apiError?.errors?.[0]?.reason) ? { reason: safeCode(apiError.errors[0].reason) } : {}),
+    ...(SAFE_BRIDGE_CATEGORIES.has(error?.bridgeCategory) ? { category: error.bridgeCategory } : {}),
     message: error?.googleStage === "drive-config"
-      ? "Google Drive OAuth configuration is incomplete"
+      ? "Google Drive provider configuration is incomplete"
       : error?.code === "SHEET_HEADER_MISMATCH"
         ? "Google parcels sheet headers do not match"
         : "Google API request failed",

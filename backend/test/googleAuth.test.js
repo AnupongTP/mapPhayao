@@ -5,6 +5,7 @@ const { createGoogleParcelIntegration, PARCEL_HEADERS } = require("../src/servic
 
 const env = {
   GOOGLE_MIRROR_ENABLED: "true",
+  GOOGLE_DRIVE_PROVIDER: "oauth",
   GOOGLE_SERVICE_ACCOUNT_JSON: '{"client_email":"fake@example.invalid"}',
   GOOGLE_SHEETS_SPREADSHEET_ID: "fake-sheet",
   GOOGLE_DRIVE_PARCEL_IMAGE_FOLDER_ID: "fake-folder",
@@ -82,6 +83,14 @@ test("missing Drive OAuth settings keep Sheets available and image operations fa
     !error.message.includes("fake-refresh"));
   await assert.rejects(() => integration.getImage("fake-id"), { statusCode: 503 });
   await assert.rejects(() => integration.deleteImage("fake-id"), { statusCode: 503 });
+});
+
+test("Drive provider must be explicit even when OAuth credentials exist", async () => {
+  const fake = fakeGoogle();
+  const integration = createGoogleParcelIntegration({ ...env, GOOGLE_DRIVE_PROVIDER: "" }, fake.google);
+  assert.equal(fake.calls.some((call) => call.operation === "drive-client"), false);
+  await assert.rejects(() => integration.uploadImage(Buffer.from("webp"), "test.webp"),
+    { statusCode: 503, googleStage: "drive-config" });
 });
 
 test("Drive API failures keep their stage without logging provider payloads", async () => {

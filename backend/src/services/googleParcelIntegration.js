@@ -1,6 +1,7 @@
 const { Readable } = require("node:stream");
 const createHttpError = require("../utils/httpError");
 const { atGoogleStage, tagGoogleError } = require("../utils/googleError");
+const { createAppsScriptDriveBridge } = require("./appsScriptDriveBridge");
 
 const SPREADSHEET_TABS = Object.freeze({ users: "users", parcels: "parcels" });
 const PARCEL_HEADERS = Object.freeze([
@@ -69,7 +70,8 @@ function imageLink(fileId) {
   return `https://drive.google.com/uc?export=view&id=${encodeURIComponent(fileId)}`;
 }
 
-function createGoogleParcelIntegration(env = process.env, google = require("googleapis").google) {
+function createGoogleParcelIntegration(env = process.env, google = require("googleapis").google,
+  bridgeOptions = {}) {
   if (env.GOOGLE_MIRROR_ENABLED !== "true") {
     return { enabled: false };
   }
@@ -89,15 +91,46 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
   const sheets = google.sheets({ version: "v4", auth: sheetsAuth });
+  const provider = env.GOOGLE_DRIVE_PROVIDER;
   const folderId = env.GOOGLE_DRIVE_PARCEL_IMAGE_FOLDER_ID;
-  const clientId = env.GOOGLE_DRIVE_OAUTH_CLIENT_ID;
-  const clientSecret = env.GOOGLE_DRIVE_OAUTH_CLIENT_SECRET;
-  const refreshToken = env.GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN;
   let drive;
-  if (folderId && clientId && clientSecret && refreshToken) {
-    const driveAuth = new google.auth.OAuth2(clientId, clientSecret);
-    driveAuth.setCredentials({ refresh_token: refreshToken });
-    drive = google.drive({ version: "v3", auth: driveAuth });
+  if (provider === "apps-script") {
+    try {
+      drive = createAppsScriptDriveBridge({
+        url: env.GOOGLE_DRIVE_APPS_SCRIPT_URL,
+        secret: env.GOOGLE_DRIVE_APPS_SCRIPT_SECRET,
+        ...bridgeOptions,
+      });
+    } catch { /* Sheet mirroring remains available when Drive is misconfigured. */ }
+  } else if (provider === "oauth") {
+    const clientId = env.GOOGLE_DRIVE_OAUTH_CLIENT_ID;
+    const clientSecret = env.GOOGLE_DRIVE_OAUTH_CLIENT_SECRET;
+    const refreshToken = env.GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN;
+    if (folderId && clientId && clientSecret && refreshToken) {
+      const driveAuth = new google.auth.OAuth2(clientId, clientSecret);
+      driveAuth.setCredentials({ refresh_token: refreshToken });
+      const oauthDrive = google.drive({ version: "v3", auth: driveAuth });
+      drive = {
+        async uploadImage(bytes, fileName) {
+          const response = await atGoogleStage("drive-upload", () => oauthDrive.files.create({
+            requestBody: { name: fileName, parents: [folderId] },
+            media: { mimeType: "image/webp", body: Readable.from(bytes) }, fields: "id",
+          }));
+          if (typeof response.data.id !== "string" || !response.data.id) {
+            throw tagGoogleError(new Error("Google Drive did not return a file id"), "drive-upload");
+          }
+          return response.data.id;
+        },
+        async deleteImage(fileId) {
+          await atGoogleStage("drive-delete", () => oauthDrive.files.delete({ fileId }));
+        },
+        async getImage(fileId) {
+          const response = await atGoogleStage("drive-read", () =>
+            oauthDrive.files.get({ fileId, alt: "media" }, { responseType: "stream" }));
+          return response.data;
+        },
+      };
+    }
   }
   function requireDrive() {
     if (!drive) {
@@ -157,25 +190,9 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
 
   return {
     enabled: true,
-    async uploadImage(bytes, fileName) {
-      const response = await atGoogleStage("drive-upload", () => requireDrive().files.create({
-        requestBody: { name: fileName, parents: [folderId] },
-        media: { mimeType: "image/webp", body: Readable.from(bytes) },
-        fields: "id",
-      }));
-      if (typeof response.data.id !== "string" || !response.data.id) {
-        throw tagGoogleError(new Error("Google Drive did not return a file id"), "drive-upload");
-      }
-      return response.data.id;
-    },
-    async deleteImage(fileId) {
-      await atGoogleStage("drive-delete", () => requireDrive().files.delete({ fileId }));
-    },
-    async getImage(fileId) {
-      const response = await atGoogleStage("drive-read", () =>
-        requireDrive().files.get({ fileId, alt: "media" }, { responseType: "stream" }));
-      return response.data;
-    },
+    async uploadImage(bytes, fileName) { return requireDrive().uploadImage(bytes, fileName); },
+    async deleteImage(fileId) { return requireDrive().deleteImage(fileId); },
+    async getImage(fileId) { return requireDrive().getImage(fileId); },
     upsertUser(user) { return upsert(SPREADSHEET_TABS.users, user.id, userCells(user)); },
     upsertParcel(parcel) {
       return atGoogleStage("sheets-upsert-parcel", () => serializeWrite(async () => {
