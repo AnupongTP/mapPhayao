@@ -1,4 +1,6 @@
 const { Readable } = require("node:stream");
+const createHttpError = require("../utils/httpError");
+const { atGoogleStage, tagGoogleError } = require("../utils/googleError");
 
 const SPREADSHEET_TABS = Object.freeze({ users: "users", parcels: "parcels" });
 const PARCEL_HEADERS = Object.freeze([
@@ -24,7 +26,7 @@ function parcelCells(parcel, images = []) {
   return [
     parcel.owner_user_id, parcel.display_name || "", parcel.parcel_code, parcel.parcel_name || "",
     parcel.crop_type, parcel.rice_variety || "", parcel.planting_date || "",
-    "",
+    formatCoordinate(parcel.representative_lat, parcel.representative_lng),
     JSON.stringify(parcel.geometry), Number(parcel.area_sqm), Number(parcel.area_rai),
     JSON.stringify(images.map((image) => image.fileName)),
     JSON.stringify(images.map((image) => image.linkImage)),
@@ -67,15 +69,14 @@ function imageLink(fileId) {
   return `https://drive.google.com/uc?export=view&id=${encodeURIComponent(fileId)}`;
 }
 
-function createGoogleParcelIntegration(env = process.env) {
+function createGoogleParcelIntegration(env = process.env, google = require("googleapis").google) {
   if (env.GOOGLE_MIRROR_ENABLED !== "true") {
     return { enabled: false };
   }
   const accountJson = env.GOOGLE_SERVICE_ACCOUNT_JSON;
   const spreadsheetId = env.GOOGLE_SHEETS_SPREADSHEET_ID;
-  const folderId = env.GOOGLE_DRIVE_PARCEL_IMAGE_FOLDER_ID;
-  if (!accountJson || !spreadsheetId || !folderId) {
-    throw new Error("Google parcel integration is enabled but configuration is incomplete");
+  if (!accountJson || !spreadsheetId) {
+    throw new Error("Google Sheets integration is enabled but configuration is incomplete");
   }
   let credentials;
   try {
@@ -83,30 +84,45 @@ function createGoogleParcelIntegration(env = process.env) {
   } catch (error) {
     throw new Error("Google service account configuration is invalid");
   }
-  const { google } = require("googleapis");
-  const auth = new google.auth.GoogleAuth({
+  const sheetsAuth = new google.auth.GoogleAuth({
     credentials,
-    scopes: ["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/spreadsheets"],
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
-  const drive = google.drive({ version: "v3", auth });
-  const sheets = google.sheets({ version: "v4", auth });
+  const sheets = google.sheets({ version: "v4", auth: sheetsAuth });
+  const folderId = env.GOOGLE_DRIVE_PARCEL_IMAGE_FOLDER_ID;
+  const clientId = env.GOOGLE_DRIVE_OAUTH_CLIENT_ID;
+  const clientSecret = env.GOOGLE_DRIVE_OAUTH_CLIENT_SECRET;
+  const refreshToken = env.GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN;
+  let drive;
+  if (folderId && clientId && clientSecret && refreshToken) {
+    const driveAuth = new google.auth.OAuth2(clientId, clientSecret);
+    driveAuth.setCredentials({ refresh_token: refreshToken });
+    drive = google.drive({ version: "v3", auth: driveAuth });
+  }
+  function requireDrive() {
+    if (!drive) {
+      throw tagGoogleError(createHttpError(503, "บริการรูปภาพแปลงยังไม่พร้อมใช้งาน"), "drive-config");
+    }
+    return drive;
+  }
   let sheetWrites = Promise.resolve();
 
   async function assertParcelHeaders() {
-    const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: "parcels!A1:P1" });
+    const response = await atGoogleStage("sheets-header-check", () =>
+      sheets.spreadsheets.values.get({ spreadsheetId, range: "parcels!A1:P1" }));
     const headers = response.data.values?.[0] || [];
     if (headers.length !== PARCEL_HEADERS.length ||
       headers.some((header, index) => header !== PARCEL_HEADERS[index])) {
       const error = new Error("Google parcels sheet headers do not match the expected A-P contract");
       error.code = "SHEET_HEADER_MISMATCH";
-      throw error;
+      throw tagGoogleError(error, "sheets-header-check");
     }
   }
 
   async function findRow(tab, key) {
-    const response = await sheets.spreadsheets.values.get({
+    const response = await atGoogleStage("sheets-read", () => sheets.spreadsheets.values.get({
       spreadsheetId, range: tab === SPREADSHEET_TABS.users ? "users!A2:D" : "parcels!A2:P",
-    });
+    }));
     const rows = response.data.values || [];
     const column = tab === SPREADSHEET_TABS.users ? 0 : 2;
     const index = rows.findIndex((row) => row[column] === key);
@@ -120,7 +136,7 @@ function createGoogleParcelIntegration(env = process.env) {
   }
 
   async function upsert(tab, key, cells) {
-    return serializeWrite(async () => {
+    return atGoogleStage(tab === SPREADSHEET_TABS.users ? "sheets-upsert-user" : "sheets-upsert-parcel", () => serializeWrite(async () => {
       if (tab === SPREADSHEET_TABS.parcels) await assertParcelHeaders();
       const row = await findRow(tab, key);
       if (row) {
@@ -136,32 +152,33 @@ function createGoogleParcelIntegration(env = process.env) {
           insertDataOption: "INSERT_ROWS", requestBody: { values: [cells] },
         });
       }
-    });
+    }));
   }
 
   return {
     enabled: true,
     async uploadImage(bytes, fileName) {
-      const response = await drive.files.create({
+      const response = await atGoogleStage("drive-upload", () => requireDrive().files.create({
         requestBody: { name: fileName, parents: [folderId] },
         media: { mimeType: "image/webp", body: Readable.from(bytes) },
         fields: "id",
-      });
+      }));
       if (typeof response.data.id !== "string" || !response.data.id) {
-        throw new Error("Google Drive did not return a file id");
+        throw tagGoogleError(new Error("Google Drive did not return a file id"), "drive-upload");
       }
       return response.data.id;
     },
     async deleteImage(fileId) {
-      await drive.files.delete({ fileId });
+      await atGoogleStage("drive-delete", () => requireDrive().files.delete({ fileId }));
     },
     async getImage(fileId) {
-      const response = await drive.files.get({ fileId, alt: "media" }, { responseType: "stream" });
+      const response = await atGoogleStage("drive-read", () =>
+        requireDrive().files.get({ fileId, alt: "media" }, { responseType: "stream" }));
       return response.data;
     },
     upsertUser(user) { return upsert(SPREADSHEET_TABS.users, user.id, userCells(user)); },
     upsertParcel(parcel) {
-      return serializeWrite(async () => {
+      return atGoogleStage("sheets-upsert-parcel", () => serializeWrite(async () => {
         await assertParcelHeaders();
         const row = await findRow(SPREADSHEET_TABS.parcels, parcel.parcel_code);
         if (row && row.cells[0] !== parcel.owner_user_id) throw new Error("Parcel Sheet owner mismatch");
@@ -174,19 +191,19 @@ function createGoogleParcelIntegration(env = process.env) {
           await sheets.spreadsheets.values.append({ spreadsheetId, range: "parcels!A:P",
             valueInputOption: "RAW", insertDataOption: "INSERT_ROWS", requestBody: { values: [cells] } });
         }
-      });
+      }));
     },
     getParcelImages(parcelCode, ownerUserId) {
-      return serializeWrite(async () => {
+      return atGoogleStage("sheets-read", () => serializeWrite(async () => {
         await assertParcelHeaders();
         const row = await findRow(SPREADSHEET_TABS.parcels, parcelCode);
         if (!row) throw new Error("Parcel Sheet row is missing");
         if (row.cells[0] !== ownerUserId) throw new Error("Parcel Sheet owner mismatch");
         return parseParcelImages(row.cells);
-      });
+      }));
     },
     appendParcelImage(parcelCode, ownerUserId, fileName, fileId) {
-      return serializeWrite(async () => {
+      return atGoogleStage("sheets-append-image", () => serializeWrite(async () => {
         await assertParcelHeaders();
         const row = await findRow(SPREADSHEET_TABS.parcels, parcelCode);
         if (!row) throw new Error("Parcel Sheet row is missing");
@@ -200,10 +217,10 @@ function createGoogleParcelIntegration(env = process.env) {
           requestBody: { values: [[JSON.stringify(images.map((item) => item.fileName)),
             JSON.stringify(images.map((item) => item.linkImage))]] } });
         return image;
-      });
+      }));
     },
     deleteParcel(parcelCode) {
-      return serializeWrite(async () => {
+      return atGoogleStage("sheets-delete-parcel", () => serializeWrite(async () => {
         await assertParcelHeaders();
         const row = await findRow(SPREADSHEET_TABS.parcels, parcelCode);
         if (!row) return;
@@ -216,7 +233,7 @@ function createGoogleParcelIntegration(env = process.env) {
             range: { sheetId: sheet.properties.sheetId, dimension: "ROWS", startIndex: row.number - 1, endIndex: row.number },
           } }] },
         });
-      });
+      }));
     },
   };
 }

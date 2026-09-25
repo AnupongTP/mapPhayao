@@ -1,4 +1,5 @@
 const db = require("../config/database");
+const { logGoogleFailure } = require("../utils/googleError");
 
 async function mirrorUser(userId, google) {
   if (!google?.enabled) return;
@@ -15,11 +16,16 @@ async function mirrorParcel(parcelId, google) {
       p.crop_type, p.rice_variety,
       to_char(p.planting_date, 'YYYY-MM-DD') AS planting_date,
       ST_AsGeoJSON(ST_Transform(p.geom, 4326))::json AS geometry,
+      ST_X(representative.point) AS representative_lng,
+      ST_Y(representative.point) AS representative_lat,
       ROUND(ST_Area(p.geom)::numeric, 2) AS area_sqm,
       ROUND((ST_Area(p.geom) / 1600.0)::numeric, 2) AS area_rai,
       p.created_at, p.updated_at
     FROM app.parcels p
     JOIN app.users u ON u.id = p.owner_user_id
+    CROSS JOIN LATERAL (
+      SELECT ST_Transform(ST_PointOnSurface(p.geom), 4326) AS point
+    ) representative
     WHERE p.id = $1;
   `, [parcelId]);
   const parcel = result.rows[0];
@@ -29,10 +35,7 @@ async function mirrorParcel(parcelId, google) {
 
 async function bestEffortMirror(entity, operation, context, work) {
   try { await work(); } catch (error) {
-    console.error("google-mirror-sync-failed", {
-      entity, operation, ...context,
-      ...(error.code === "SHEET_HEADER_MISMATCH" ? { reason: "sheet-header-mismatch" } : {}),
-    });
+    logGoogleFailure("google-mirror-sync-failed", error, { entity, operation, parcelId: context.parcelId });
   }
 }
 

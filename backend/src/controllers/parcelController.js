@@ -5,6 +5,7 @@ const areaAnalysisService = require("../services/areaAnalysisService");
 const parcelImageService = require("../services/parcelImageService");
 const parcelMirrorService = require("../services/parcelMirrorService");
 const createHttpError = require("../utils/httpError");
+const { logGoogleFailure, tagGoogleError } = require("../utils/googleError");
 
 const AUTH_REQUIRED_MESSAGE = "LINE authentication required";
 const INTERNAL_ERROR_MESSAGE = "Server error";
@@ -37,7 +38,8 @@ async function syncParcelMirror(req, parcelId, operation) {
   });
 }
 
-function handleParcelError(error, next) {
+function handleParcelError(error, next, parcelId) {
+  if (error?.googleStage) logGoogleFailure("google-parcel-operation-failed", error, { parcelId });
   if (error.statusCode) {
     return next(error);
   }
@@ -70,7 +72,7 @@ async function getParcel(req, res, next) {
       parcel,
     });
   } catch (error) {
-    return handleParcelError(error, next);
+    return handleParcelError(error, next, req.params.parcelId);
   }
 }
 
@@ -120,7 +122,8 @@ async function deleteParcel(req, res, next) {
         () => google.deleteParcel(previous.parcelCode));
       for (const fileId of previous.fileIds) {
         try { await google.deleteImage(fileId); } catch (error) {
-          console.error("parcel-image-cleanup-failed", { parcelId: req.params.parcelId });
+          logGoogleFailure("parcel-image-cleanup-failed", tagGoogleError(error, "drive-delete-cleanup"),
+            { parcelId: req.params.parcelId });
         }
       }
     }
@@ -128,7 +131,7 @@ async function deleteParcel(req, res, next) {
       success: true,
     });
   } catch (error) {
-    return handleParcelError(error, next);
+    return handleParcelError(error, next, req.params.parcelId);
   }
 }
 
@@ -140,7 +143,7 @@ async function uploadImage(req, res, next) {
     );
     return res.status(201).json({ success: true, image });
   } catch (error) {
-    return handleParcelError(error, next);
+    return handleParcelError(error, next, req.params.parcelId);
   }
 }
 
@@ -155,10 +158,14 @@ async function getImageContent(req, res, next) {
     }
     const stream = await req.googleIntegration.getImage(fileId);
     res.set({ "Content-Type": "image/webp", "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
-    stream.on("error", () => res.destroy());
+    stream.on("error", (error) => {
+      logGoogleFailure("google-parcel-operation-failed", tagGoogleError(error, "drive-read"),
+        { parcelId: req.params.parcelId });
+      res.destroy();
+    });
     return stream.pipe(res);
   } catch (error) {
-    return handleParcelError(error, next);
+    return handleParcelError(error, next, req.params.parcelId);
   }
 }
 

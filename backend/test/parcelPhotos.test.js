@@ -8,6 +8,7 @@ const db = require("../src/config/database");
 const { bestEffortMirror, mirrorParcel } = require("../src/services/parcelMirrorService");
 const { userCells, parcelCells, parseParcelImages, formatCoordinate, PARCEL_HEADERS, createGoogleParcelIntegration } = require("../src/services/googleParcelIntegration");
 const { createFakeGoogleParcels } = require("../../scripts/fake-google-parcels.cjs");
+const { logGoogleFailure, tagGoogleError } = require("../src/utils/googleError");
 
 test("parcel photos normalize to metadata-free WebP at 1600px and quality 75", async () => {
   const input = await sharp({ create: { width: 2000, height: 1000, channels: 3, background: "red" } })
@@ -46,7 +47,8 @@ test("Sheet cells keep deterministic aligned JSON arrays and never export pictur
     owner_user_id: user.id, display_name: user.display_name, parcel_code: "PY-2026-0001",
     parcel_name: "Field", crop_type: "rice", rice_variety: "Khao Dawk Mali",
     planting_date: "2026-01-02", geometry: { type: "Polygon", coordinates: [[[99.818955, 19.191926]]] },
-    area_sqm: 1600, area_rai: 1, note: "untrusted note", picture_url: user.picture_url,
+    area_sqm: 1600, area_rai: 1, representative_lat: 19.024858, representative_lng: 99.910682,
+    note: "untrusted note", picture_url: user.picture_url,
     line_user_id: user.line_user_id,
   };
   const cells = parcelCells(parcel, [
@@ -57,7 +59,7 @@ test("Sheet cells keep deterministic aligned JSON arrays and never export pictur
   assert.deepEqual(PARCEL_HEADERS, ["user_id", "display_name", "parcel_code", "parcel_name", "crop", "variety",
     "planting_date", "Coordinate", "geometry", "area_m2", "area_rai", "Image", "LinkImage", "note", "created_at", "updated_at"]);
   assert.equal(cells.length, 16);
-  assert.deepEqual(cells.slice(0, 8), ["internal-uuid", "Verified", "PY-2026-0001", "Field", "rice", "Khao Dawk Mali", "2026-01-02", ""]);
+  assert.deepEqual(cells.slice(0, 8), ["internal-uuid", "Verified", "PY-2026-0001", "Field", "rice", "Khao Dawk Mali", "2026-01-02", "19.024858, 99.910682"]);
   assert.deepEqual(JSON.parse(cells[8]), parcel.geometry);
   assert.deepEqual(cells.slice(9, 11), [1600, 1]);
   assert.deepEqual(JSON.parse(cells[11]), ["first.webp", "third.webp", "second.webp"]);
@@ -73,6 +75,7 @@ test("Sheet cells keep deterministic aligned JSON arrays and never export pictur
   assert.equal(cells.join(" ").includes("U_PRIVATE"), false);
   assert.equal(parcelCells(parcel, [])[11], "[]");
   assert.equal(parcelCells(parcel, [])[12], "[]");
+  assert.equal(parcelCells({ ...parcel, representative_lat: null })[7], "");
 });
 
 test("Coordinate formatter uses EPSG:4326 latitude, longitude with six decimals", () => {
@@ -90,6 +93,7 @@ test("parcel mirror reads trusted display name by owner UUID from app.users", as
     if (calls.length === 1) return { rows: [{
       owner_user_id: "internal-uuid", display_name: "Verified", parcel_code: "PY-1",
       crop_type: "rice", geometry: { type: "Polygon", coordinates: [] }, area_sqm: 1600, area_rai: 1,
+      representative_lat: 19.024858, representative_lng: 99.910682,
     }] };
     throw new Error("Unexpected image metadata query");
   };
@@ -99,9 +103,13 @@ test("parcel mirror reads trusted display name by owner UUID from app.users", as
     } });
     assert.match(calls[0].sql, /JOIN app\.users u ON u\.id = p\.owner_user_id/);
     assert.match(calls[0].sql, /u\.display_name/);
+    assert.match(calls[0].sql, /ST_Transform\(ST_PointOnSurface\(p\.geom\), 4326\)/);
+    assert.match(calls[0].sql, /ST_X\(representative\.point\) AS representative_lng/);
+    assert.match(calls[0].sql, /ST_Y\(representative\.point\) AS representative_lat/);
     assert.deepEqual(calls[0].params, ["parcel-id"]);
     assert.equal(calls.length, 1);
     assert.deepEqual(mirrored.slice(0, 3), ["internal-uuid", "Verified", "PY-1"]);
+    assert.equal(mirrored[7], "19.024858, 99.910682");
   } finally {
     db.query = originalQuery;
   }
@@ -118,8 +126,10 @@ test("fake Google integration stores only local bytes and mirrors row cells", as
   assert.deepEqual(JSON.parse(fake.snapshot().parcels[0][11]), []);
   assert.deepEqual(JSON.parse(fake.snapshot().parcels[0][12]), []);
   await fake.appendParcelImage("PY-1", "internal", "a.webp", id);
-  await fake.upsertParcel({ ...parcel, parcel_name: "Updated" });
+  await fake.upsertParcel({ ...parcel, parcel_name: "Updated", representative_lat: 19.024858,
+    representative_lng: 99.910682 });
   assert.equal(fake.snapshot().parcels[0][3], "Updated");
+  assert.equal(fake.snapshot().parcels[0][7], "19.024858, 99.910682");
   assert.deepEqual((await fake.getParcelImages("PY-1", "internal")).map((image) => image.fileName), ["a.webp"]);
   await assert.rejects(() => fake.getParcelImages("PY-1", "other"), /owner mismatch/);
   await fake.deleteImage(id);
@@ -198,7 +208,8 @@ test("Google mirror failure stays nonfatal", async () => {
       throw new Error("Google unavailable");
     });
     assert.equal(events[0][0], "google-mirror-sync-failed");
-    assert.deepEqual(events[0][1], { entity: "parcel", operation: "update", parcelId: "safe-id" });
+    assert.deepEqual(events[0][1], { entity: "parcel", operation: "update", stage: "google",
+      message: "Google API request failed" });
   } finally {
     console.error = originalError;
   }
@@ -215,8 +226,30 @@ test("header mismatch is reported without exposing sheet contents", async () => 
       throw error;
     });
     assert.deepEqual(events[0], ["google-mirror-sync-failed", {
-      entity: "parcel", operation: "update", parcelId: "safe-id", reason: "sheet-header-mismatch",
+      entity: "parcel", operation: "update", stage: "google", code: "SHEET_HEADER_MISMATCH",
+      reason: "sheet-header-mismatch", message: "Google parcels sheet headers do not match",
     }]);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+test("Google diagnostics retain only allowlisted API fields and no secrets", () => {
+  const originalError = console.error;
+  const events = [];
+  console.error = (...args) => events.push(args);
+  try {
+    const error = tagGoogleError(new Error("private_key=TOP_SECRET refresh_token=TOP_SECRET"), "drive-upload");
+    error.response = { status: 403, data: { error: { status: "PERMISSION_DENIED",
+      message: "Bearer TOP_SECRET", errors: [{ reason: "insufficientPermissions" }] } } };
+    error.code = "TOP_SECRET";
+    logGoogleFailure("google-parcel-operation-failed", error, {
+      parcelId: "11111111-1111-4111-8111-111111111111",
+    });
+    assert.deepEqual(events[0][1], { parcelId: "11111111-1111-4111-8111-111111111111",
+      stage: "drive-upload", status: 403, code: "PERMISSION_DENIED",
+      reason: "insufficientPermissions", message: "Google API request failed" });
+    assert.equal(JSON.stringify(events).includes("TOP_SECRET"), false);
   } finally {
     console.error = originalError;
   }

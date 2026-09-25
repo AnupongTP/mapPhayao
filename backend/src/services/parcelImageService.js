@@ -3,6 +3,7 @@ const sharp = require("sharp");
 const parcelService = require("./parcelService");
 const parcelMirrorService = require("./parcelMirrorService");
 const createHttpError = require("../utils/httpError");
+const { logGoogleFailure, tagGoogleError } = require("../utils/googleError");
 
 const MAX_RAW_BYTES = 12 * 1024 * 1024;
 const MAX_LONG_EDGE = 1600;
@@ -54,7 +55,8 @@ async function uploadOwnedImage(parcelId, ownerUserId, file, google) {
     return image;
   } catch (error) {
     try { await google.deleteImage(driveFileId); } catch (cleanupError) {
-      console.error("parcel-image-cleanup-failed", { parcelId: parcel.id });
+      logGoogleFailure("parcel-image-cleanup-failed", tagGoogleError(cleanupError, "drive-delete-cleanup"),
+        { parcelId: parcel.id });
     }
     throw error;
   }

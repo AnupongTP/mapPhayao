@@ -92,8 +92,17 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   const owner = await db.query("SELECT owner_user_id FROM app.parcels WHERE id = $1", [parcel.id]);
   expect(sheetRow[0]).toBe(owner.rows[0].owner_user_id);
   expect(sheetRow[1]).toBe("ผู้ใช้ทดสอบ A");
-  expect(sheetRow[7]).toBe("");
-  expect(JSON.parse(sheetRow[8]).type).toMatch(/Polygon/);
+  const representative = (await db.query(`
+    SELECT ST_Y(ST_Transform(ST_PointOnSurface(geom), 4326)) AS lat,
+      ST_X(ST_Transform(ST_PointOnSurface(geom), 4326)) AS lng
+    FROM app.parcels WHERE id = $1
+  `, [parcel.id])).rows[0];
+  expect(sheetRow[7]).toBe(`${representative.lat.toFixed(6)}, ${representative.lng.toFixed(6)}`);
+  const sheetGeometry = JSON.parse(sheetRow[8]);
+  expect(sheetGeometry.type).toMatch(/Polygon/);
+  const firstVertex = sheetGeometry.type === "MultiPolygon"
+    ? sheetGeometry.coordinates[0][0][0] : sheetGeometry.coordinates[0][0];
+  expect(sheetRow[7]).not.toBe(`${firstVertex[1].toFixed(6)}, ${firstVertex[0].toFixed(6)}`);
   expect(JSON.parse(sheetRow[11])).toHaveLength(2);
   expect(JSON.parse(sheetRow[12])).toHaveLength(2);
   expect(JSON.parse(sheetRow[11])).toEqual(google.files.map((file) => file.fileName));
@@ -140,6 +149,7 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   const afterUpdate = (await (await request.get(`${backendUrl}/__e2e__/google`)).json());
   const updatedRow = afterUpdate.parcels.find((row) => row[2] === parcel.parcelCode);
   expect(updatedRow[3]).toBe("PHOTO-E2E-EDITED");
+  expect(updatedRow[7]).toBe(sheetRow[7]);
   expect(JSON.parse(updatedRow[11])).toHaveLength(2);
   expect(JSON.parse(updatedRow[12])).toHaveLength(2);
   expect((await request.delete(`${backendUrl}/api/parcels/${parcel.id}`, { headers: auth })).status()).toBe(200);
@@ -168,6 +178,7 @@ test("parcel without photos still analyzes, saves, and mirrors empty arrays", as
   const google = (await (await request.get(`${backendUrl}/__e2e__/google`)).json());
   const row = google.parcels.find((item) => item[2] === parcel.parcelCode);
   expect(row).toHaveLength(16);
+  expect(row[7]).toMatch(/^-?\d+\.\d{6}, -?\d+\.\d{6}$/);
   expect(row[11]).toBe("[]");
   expect(row[12]).toBe("[]");
   expect(forbidden).toEqual([]);
@@ -206,7 +217,11 @@ test("failed photo upload keeps saved parcel and retries without duplicate creat
   await expect(sheet.locator("#parcel-save-status")).toContainText("บันทึกแปลงแล้ว แต่มีรูปภาพ 1 รูปอัปโหลดไม่สำเร็จ");
   const beforeRetry = await db.query("SELECT COUNT(*)::int AS count FROM app.parcels WHERE id = $1", [parcel.id]);
   expect(beforeRetry.rows[0].count).toBe(1);
-  expect((await (await request.get(`${backendUrl}/__e2e__/google`)).json()).files).toHaveLength(0);
+  const failedGoogle = await (await request.get(`${backendUrl}/__e2e__/google`)).json();
+  expect(failedGoogle.files).toHaveLength(0);
+  const failedRow = failedGoogle.parcels.find((row) => row[2] === parcel.parcelCode);
+  expect(failedRow[11]).toBe("[]");
+  expect(failedRow[12]).toBe("[]");
   let createAttempts = 0;
   page.on("request", (item) => {
     if (item.url().endsWith("/api/parcels") && item.method() === "POST") createAttempts += 1;
