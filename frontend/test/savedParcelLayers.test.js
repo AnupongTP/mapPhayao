@@ -780,88 +780,55 @@ test("selecting saved parcels fits and highlights one without removing the other
   assert.equal(harness.uiState.closedMyParcelSheets, 2);
 });
 
-test("saved detail renders text and loading state before concurrent images complete in original order", async () => {
-  const first = createDeferred();
-  const second = createDeferred();
-  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "first.webp" }, { id: "second.webp" }] };
-  const harness = createHarness({ imageLoadHandler: (_, imageId) =>
-    imageId === "first.webp" ? first.promise : second.promise });
+test("saved detail renders text and trusted LinkImage photos immediately without content proxy calls", async () => {
+  const images = ["first", "second"].map((id) => ({ id: `${id}.webp`,
+    linkImage: `https://drive.google.com/uc?export=view&id=${id}` }));
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images };
+  const harness = createHarness();
   harness.parcelHandlers.onParcelsLoaded([parcelA]);
   await harness.parcelHandlers.onOpenParcel(parcelA);
-  const initial = harness.uiState.renderedSavedDetails.at(-1).parcel;
-  assert.equal(initial.parcelName, "Field A");
-  assert.equal(initial.photosLoading, true);
+  const detail = harness.uiState.renderedSavedDetails.at(-1).parcel;
+  assert.equal(detail.parcelName, "Field A");
+  assert.equal(detail.photosLoading, false);
+  assert.deepEqual(detail.photos.map((photo) => photo.previewUrl), images.map((image) => image.linkImage));
   assert.equal(harness.uiState.updatedSavedPhotos.length, 0);
-  assert.deepEqual(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob")
-    .map((call) => call.imageId), ["first.webp", "second.webp"]);
-  second.resolve({ imageId: "second.webp" });
-  await nextTick();
-  assert.equal(harness.uiState.updatedSavedPhotos.length, 0);
-  first.resolve({ imageId: "first.webp" });
-  await nextTick();
-  assert.deepEqual(harness.uiState.updatedSavedPhotos.at(-1).photos.map((photo) => photo.id),
-    ["first.webp", "second.webp"]);
-  assert.deepEqual(harness.uiState.updatedSavedPhotos.at(-1).photos.map((photo) => photo.previewUrl),
-    ["blob:first.webp", "blob:second.webp"]);
+  assert.equal(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob").length, 0);
 });
 
-test("one saved image failure leaves the other image visible", async () => {
-  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "bad.webp" }, { id: "good.webp" }] };
-  const harness = createHarness({ imageLoadHandler: (_, imageId) => imageId === "bad.webp"
-    ? Promise.reject(new Error("failed")) : Promise.resolve({ imageId }) });
-  harness.parcelHandlers.onParcelsLoaded([parcelA]);
-  await harness.parcelHandlers.onOpenParcel(parcelA);
-  await nextTick();
-  const photos = harness.uiState.updatedSavedPhotos.at(-1).photos;
-  assert.equal(photos[0].loadError, true);
-  assert.equal(photos[1].previewUrl, "blob:good.webp");
-});
-
-test("switching saved parcels ignores stale image completion", async () => {
-  const first = createDeferred();
-  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp" }] };
-  const parcelB = { ...parcel(PARCEL_B_ID, "Field B"), images: [{ id: "b.webp" }] };
-  const harness = createHarness({ imageLoadHandler: (_, imageId) => imageId === "a.webp"
-    ? first.promise : Promise.resolve({ imageId }) });
+test("switching saved parcels renders only each parcel's direct image links", async () => {
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp", linkImage: "https://drive.google.com/uc?export=view&id=a" }] };
+  const parcelB = { ...parcel(PARCEL_B_ID, "Field B"), images: [{ id: "b.webp", linkImage: "https://drive.google.com/uc?export=view&id=b" }] };
+  const harness = createHarness();
   harness.parcelHandlers.onParcelsLoaded([parcelA, parcelB]);
   await harness.parcelHandlers.onOpenParcel(parcelA);
   await harness.parcelHandlers.onOpenParcel(parcelB);
-  await nextTick();
-  first.resolve({ imageId: "a.webp" });
-  await nextTick();
-  assert.deepEqual(harness.uiState.updatedSavedPhotos.map((item) => item.parcelId), [PARCEL_B_ID]);
   assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.id, PARCEL_B_ID);
+  assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.photos[0].previewUrl,
+    "https://drive.google.com/uc?export=view&id=b");
 });
 
-test("reopening a saved parcel shares pending image requests and reuses the object URL cache", async () => {
-  const pending = createDeferred();
-  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp" }] };
-  const harness = createHarness({ imageLoadHandler: () => pending.promise });
+test("reopening saved parcel still makes no image-content proxy requests", async () => {
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp", linkImage: "https://drive.google.com/uc?export=view&id=a" }] };
+  const harness = createHarness();
   harness.parcelHandlers.onParcelsLoaded([parcelA]);
   await harness.parcelHandlers.onOpenParcel(parcelA);
   await harness.parcelHandlers.onOpenParcel(parcelA);
-  assert.equal(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob").length, 1);
-  pending.resolve({ imageId: "a.webp" });
-  await nextTick();
-  await harness.parcelHandlers.onOpenParcel(parcelA);
-  assert.equal(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob").length, 1);
+  assert.equal(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob").length, 0);
   assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.photosLoading, false);
-  assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.photos[0].previewUrl, "blob:a.webp");
+  assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.photos[0].previewUrl,
+    "https://drive.google.com/uc?export=view&id=a");
 });
 
-test("saved re-analysis renders its result before image content resolves", async () => {
-  const pending = createDeferred();
-  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp" }] };
-  const harness = createHarness({ imageLoadHandler: () => pending.promise });
+test("saved re-analysis renders direct links without waiting for image content", async () => {
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp", linkImage: "https://drive.google.com/uc?export=view&id=a" }] };
+  const harness = createHarness();
   harness.parcelHandlers.onParcelsLoaded([parcelA]);
   await harness.parcelHandlers.onAnalyzeParcel(parcelA);
   const result = harness.uiState.renderedParcelResults.at(-1);
   assert.equal(result.analysisStatus, "success");
-  assert.equal(result.photosLoading, true);
+  assert.equal(result.photosLoading, false);
+  assert.equal(result.photos[0].previewUrl, parcelA.images[0].linkImage);
   assert.equal(harness.uiState.updatedSavedPhotos.length, 0);
-  pending.resolve({ imageId: "a.webp" });
-  await nextTick();
-  assert.equal(harness.uiState.updatedSavedPhotos.at(-1).parcelId, PARCEL_A_ID);
 });
 
 test("reopening the list rebuilds owned parcel layers without duplicates", () => {

@@ -18,6 +18,16 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   test.setTimeout(120000);
   const forbidden = await prepareContext(context, { token });
   const errors = watchPageErrors(page);
+  const driveRequests = [];
+  let imageProxyRequests = 0;
+  await page.route(/^https:\/\/drive\.google\.com\/uc\?/, (route) => {
+    driveRequests.push(route.request().url());
+    return route.fulfill({ status: 200, contentType: "image/png", body: readFileSync(fixture) });
+  });
+  await page.route("**/api/parcels/*/images/*/content", (route) => {
+    imageProxyRequests += 1;
+    return route.abort();
+  });
   await context.addInitScript(() => {
     window.__revokedPhotoUrls = [];
     const revoke = URL.revokeObjectURL.bind(URL);
@@ -76,6 +86,11 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   const analyzedCoordinate = `${analysisPayload.representativePoint.latitude.toFixed(6)}, ${analysisPayload.representativePoint.longitude.toFixed(6)}`;
   await expect(result).toContainText(`พิกัดแปลง${analyzedCoordinate}`);
   await expect(result.locator(".parcel-photo-section .parcel-photo-item")).toHaveCount(2);
+  await result.locator(".parcel-photo-section .parcel-photo-item").first().click();
+  await expect(page.locator(".parcel-photo-viewer")).toBeVisible();
+  await expect(page.locator(".parcel-photo-viewer img")).toHaveAttribute("src", /^blob:/);
+  await page.getByRole("button", { name: "ปิดรูปภาพ" }).click();
+  await expect(page.locator(".parcel-photo-viewer")).toBeHidden();
   await expect(result.locator(".parcel-photo-section")).toBeVisible();
   await expect(result.locator(".parcel-photo-section")).toHaveClass(/parcel-result-card/);
   expect(await result.evaluate((node) => node.scrollWidth - node.clientWidth)).toBe(0);
@@ -144,24 +159,29 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
 
   await page.reload();
   await expect.poll(() => page.evaluate(() => window.MapLiffMode.isReady())).toBe(true);
-  let releaseImages;
-  const imageGate = new Promise((resolve) => { releaseImages = resolve; });
-  let imageRequests = 0;
-  await page.route("**/api/parcels/*/images/*/content", async (route) => {
-    imageRequests += 1;
-    await imageGate;
-    await route.continue();
-  });
   await page.locator("#saved-parcels-control-button").click();
   const card = page.locator(".saved-parcel-card").filter({ hasText: "PHOTO-E2E" });
   await card.locator(".saved-parcel-header").click();
   await card.getByRole("button", { name: "ดูแปลง" }).click();
   await expect(page.locator("#result-panel-content")).toContainText("PHOTO-E2E");
-  await expect(page.locator("#result-panel-content .parcel-photo-empty")).toHaveText("กำลังโหลดรูปภาพ...");
-  await expect.poll(() => imageRequests).toBe(2);
-  releaseImages();
   await expect(page.locator("#result-panel-content .parcel-photo-section img")).toHaveCount(2);
-  await page.unroute("**/api/parcels/*/images/*/content");
+  const firstSavedPhoto = page.locator("#result-panel-content .parcel-photo-item").first();
+  await firstSavedPhoto.scrollIntoViewIfNeeded();
+  await expect.poll(() => driveRequests.length).toBe(2);
+  expect(imageProxyRequests).toBe(0);
+  await expect(firstSavedPhoto.locator("img")).toHaveAttribute("src", JSON.parse(sheetRow[12])[0]);
+  await firstSavedPhoto.click();
+  await expect(page.locator(".parcel-photo-viewer")).toBeVisible();
+  await expect(page.locator(".parcel-photo-viewer img")).toHaveAttribute("src", JSON.parse(sheetRow[12])[0]);
+  await page.locator(".parcel-photo-viewer img").click();
+  await expect(page.locator(".parcel-photo-viewer")).toBeVisible();
+  await page.locator(".parcel-photo-viewer").click({ position: { x: 5, y: 5 } });
+  await expect(page.locator(".parcel-photo-viewer")).toBeHidden();
+  await firstSavedPhoto.click();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".parcel-photo-viewer")).toBeHidden();
+  expect(await page.evaluate(() => document.body.style.overflow)).toBe("");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
   await expect(page.locator("#result-panel-content")).toContainText(`พิกัดแปลง${sheetRow[7]}`);
   const updated = await request.patch(`${backendUrl}/api/parcels/${parcel.id}`, {
     headers: auth, data: { parcelName: "PHOTO-E2E-EDITED" },

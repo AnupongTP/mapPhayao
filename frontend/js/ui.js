@@ -2353,6 +2353,48 @@
     return section;
   }
 
+  let photoViewer = null;
+
+  function openParcelPhotoViewer(src, alt) {
+    if (!photoViewer) {
+      const overlay = createElement("div", "parcel-photo-viewer");
+      overlay.setAttribute("role", "dialog");
+      overlay.setAttribute("aria-modal", "true");
+      overlay.setAttribute("aria-label", "รูปภาพแปลงขนาดเต็ม");
+      const image = document.createElement("img");
+      const close = createElement("button", "parcel-photo-viewer-close");
+      close.type = "button";
+      close.setAttribute("aria-label", "ปิดรูปภาพ");
+      close.appendChild(uiIcons.create("close"));
+      overlay.append(image, close);
+      overlay.addEventListener("click", (event) => {
+        if (event.target === overlay) closeParcelPhotoViewer();
+      });
+      image.addEventListener("click", (event) => event.stopPropagation());
+      close.addEventListener("click", closeParcelPhotoViewer);
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !overlay.hidden) closeParcelPhotoViewer();
+      });
+      document.body.appendChild(overlay);
+      photoViewer = { overlay, image, close, previousOverflow: "", previousFocus: null };
+    }
+    photoViewer.previousFocus = document.activeElement;
+    photoViewer.previousOverflow = document.body.style.overflow;
+    photoViewer.image.src = src;
+    photoViewer.image.alt = alt;
+    photoViewer.overlay.hidden = false;
+    document.body.style.overflow = "hidden";
+    photoViewer.close.focus();
+  }
+
+  function closeParcelPhotoViewer() {
+    if (!photoViewer || photoViewer.overlay.hidden) return;
+    photoViewer.overlay.hidden = true;
+    photoViewer.image.removeAttribute("src");
+    document.body.style.overflow = photoViewer.previousOverflow;
+    photoViewer.previousFocus?.focus?.();
+  }
+
   function createParcelPhotoSection(photos, options = {}) {
     const section = createElement("section", "parcel-result-card parcel-photo-section");
     if (options.parcelId) section.dataset.parcelId = options.parcelId;
@@ -2371,13 +2413,22 @@
         strip.appendChild(createElement("p", "parcel-photo-load-error", `โหลดรูปภาพ ${index + 1} ไม่สำเร็จ`));
         return;
       }
+      const open = createElement("button", "parcel-photo-item parcel-photo-open");
+      open.type = "button";
+      open.disabled = true;
+      open.setAttribute("aria-label", `ขยายรูปภาพแปลง ${index + 1}`);
       const image = document.createElement("img");
-      image.className = "parcel-photo-item";
-      image.src = photo.previewUrl;
       image.alt = `รูปภาพแปลง ${index + 1}`;
       image.loading = "lazy";
       image.decoding = "async";
-      strip.appendChild(image);
+      image.addEventListener("load", () => { open.disabled = false; });
+      image.addEventListener("error", () => {
+        open.replaceWith(createElement("p", "parcel-photo-load-error", `โหลดรูปภาพ ${index + 1} ไม่สำเร็จ`));
+      });
+      open.addEventListener("click", () => openParcelPhotoViewer(image.src, image.alt));
+      open.appendChild(image);
+      image.src = photo.previewUrl || photo.linkImage;
+      strip.appendChild(open);
     });
     section.appendChild(strip);
     return section;

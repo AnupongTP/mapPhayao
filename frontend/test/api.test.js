@@ -67,15 +67,9 @@ test("parcel photo upload uses authenticated multipart without client owner fiel
   assert.deepEqual([...calls[0].options.body.keys()], ["image"]);
 });
 
-test("saved photo content uses authenticated backend proxy", async () => {
-  const { calls, MapApi } = createApiHarness();
-  const parcelId = "11111111-1111-4111-8111-111111111111";
-  const imageId = "22222222-2222-4222-8222-222222222222";
-  const blob = await MapApi.getParcelImageBlob(parcelId, imageId);
-  assert.equal(blob.type, "image/webp");
-  assert.equal(calls[0].url,
-    `https://backend.example.test/api/parcels/${parcelId}/images/${imageId}/content`);
-  assert.equal(calls[0].options.headers.Authorization, "Bearer test-id-token");
+test("normal saved photo display has no image-content API helper", () => {
+  const { MapApi } = createApiHarness();
+  assert.equal(MapApi.getParcelImageBlob, undefined);
 });
 
 test("sendLineLocationSummary posts map-click coordinates to the summary endpoint", async () => {

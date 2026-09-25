@@ -17,6 +17,7 @@ function createResponse(body, options = {}) {
   return {
     ok: options.ok ?? true,
     status: options.status ?? 200,
+    headers: { get: (name) => name.toLowerCase() === "retry-after" ? options.retryAfter ?? null : null },
     json: async () => body,
   };
 }
@@ -257,6 +258,133 @@ test("a failed provider request is retried and diagnostics omit coordinates and 
   } finally {
     console.warn = originalWarn;
   }
+});
+
+test("HTTP 429 honors bounded Retry-After seconds and applies cooldown across locations", async () => {
+  let time = 100000;
+  let calls = 0;
+  const events = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => events.push(args);
+  try {
+    const options = { now: () => time, isInsidePhayao: async () => true,
+      fetchImpl: async () => {
+        calls += 1;
+        return calls === 1 ? createResponse(null, { ok: false, status: 429, retryAfter: "120" })
+          : createResponse(validWeatherBody());
+      } };
+    const first = { latitude: 19.02, longitude: 99.97 };
+    const second = { latitude: 19.03, longitude: 99.98 };
+    assert.equal((await weatherService.getWeatherForLocation(first, options)).status, "UNAVAILABLE");
+    assert.deepEqual(events[0], ["weather-provider-unavailable", {
+      stage: "rate-limit", status: 429, retryAfterSeconds: 120,
+    }]);
+    assert.equal((await weatherService.getWeatherForLocation(second, options)).status, "UNAVAILABLE");
+    assert.equal(calls, 1);
+    time += 119000;
+    assert.equal((await weatherService.getWeatherForLocation(first, options)).status, "UNAVAILABLE");
+    assert.equal(calls, 1);
+    time += 1000;
+    assert.equal((await weatherService.getWeatherForLocation(second, options)).status, "AVAILABLE");
+    assert.equal(calls, 2);
+    assert.equal(JSON.stringify(events).includes("19.02"), false);
+    assert.equal(JSON.stringify(events).includes("SECRET"), false);
+  } finally { console.warn = originalWarn; }
+});
+
+test("missing, malformed, dated, and excessive Retry-After use safe cooldown values", async () => {
+  const parse = weatherService._private.retryAfterSeconds;
+  assert.equal(parse(null, 100000), 60);
+  assert.equal(parse("broken", 100000), 60);
+  assert.equal(parse("0", 100000), 60);
+  assert.equal(parse(new Date(190000).toUTCString(), 100000), 90);
+  assert.equal(parse("999999999", 100000), 300);
+  assert.equal(parse(new Date(100000 + 86400000).toUTCString(), 100000), 300);
+  for (const retryAfter of [null, "broken"]) {
+    weatherService.clearCache();
+    let time = 100000;
+    let calls = 0;
+    const originalWarn = console.warn;
+    const events = [];
+    console.warn = (...args) => events.push(args);
+    try {
+      const options = { now: () => time, isInsidePhayao: async () => true,
+        fetchImpl: async () => {
+          calls += 1;
+          return calls === 1 ? createResponse(null, { ok: false, status: 429, retryAfter })
+            : createResponse(validWeatherBody());
+        } };
+      const point = { latitude: 19.02, longitude: 99.97 };
+      await weatherService.getWeatherForLocation(point, options);
+      assert.equal(events[0][1].retryAfterSeconds, 60);
+      await weatherService.getWeatherForLocation(point, options);
+      assert.equal(calls, 1);
+      time += 60000;
+      assert.equal((await weatherService.getWeatherForLocation(point, options)).status, "AVAILABLE");
+      assert.equal(calls, 2);
+    } finally { console.warn = originalWarn; }
+  }
+});
+
+test("AVAILABLE results retain ten-minute cache while generic failures retry", async () => {
+  let time = 100000;
+  let calls = 0;
+  const options = { now: () => time, isInsidePhayao: async () => true,
+    fetchImpl: async () => {
+      calls += 1;
+      return calls === 1 ? createResponse(validWeatherBody())
+        : calls === 2 ? createResponse(null, { ok: false, status: 503 })
+          : createResponse(validWeatherBody());
+    } };
+  const point = { latitude: 19.02, longitude: 99.97 };
+  assert.equal((await weatherService.getWeatherForLocation(point, options)).status, "AVAILABLE");
+  time += 599999;
+  assert.equal((await weatherService.getWeatherForLocation(point, options)).status, "AVAILABLE");
+  assert.equal(calls, 1);
+  time += 1;
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    assert.equal((await weatherService.getWeatherForLocation(point, options)).status, "UNAVAILABLE");
+    assert.equal((await weatherService.getWeatherForLocation(point, options)).status, "AVAILABLE");
+    assert.equal(calls, 3);
+  } finally { console.warn = originalWarn; }
+});
+
+test("same-location concurrent callers share in-flight request and clear it on success or failure", async () => {
+  let calls = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const point = { latitude: 19.02, longitude: 99.97 };
+  const options = { isInsidePhayao: async () => true,
+    fetchImpl: async () => { calls += 1; await gate; return createResponse(validWeatherBody()); } };
+  const first = weatherService.getWeatherForLocation(point, options);
+  const second = weatherService.getWeatherForLocation({ latitude: 19.020001, longitude: 99.970001 }, options);
+  release();
+  assert.equal((await first).status, "AVAILABLE");
+  assert.equal((await second).status, "AVAILABLE");
+  assert.equal(calls, 1);
+  assert.equal((await weatherService.getWeatherForLocation(point, options)).status, "AVAILABLE");
+  assert.equal(calls, 1);
+
+  weatherService.clearCache();
+  let failCalls = 0;
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const failing = { isInsidePhayao: async () => true, fetchImpl: async () => {
+      failCalls += 1;
+      throw new Error("private provider details");
+    } };
+    const results = await Promise.all([
+      weatherService.getWeatherForLocation(point, failing),
+      weatherService.getWeatherForLocation(point, failing),
+    ]);
+    assert.deepEqual(results.map((item) => item.status), ["UNAVAILABLE", "UNAVAILABLE"]);
+    assert.equal(failCalls, 1);
+    await weatherService.getWeatherForLocation(point, failing);
+    assert.equal(failCalls, 2);
+  } finally { console.warn = originalWarn; }
 });
 
 test("outside Phayao and invalid coordinates do not call Open-Meteo", async () => {

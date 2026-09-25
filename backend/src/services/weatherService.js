@@ -5,8 +5,12 @@ const SOURCE = "Open-Meteo";
 const DEFAULT_TIMEOUT_MS = 5000;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 500;
+const DEFAULT_RATE_LIMIT_SECONDS = 60;
+const MAX_RATE_LIMIT_SECONDS = 5 * 60;
 
 const cache = new Map();
+const inFlight = new Map();
+let rateLimitedUntil = 0;
 
 function createWeatherResult(status, values = {}) {
   return {
@@ -133,19 +137,19 @@ function getCacheKey(latitude, longitude) {
   return `${Number(latitude).toFixed(4)},${Number(longitude).toFixed(4)}`;
 }
 
-function getCached(key) {
+function getCached(key, now) {
   const entry = cache.get(key);
   if (!entry) {
     return null;
   }
-  if (entry.expiresAt <= Date.now()) {
+  if (entry.expiresAt <= now) {
     cache.delete(key);
     return null;
   }
   return entry.value;
 }
 
-function setCached(key, value) {
+function setCached(key, value, now) {
   if (cache.size >= MAX_CACHE_ENTRIES) {
     const firstKey = cache.keys().next().value;
     if (firstKey) {
@@ -154,8 +158,20 @@ function setCached(key, value) {
   }
   cache.set(key, {
     value,
-    expiresAt: Date.now() + CACHE_TTL_MS,
+    expiresAt: now + CACHE_TTL_MS,
   });
+}
+
+function retryAfterSeconds(value, now) {
+  let seconds;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    seconds = Number(value.trim());
+  } else if (typeof value === "string") {
+    const date = Date.parse(value);
+    if (Number.isFinite(date)) seconds = Math.ceil((date - now) / 1000);
+  }
+  if (!Number.isFinite(seconds) || seconds < 1) return DEFAULT_RATE_LIMIT_SECONDS;
+  return Math.min(seconds, MAX_RATE_LIMIT_SECONDS);
 }
 
 async function isInsidePhayao(latitude, longitude) {
@@ -233,6 +249,7 @@ function normalizeWeatherResponse(body) {
 
 async function requestOpenMeteo(latitude, longitude, options = {}) {
   const fetchImpl = options.fetchImpl || fetch;
+  const now = options.now || Date.now;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
 
@@ -245,6 +262,14 @@ async function requestOpenMeteo(latitude, longitude, options = {}) {
       signal: controller.signal,
     });
 
+    if (response.status === 429) {
+      const seconds = retryAfterSeconds(response.headers?.get?.("retry-after"), now());
+      rateLimitedUntil = Math.max(rateLimitedUntil, now() + seconds * 1000);
+      console.warn("weather-provider-unavailable", {
+        stage: "rate-limit", status: 429, retryAfterSeconds: seconds,
+      });
+      return buildUnavailableResult();
+    }
     if (!response.ok) {
       console.warn("weather-provider-unavailable", {
         stage: "http", status: Number.isInteger(response.status) ? response.status : undefined,
@@ -288,18 +313,26 @@ async function getWeatherForLocation({ latitude, longitude }, options = {}) {
   }
 
   const cacheKey = getCacheKey(latitude, longitude);
-  const cached = getCached(cacheKey);
+  const now = options.now || Date.now;
+  const cached = getCached(cacheKey, now());
   if (cached) {
     return cached;
   }
-
-  const weather = await requestOpenMeteo(latitude, longitude, options);
-  if (weather.status === "AVAILABLE") setCached(cacheKey, weather);
-  return weather;
+  if (now() < rateLimitedUntil) return buildUnavailableResult();
+  const existing = inFlight.get(cacheKey);
+  if (existing) return existing;
+  const pending = requestOpenMeteo(latitude, longitude, options).then((weather) => {
+    if (weather.status === "AVAILABLE") setCached(cacheKey, weather, now());
+    return weather;
+  }).finally(() => inFlight.delete(cacheKey));
+  inFlight.set(cacheKey, pending);
+  return pending;
 }
 
 function clearCache() {
   cache.clear();
+  inFlight.clear();
+  rateLimitedUntil = 0;
 }
 
 module.exports = {
@@ -317,6 +350,7 @@ module.exports = {
     isValidCoordinate,
     getComparableTimestamp,
     getCacheKey,
+    retryAfterSeconds,
     requestOpenMeteo,
   },
 };

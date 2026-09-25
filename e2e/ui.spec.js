@@ -1,17 +1,81 @@
 const { test, expect } = require("@playwright/test");
+const { readFileSync } = require("node:fs");
+const path = require("node:path");
 const { prepareContext, watchPageErrors, openMap, panMap, expectVisualSnapshot } = require("./support");
 
-test("public privacy page and map link work at a mobile viewport without LIFF authentication", async ({ page, context }) => {
+const photoFixture = readFileSync(path.resolve(__dirname, "../geoserver/data_dir/styles/grass_fill.png"));
+
+test("public privacy page works without LIFF and map has no floating privacy link", async ({ page, context }) => {
   const forbidden = await prepareContext(context, { loggedIn: false });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
-  const link = page.getByRole("link", { name: "นโยบายความเป็นส่วนตัว" });
-  await expect(link).toBeVisible();
-  await expect(link).toHaveAttribute("href", "privacy.html");
-  await link.click();
+  await expect(page.getByRole("link", { name: "นโยบายความเป็นส่วนตัว" })).toHaveCount(0);
+  await page.goto("/privacy.html");
   await expect(page).toHaveURL(/\/privacy\.html$/);
   await expect(page.getByRole("heading", { name: "นโยบายความเป็นส่วนตัว" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
+  expect(forbidden).toEqual([]);
+});
+
+test("direct parcel photos fail independently and share one fullscreen viewer", async ({ page, context }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium");
+  const forbidden = await prepareContext(context);
+  await page.setViewportSize({ width: 390, height: 844 });
+  let releaseGood;
+  const goodGate = new Promise((resolve) => { releaseGood = resolve; });
+  let proxyCalls = 0;
+  await page.route("**/api/parcels/*/images/*/content", (route) => {
+    proxyCalls += 1;
+    return route.abort();
+  });
+  await page.route(/^https:\/\/drive\.google\.com\/uc\?/, async (route) => {
+    if (new URL(route.request().url()).searchParams.get("id") === "bad") {
+      return route.fulfill({ status: 404, body: "" });
+    }
+    await goodGate;
+    return route.fulfill({ status: 200, contentType: "image/png", body: photoFixture });
+  });
+  await openMap(page);
+  const links = ["bad", "good"].map((id) => `https://drive.google.com/uc?export=view&id=${id}`);
+  await page.evaluate((urls) => window.MapUi.renderSavedParcelDetail({
+    id: "11111111-1111-4111-8111-111111111111", parcelName: "DIRECT-LINK-TEST",
+    photos: urls.map((linkImage, index) => ({ id: `${index}.webp`, linkImage, previewUrl: linkImage })),
+  }), links);
+  const result = page.locator("#result-panel-content");
+  await expect(result).toContainText("DIRECT-LINK-TEST");
+  await result.locator(".parcel-photo-section").scrollIntoViewIfNeeded();
+  await expect(result).toContainText("โหลดรูปภาพ 1 ไม่สำเร็จ");
+  await expect(result.locator(".parcel-photo-item")).toHaveCount(1);
+  releaseGood();
+  const good = result.locator(".parcel-photo-item");
+  await expect(good).toBeEnabled();
+  await page.screenshot({ path: testInfo.outputPath("direct-photos-mobile.png") });
+  await good.click();
+  const viewer = page.locator(".parcel-photo-viewer");
+  await expect(viewer).toBeVisible();
+  await expect(viewer.locator("img")).toHaveAttribute("src", links[1]);
+  await page.screenshot({ path: testInfo.outputPath("photo-viewer-mobile.png") });
+  const layering = await page.evaluate(() => ({
+    overlay: parseInt(getComputedStyle(document.querySelector(".parcel-photo-viewer")).zIndex, 10),
+    result: parseInt(getComputedStyle(document.querySelector("#result-panel")).zIndex, 10),
+    position: getComputedStyle(document.querySelector(".parcel-photo-viewer")).position,
+  }));
+  expect(layering.position).toBe("fixed");
+  expect(layering.overlay).toBeGreaterThan(layering.result);
+  await viewer.locator("img").click();
+  await expect(viewer).toBeVisible();
+  await page.getByRole("button", { name: "ปิดรูปภาพ" }).click();
+  await expect(viewer).toBeHidden();
+  await good.click();
+  await viewer.click({ position: { x: 5, y: 5 } });
+  await expect(viewer).toBeHidden();
+  await good.click();
+  await page.keyboard.press("Escape");
+  await expect(viewer).toBeHidden();
+  await expect(viewer).toHaveCount(1);
+  expect(await page.evaluate(() => document.body.style.overflow)).toBe("");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
+  expect(proxyCalls).toBe(0);
   expect(forbidden).toEqual([]);
 });
 

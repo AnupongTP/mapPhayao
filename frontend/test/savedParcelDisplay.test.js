@@ -101,10 +101,10 @@ test("photo section shares the result card in analyzed and saved parcel views", 
   assert.match(savedBlock, /createParcelPhotoSection\(parcel\?\.photos,/);
 });
 
-test("public privacy policy and homepage link require no runtime authentication", () => {
+test("public privacy page remains available without a floating map link", () => {
   const index = fs.readFileSync(path.join(frontendRoot, "index.html"), "utf8");
   const privacy = fs.readFileSync(path.join(frontendRoot, "privacy.html"), "utf8");
-  assert.match(index, /<a class="privacy-policy-link" href="privacy\.html">นโยบายความเป็นส่วนตัว<\/a>/);
+  assert.doesNotMatch(index, /privacy-policy-link/);
   assert.match(privacy, /<html lang="th">/);
   assert.match(privacy, /href="index\.html"/);
   assert.doesNotMatch(privacy, /<script|liff\.init|Authorization|refresh_token|private_key/i);
