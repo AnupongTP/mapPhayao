@@ -9,8 +9,7 @@ async function mirrorUser(userId, google) {
   if (result.rows[0]) await google.upsertUser(result.rows[0]);
 }
 
-async function mirrorParcel(parcelId, google) {
-  if (!google?.enabled) return;
+async function getParcelMirrorRecord(parcelId) {
   const result = await db.query(`
     SELECT p.id, p.owner_user_id, u.display_name, p.parcel_code, p.parcel_name,
       p.crop_type, p.rice_variety,
@@ -28,7 +27,12 @@ async function mirrorParcel(parcelId, google) {
     ) representative
     WHERE p.id = $1;
   `, [parcelId]);
-  const parcel = result.rows[0];
+  return result.rows[0] || null;
+}
+
+async function mirrorParcel(parcelId, google) {
+  if (!google?.enabled) return;
+  const parcel = await getParcelMirrorRecord(parcelId);
   if (!parcel) return;
   await google.upsertParcel(parcel);
 }
@@ -39,4 +43,4 @@ async function bestEffortMirror(entity, operation, context, work) {
   }
 }
 
-module.exports = { mirrorUser, mirrorParcel, bestEffortMirror };
+module.exports = { mirrorUser, mirrorParcel, getParcelMirrorRecord, bestEffortMirror };

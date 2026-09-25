@@ -46,14 +46,24 @@ function createFakeGoogleParcels() {
       parcels.set(parcel.parcel_code, parcelCells(parcel, images));
     }); },
     getParcelImages(code, ownerId) { return serializeWrite(() => ownedImages(code, ownerId)); },
-    appendParcelImage(code, ownerId, fileName, fileId) { return serializeWrite(() => {
-      const images = ownedImages(code, ownerId);
-      if (images.some((item) => item.fileName === fileName)) throw new Error("Duplicate parcel image");
+    appendParcelImage(code, ownerId, fileName, fileId, parcelRecord) { return serializeWrite(() => {
+      const row = parcels.get(code);
+      if (!row && (!parcelRecord || parcelRecord.owner_user_id !== ownerId ||
+        parcelRecord.parcel_code !== code)) throw new Error("Parcel Sheet row is missing");
+      const images = row ? ownedImages(code, ownerId) : [];
+      const existing = images.find((item) => item.fileName === fileName);
+      if (existing) {
+        if (existing.fileId !== fileId) throw new Error("Duplicate parcel image");
+        return existing;
+      }
       const image = { id: fileName, fileName, linkImage: imageLink(fileId), fileId };
       images.push(image);
-      const row = parcels.get(code);
-      row[11] = JSON.stringify(images.map((item) => item.fileName));
-      row[12] = JSON.stringify(images.map((item) => item.linkImage));
+      if (row) {
+        row[11] = JSON.stringify(images.map((item) => item.fileName));
+        row[12] = JSON.stringify(images.map((item) => item.linkImage));
+      } else {
+        parcels.set(code, parcelCells(parcelRecord, images));
+      }
       return image;
     }); },
     async deleteParcel(code) { parcels.delete(code); },

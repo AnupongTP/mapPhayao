@@ -6,17 +6,17 @@ const vm = require("node:vm");
 const { createHash, createHmac } = require("node:crypto");
 const { createAppsScriptDriveBridge } = require("../src/services/appsScriptDriveBridge");
 
-test("checked-in Apps Script shares new uploads before success and keeps signed Drive operations", async () => {
+test("checked-in Apps Script creates private uploads and keeps signed Drive operations", async () => {
   const source = fs.readFileSync(path.join(__dirname, "../../scripts/google-drive-apps-script/Code.gs"), "utf8");
   const files = new Map();
   const nonces = new Map();
   const events = [];
   const replies = [];
   let nextId = 1;
-  let sharingFails = false;
-  let cleanupFails = false;
+  let creationFails = false;
   const folder = { getId: () => "owned-folder", createFile(blob) {
     events.push("create");
+    if (creationFails) throw new Error("private creation failure");
     const id = `file_${nextId++}`;
     const file = {
       getId: () => { events.push("fileId"); return id; },
@@ -27,13 +27,7 @@ test("checked-in Apps Script shares new uploads before success and keeps signed 
       isTrashed: () => file.trashed || false,
       setTrashed(value) {
         events.push("trash");
-        if (cleanupFails) throw new Error("private cleanup failure");
         file.trashed = value;
-      },
-      setSharing(access, permission) {
-        events.push("share");
-        if (sharingFails) throw new Error("private sharing failure");
-        file.sharing = { access, permission };
       },
       getMimeType: () => blob.mimeType,
       getBlob: () => ({ getBytes: () => blob.bytes }),
@@ -62,8 +56,7 @@ test("checked-in Apps Script shares new uploads before success and keeps signed 
       base64Decode: (value) => [...Buffer.from(value, "base64")],
       newBlob: (bytes, mimeType, name) => ({ bytes, mimeType, name }),
     },
-    DriveApp: { Access: { ANYONE_WITH_LINK: "anyone-with-link" }, Permission: { VIEW: "view" },
-      getFolderById: () => folder, getFileById(id) { return files.get(id); } },
+    DriveApp: { getFolderById: () => folder, getFileById(id) { return files.get(id); } },
   });
   vm.runInContext(source, context);
   const requests = [];
@@ -77,8 +70,8 @@ test("checked-in Apps Script shares new uploads before success and keeps signed 
   });
   const id = await bridge.uploadImage(Buffer.from("WEBP"), "a.webp");
   assert.equal(id, "file_1");
-  assert.deepEqual(events.slice(0, 4), ["create", "share", "fileId", "reply"]);
-  assert.deepEqual(files.get(id).sharing, { access: "anyone-with-link", permission: "view" });
+  assert.deepEqual(events.slice(0, 3), ["create", "fileId", "reply"]);
+  assert.equal(source.includes("setSharing"), false);
   assert.deepEqual(replies[0], { success: true, fileId: id });
   const chunks = [];
   for await (const chunk of await bridge.getImage(id)) chunks.push(chunk);
@@ -93,16 +86,11 @@ test("checked-in Apps Script shares new uploads before success and keeps signed 
   files.set("foreign", { isTrashed: () => false, getParents: () => ({ hasNext: () => false }) });
   await assert.rejects(() => bridge.getImage("foreign"), { bridgeCategory: "rejected" });
 
-  sharingFails = true;
+  creationFails = true;
   const beforeFailure = events.length;
   await assert.rejects(() => bridge.uploadImage(Buffer.from("WEBP"), "b.webp"),
     { bridgeCategory: "rejected" });
-  assert.deepEqual(events.slice(beforeFailure), ["create", "share", "trash", "reply"]);
-  assert.equal(files.get("file_2").trashed, true);
-  assert.deepEqual(replies.at(-1), { success: false, error: "operation-failed" });
-  cleanupFails = true;
-  await assert.rejects(() => bridge.uploadImage(Buffer.from("WEBP"), "c.webp"),
-    { bridgeCategory: "rejected" });
+  assert.deepEqual(events.slice(beforeFailure), ["create", "reply"]);
   assert.deepEqual(replies.at(-1), { success: false, error: "operation-failed" });
   assert.equal(replies.some((reply) => JSON.stringify(reply).includes("private")), false);
 });

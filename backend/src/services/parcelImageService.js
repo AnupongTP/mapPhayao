@@ -8,6 +8,9 @@ const { logGoogleFailure, tagGoogleError } = require("../utils/googleError");
 const MAX_RAW_BYTES = 12 * 1024 * 1024;
 const MAX_LONG_EDGE = 1600;
 const WEBP_QUALITY = 75;
+const RETRYABLE_SHEET_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const RETRYABLE_SHEET_CODES = new Set(["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN"]);
+const RETRYABLE_SHEET_STAGES = new Set(["sheets-header-check", "sheets-read", "sheets-append-image"]);
 
 async function listOwnedImages(parcelId, ownerUserId, google) {
   const parcel = await parcelService.getOwnedParcelById(parcelId, ownerUserId);
@@ -44,14 +47,25 @@ async function uploadOwnedImage(parcelId, ownerUserId, file, google) {
   if (!google?.enabled) throw createHttpError(503, "ยังไม่ได้ตั้งค่าบริการรูปภาพแปลง");
   const parcel = await parcelService.getOwnedParcelById(parcelId, ownerUserId);
   const normalized = await normalizeImage(file);
-  await parcelMirrorService.mirrorParcel(parcel.id, google);
+  const mirrorRecord = await parcelMirrorService.getParcelMirrorRecord(parcel.id);
+  if (!mirrorRecord || mirrorRecord.owner_user_id !== ownerUserId || mirrorRecord.parcel_code !== parcel.parcelCode) {
+    throw createHttpError(404, "Parcel not found");
+  }
   const timestamp = new Date().toISOString().replace(/[-:.]/g, "");
   const fileName = `${parcel.parcelCode}_${timestamp}_${randomBytes(5).toString("hex")}.webp`;
   const driveFileId = await google.uploadImage(normalized.bytes, fileName);
   try {
-    const { fileId, ...image } = await google.appendParcelImage(
-      parcel.parcelCode, ownerUserId, fileName, driveFileId,
-    );
+    let stored;
+    try {
+      stored = await google.appendParcelImage(parcel.parcelCode, ownerUserId, fileName, driveFileId, mirrorRecord);
+    } catch (error) {
+      const status = Number(error?.response?.status ?? error?.statusCode ?? error?.code);
+      if (!RETRYABLE_SHEET_STAGES.has(error?.googleStage) ||
+        (!RETRYABLE_SHEET_STATUSES.has(status) && !RETRYABLE_SHEET_CODES.has(error?.code))) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      stored = await google.appendParcelImage(parcel.parcelCode, ownerUserId, fileName, driveFileId, mirrorRecord);
+    }
+    const { fileId, ...image } = stored;
     return image;
   } catch (error) {
     try { await google.deleteImage(driveFileId); } catch (cleanupError) {

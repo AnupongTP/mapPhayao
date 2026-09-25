@@ -229,20 +229,31 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
         return parseParcelImages(row.cells);
       }));
     },
-    appendParcelImage(parcelCode, ownerUserId, fileName, fileId) {
+    appendParcelImage(parcelCode, ownerUserId, fileName, fileId, parcelRecord) {
       return atGoogleStage("sheets-append-image", () => serializeWrite(async () => {
         await assertParcelHeaders();
         const row = await findRow(SPREADSHEET_TABS.parcels, parcelCode);
-        if (!row) throw new Error("Parcel Sheet row is missing");
-        if (row.cells[0] !== ownerUserId) throw new Error("Parcel Sheet owner mismatch");
-        const images = parseParcelImages(row.cells);
-        if (images.some((image) => image.fileName === fileName)) throw new Error("Duplicate parcel image");
+        if (row && row.cells[0] !== ownerUserId) throw new Error("Parcel Sheet owner mismatch");
+        if (!row && (!parcelRecord || parcelRecord.owner_user_id !== ownerUserId ||
+          parcelRecord.parcel_code !== parcelCode)) throw new Error("Parcel Sheet row is missing");
+        const images = row ? parseParcelImages(row.cells) : [];
+        const existing = images.find((item) => item.fileName === fileName);
+        if (existing) {
+          if (existing.fileId !== fileId) throw new Error("Duplicate parcel image");
+          return existing;
+        }
         const image = { id: fileName, fileName, linkImage: imageLink(fileId), fileId };
         images.push(image);
-        await sheets.spreadsheets.values.update({ spreadsheetId,
-          range: `parcels!L${row.number}:M${row.number}`, valueInputOption: "RAW",
-          requestBody: { values: [[JSON.stringify(images.map((item) => item.fileName)),
-            JSON.stringify(images.map((item) => item.linkImage))]] } });
+        if (row) {
+          await sheets.spreadsheets.values.update({ spreadsheetId,
+            range: `parcels!L${row.number}:M${row.number}`, valueInputOption: "RAW",
+            requestBody: { values: [[JSON.stringify(images.map((item) => item.fileName)),
+              JSON.stringify(images.map((item) => item.linkImage))]] } });
+        } else {
+          await sheets.spreadsheets.values.append({ spreadsheetId, range: "parcels!A:P",
+            valueInputOption: "RAW", insertDataOption: "INSERT_ROWS",
+            requestBody: { values: [parcelCells(parcelRecord, images)] } });
+        }
         return image;
       }));
     },

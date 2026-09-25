@@ -1,5 +1,6 @@
 const path = require("node:path");
 const { readFileSync } = require("node:fs");
+const sharp = require("../backend/node_modules/sharp");
 const { test, expect } = require("@playwright/test");
 const db = require("../backend/src/config/database");
 const { backendUrl, prepareContext, watchPageErrors, openMap, panMap, drawMobileParcel } = require("./support");
@@ -13,6 +14,37 @@ test.beforeAll(() => {
     throw new Error("Refusing non-local parcel photo E2E database");
   }
 });
+
+test("mobile browser uploads prepared WebP bytes instead of the large camera original", async ({ page, context }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium");
+  const forbidden = await prepareContext(context, { token });
+  const original = await sharp({ create: { width: 3000, height: 1800, channels: 3,
+    background: "green" } }).jpeg({ quality: 95 }).toBuffer();
+  let posted;
+  await page.route("**/api/parcels/*/images", (route) => {
+    posted = route.request().postDataBuffer();
+    return route.fulfill({ status: 201, contentType: "application/json",
+      body: JSON.stringify({ image: { id: "prepared.webp" } }) });
+  });
+  await openMap(page, true);
+  await expect.poll(() => page.evaluate(() => window.MapLiffMode.isReady())).toBe(true);
+  const result = await page.evaluate(async (bytes) => {
+    const file = new File([new Uint8Array(bytes)], "camera.jpg", { type: "image/jpeg" });
+    const prepared = await window.MapParcelPhotoProcessing.prepareFile(file);
+    const image = await createImageBitmap(prepared);
+    await window.MapApi.uploadParcelImage("11111111-1111-4111-8111-111111111111", prepared);
+    return { inputBytes: file.size, uploadBytes: prepared.size, type: prepared.type,
+      width: image.width, height: image.height };
+  }, [...original]);
+  expect(result.type).toBe("image/webp");
+  expect(result.width).toBe(1600);
+  expect(result.height).toBe(960);
+  expect(result.uploadBytes).toBeLessThan(result.inputBytes);
+  expect(posted.length).toBeLessThan(original.length);
+  expect(posted.toString("utf8")).toContain("Content-Type: image/webp");
+  expect(forbidden).toEqual([]);
+});
+
 test("mobile parcel photos stay local until save, then persist through fake Google", async ({ page, context, request }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium");
   test.setTimeout(120000);
@@ -94,12 +126,22 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   expect(await result.evaluate((node) => node.scrollWidth - node.clientWidth)).toBe(0);
   await page.locator("#mobile-parcel-save-button").click();
   const sheet = page.locator("#parcel-save-sheet");
+  const uploadProgress = [];
+  await page.route("**/api/parcels/*/images", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    uploadProgress.push(route.request().url());
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    return route.continue();
+  });
   const created = page.waitForResponse((response) => response.url().endsWith("/api/parcels") && response.request().method() === "POST");
   await sheet.locator('button[type="submit"]').click();
+  await expect(sheet.locator("#parcel-save-status")).toContainText("กำลังอัปโหลดรูป 1/2");
+  await expect(sheet.locator("#parcel-save-status")).toContainText("กำลังอัปโหลดรูป 2/2");
   const parcel = (await (await created).json()).parcel;
   expect(parcel.representativePoint).not.toBeNull();
   await expect(sheet).toHaveCount(0);
-  expect(await page.evaluate(() => window.__revokedPhotoUrls.length)).toBe(3);
+  expect(uploadProgress).toHaveLength(2);
+  expect(await page.evaluate(() => window.__revokedPhotoUrls.length)).toBe(5);
   const detail = await request.get(`${backendUrl}/api/parcels/${parcel.id}`, { headers: auth });
   expect(detail.status()).toBe(200);
   expect((await detail.json()).parcel.images).toHaveLength(2);
@@ -252,7 +294,7 @@ test("failed photo upload keeps saved parcel and retries without duplicate creat
   await hud.locator(".mobile-parcel-draw-add").click();
   await hud.locator(".mobile-parcel-draw-finish").click();
   const modal = page.locator(".parcel-modal");
-  await modal.locator('input[type="file"][multiple]').setInputFiles(fixture);
+  await modal.locator('input[type="file"][multiple]').setInputFiles([fixture, fixture]);
   await modal.locator('input[type="text"]').fill("PHOTO-RETRY-E2E");
   const analyze = page.waitForResponse((response) => response.url().includes("/api/area-analysis/polygon"));
   await modal.getByRole("button", { name: "เริ่มวิเคราะห์" }).click();
@@ -261,6 +303,10 @@ test("failed photo upload keeps saved parcel and retries without duplicate creat
   expect((await request.post(`${backendUrl}/__e2e__/google/fail-next-upload`)).status()).toBe(200);
   await page.locator("#mobile-parcel-save-button").click();
   const sheet = page.locator("#parcel-save-sheet");
+  let imageAttempts = 0;
+  page.on("request", (item) => {
+    if (/\/api\/parcels\/[^/]+\/images$/.test(item.url()) && item.method() === "POST") imageAttempts += 1;
+  });
   const createResponse = page.waitForResponse((response) => response.url().endsWith("/api/parcels") && response.request().method() === "POST");
   await sheet.locator('button[type="submit"]').click();
   const parcel = (await (await createResponse).json()).parcel;
@@ -268,10 +314,11 @@ test("failed photo upload keeps saved parcel and retries without duplicate creat
   const beforeRetry = await db.query("SELECT COUNT(*)::int AS count FROM app.parcels WHERE id = $1", [parcel.id]);
   expect(beforeRetry.rows[0].count).toBe(1);
   const failedGoogle = await (await request.get(`${backendUrl}/__e2e__/google`)).json();
-  expect(failedGoogle.files).toHaveLength(0);
+  expect(imageAttempts).toBe(2);
+  expect(failedGoogle.files).toHaveLength(1);
   const failedRow = failedGoogle.parcels.find((row) => row[2] === parcel.parcelCode);
-  expect(failedRow[11]).toBe("[]");
-  expect(failedRow[12]).toBe("[]");
+  expect(JSON.parse(failedRow[11])).toHaveLength(1);
+  expect(JSON.parse(failedRow[12])).toHaveLength(1);
   let createAttempts = 0;
   page.on("request", (item) => {
     if (item.url().endsWith("/api/parcels") && item.method() === "POST") createAttempts += 1;
@@ -279,9 +326,10 @@ test("failed photo upload keeps saved parcel and retries without duplicate creat
   await sheet.locator('button[type="submit"]').click();
   await expect(sheet).toHaveCount(0);
   expect(createAttempts).toBe(0);
-  expect((await (await request.get(`${backendUrl}/__e2e__/google`)).json()).files).toHaveLength(1);
+  expect(imageAttempts).toBe(3);
+  expect((await (await request.get(`${backendUrl}/__e2e__/google`)).json()).files).toHaveLength(2);
   const detail = await request.get(`${backendUrl}/api/parcels/${parcel.id}`, { headers: auth });
-  expect((await detail.json()).parcel.images).toHaveLength(1);
+  expect((await detail.json()).parcel.images).toHaveLength(2);
   expect(forbidden).toEqual([]);
   expect(errors).toEqual([
     "Failed to load resource: the server responded with a status of 500 (Internal Server Error)",

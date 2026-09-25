@@ -212,9 +212,9 @@ test("failed Sheet append triggers a signed Apps Script delete of the uploaded f
     } };
   } });
   const originalLookup = parcelService.getOwnedParcelById;
-  const originalMirror = parcelMirrorService.mirrorParcel;
+  const originalLookupRecord = parcelMirrorService.getParcelMirrorRecord;
   parcelService.getOwnedParcelById = async () => ({ id: "parcel-id", parcelCode: "PY-1" });
-  parcelMirrorService.mirrorParcel = async () => {};
+  parcelMirrorService.getParcelMirrorRecord = async () => ({ owner_user_id: "owner", parcel_code: "PY-1" });
   try {
     const buffer = await sharp({ create: { width: 4, height: 4, channels: 3,
       background: "green" } }).png().toBuffer();
@@ -229,7 +229,7 @@ test("failed Sheet append triggers a signed Apps Script delete of the uploaded f
     assert.equal(operations[0].filename.endsWith(".webp"), true);
   } finally {
     parcelService.getOwnedParcelById = originalLookup;
-    parcelMirrorService.mirrorParcel = originalMirror;
+    parcelMirrorService.getParcelMirrorRecord = originalLookupRecord;
   }
 });
 

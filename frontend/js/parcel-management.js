@@ -245,7 +245,7 @@
       setStatus(status, idPrefix === "parcel-save" ? TEXT.saving : TEXT.updating);
 
       try {
-        await onSubmit(metadata);
+        await onSubmit(metadata, (message) => setStatus(status, message));
         setStatus(status, idPrefix === "parcel-save" ? TEXT.saved : TEXT.updated, "success");
         window.setTimeout(() => closeSheet(backdrop), 700);
       } catch (error) {
@@ -322,9 +322,9 @@
       if (!(pendingPhotos && state.savedParcelId) && !window.MapParcelState.canSaveAnalyzedParcel(parcel)) {
         return;
       }
-      openSaveSheet(parcel, async (metadata) => {
+      openSaveSheet(parcel, async (metadata, onProgress) => {
         if (typeof options.onSave === "function") {
-          await options.onSave(metadata);
+          await options.onSave(metadata, onProgress);
         }
       });
     });

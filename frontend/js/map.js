@@ -540,7 +540,7 @@
     }
 
     window.MapParcelManagement.renderSaveAction(parcel, {
-      onSave: (metadata) => saveTemporaryParcel(parcel.id, metadata),
+      onSave: (metadata, onProgress) => saveTemporaryParcel(parcel.id, metadata, onProgress),
     });
   }
 
@@ -1280,7 +1280,7 @@
     finishSavedBoundaryEdit(options);
   }
 
-  async function saveTemporaryParcel(parcelId, metadata) {
+  async function saveTemporaryParcel(parcelId, metadata, onProgress = () => {}) {
     const parcel = temporaryParcels.get(parcelId);
     if (!parcel) {
       throw new Error("ไม่พบแปลงชั่วคราว");
@@ -1312,13 +1312,18 @@
       }
     }
 
+    const pendingPhotos = (parcel.photos || []).filter((photo) => !photo.image);
     let failed = 0;
-    for (const photo of parcel.photos || []) {
-      if (photo.image) continue;
+    for (const [index, photo] of pendingPhotos.entries()) {
+      const count = index + 1;
       try {
-        photo.image = await window.MapApi.uploadParcelImage(parcel.savedParcelId, photo.file);
+        onProgress(`กำลังเตรียมรูป ${count}/${pendingPhotos.length}...`);
+        photo.uploadFile ||= await window.MapParcelPhotoProcessing.prepareFile(photo.file);
+        onProgress(`กำลังอัปโหลดรูป ${count}/${pendingPhotos.length}...`);
+        photo.image = await window.MapApi.uploadParcelImage(parcel.savedParcelId, photo.uploadFile);
       } catch (error) {
         failed += 1;
+        onProgress(`รูปที่ ${count} อัปโหลดไม่สำเร็จ`);
       }
     }
     if (failed) {

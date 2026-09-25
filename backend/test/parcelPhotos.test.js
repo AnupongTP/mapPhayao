@@ -141,33 +141,130 @@ test("fake Google integration stores only local bytes and mirrors row cells", as
   assert.deepEqual(fake.snapshot().parcels, []);
 });
 
+test("photo append restores a missing full Sheet row and retries are idempotent", async () => {
+  const rows = [];
+  const calls = [];
+  const google = {
+    auth: { GoogleAuth: class {} },
+    sheets() { return { spreadsheets: { values: {
+      async get({ range }) {
+        calls.push(`get:${range}`);
+        return { data: { values: range === "parcels!A1:P1" ? [PARCEL_HEADERS] : rows } };
+      },
+      async append({ requestBody }) {
+        calls.push("append");
+        rows.push(requestBody.values[0]);
+      },
+      async update({ requestBody }) {
+        calls.push("update");
+        rows[0].splice(11, 2, ...requestBody.values[0]);
+      },
+    } } }; },
+  };
+  const integration = createGoogleParcelIntegration({ GOOGLE_MIRROR_ENABLED: "true",
+    GOOGLE_SERVICE_ACCOUNT_JSON: "{}", GOOGLE_SHEETS_SPREADSHEET_ID: "fake-sheet",
+  }, google);
+  const record = { owner_user_id: "owner", parcel_code: "PY-1", parcel_name: "Field",
+    crop_type: "rice", geometry: { type: "Polygon", coordinates: [] }, area_sqm: 1600, area_rai: 1 };
+  await assert.rejects(() => integration.appendParcelImage("PY-1", "other", "a.webp", "file_a", record),
+    /row is missing/);
+  const first = await integration.appendParcelImage("PY-1", "owner", "a.webp", "file_a", record);
+  assert.equal(first.fileId, "file_a");
+  assert.equal(rows[0].length, 16);
+  assert.equal(rows[0][3], "Field");
+  assert.deepEqual(JSON.parse(rows[0][11]), ["a.webp"]);
+  assert.deepEqual(JSON.parse(rows[0][12]), [imageLink("file_a")]);
+  assert.deepEqual(await integration.appendParcelImage("PY-1", "owner", "a.webp", "file_a", record), first);
+  await assert.rejects(() => integration.appendParcelImage("PY-1", "owner", "a.webp", "different", record),
+    /Duplicate parcel image/);
+  await integration.appendParcelImage("PY-1", "owner", "b.webp", "file_b", record);
+  assert.deepEqual(JSON.parse(rows[0][11]), ["a.webp", "b.webp"]);
+  assert.deepEqual(JSON.parse(rows[0][12]), [imageLink("file_a"), imageLink("file_b")]);
+  assert.equal(calls.filter((call) => call === "append").length, 1);
+  assert.equal(calls.filter((call) => call === "update").length, 1);
+});
+
+test("transient Sheet retry reuses one Drive upload and never retries auth failures", async () => {
+  const mirrorService = require("../src/services/parcelMirrorService");
+  const originalParcelLookup = parcelService.getOwnedParcelById;
+  const originalLookupRecord = mirrorService.getParcelMirrorRecord;
+  const ownerId = "22222222-2222-4222-8222-222222222222";
+  const record = { owner_user_id: ownerId, parcel_code: "PY-1" };
+  parcelService.getOwnedParcelById = async () => ({ id: "parcel-id", parcelCode: "PY-1" });
+  mirrorService.getParcelMirrorRecord = async () => record;
+  const buffer = await sharp({ create: { width: 8, height: 8, channels: 3,
+    background: "green" } }).png().toBuffer();
+  let uploads = 0;
+  let appends = 0;
+  let deletions = 0;
+  try {
+    const result = await parcelImageService.uploadOwnedImage("parcel-id", ownerId, { buffer }, {
+      enabled: true,
+      async uploadImage() { uploads += 1; return "file_a"; },
+      async appendParcelImage(_code, _owner, filename, fileId, fallbackRecord) {
+        appends += 1;
+        assert.equal(fallbackRecord, record);
+        if (appends === 1) {
+          const error = tagGoogleError(new Error("temporary Sheet response failure"), "sheets-append-image");
+          error.statusCode = 503;
+          throw error;
+        }
+        return { id: filename, fileName: filename, linkImage: imageLink(fileId), fileId };
+      },
+      async deleteImage() { deletions += 1; },
+    });
+    assert.equal(result.id.endsWith(".webp"), true);
+    assert.deepEqual([uploads, appends, deletions], [1, 2, 0]);
+    appends = 0;
+    await assert.rejects(() => parcelImageService.uploadOwnedImage("parcel-id", ownerId, { buffer }, {
+      enabled: true,
+      async uploadImage() { uploads += 1; return "file_b"; },
+      async appendParcelImage() {
+        appends += 1;
+        const error = tagGoogleError(new Error("denied"), "sheets-append-image");
+        error.statusCode = 403;
+        throw error;
+      },
+      async deleteImage() { deletions += 1; },
+    }), { statusCode: 403 });
+    assert.deepEqual([uploads, appends, deletions], [2, 1, 1]);
+  } finally {
+    parcelService.getOwnedParcelById = originalParcelLookup;
+    mirrorService.getParcelMirrorRecord = originalLookupRecord;
+  }
+});
+
 test("Drive failure leaves Sheet unchanged; Sheet failure deletes uploaded Drive file", async () => {
   const originalParcelLookup = parcelService.getOwnedParcelById;
-  const originalMirror = require("../src/services/parcelMirrorService").mirrorParcel;
+  const mirrorService = require("../src/services/parcelMirrorService");
+  const originalLookupRecord = mirrorService.getParcelMirrorRecord;
   const bytes = await sharp({ create: { width: 20, height: 10, channels: 3, background: "green" } }).png().toBuffer();
   const file = { buffer: bytes };
   const parcelId = "11111111-1111-4111-8111-111111111111";
   const ownerId = "22222222-2222-4222-8222-222222222222";
   const calls = [];
   parcelService.getOwnedParcelById = async () => ({ id: parcelId, parcelCode: "PY-2026-0001" });
-  require("../src/services/parcelMirrorService").mirrorParcel = async () => { calls.push("mirror"); };
+  mirrorService.getParcelMirrorRecord = async () => {
+    calls.push("lookup-record");
+    return { owner_user_id: ownerId, parcel_code: "PY-2026-0001" };
+  };
   try {
     await assert.rejects(() => parcelImageService.uploadOwnedImage(parcelId, ownerId, file, {
       enabled: true,
       async uploadImage() { throw new Error("Drive unavailable"); },
       async deleteImage() { calls.push("cleanup"); },
     }), /Drive unavailable/);
-    assert.deepEqual(calls, ["mirror"]);
+    assert.deepEqual(calls, ["lookup-record"]);
     await assert.rejects(() => parcelImageService.uploadOwnedImage(parcelId, ownerId, file, {
       enabled: true,
       async uploadImage() { calls.push("drive-upload"); return "fake-file"; },
       async appendParcelImage() { calls.push("sheet-append"); throw new Error("Sheet write failed"); },
       async deleteImage(id) { calls.push(`cleanup:${id}`); },
     }), /Sheet write failed/);
-    assert.deepEqual(calls, ["mirror", "mirror", "drive-upload", "sheet-append", "cleanup:fake-file"]);
+    assert.deepEqual(calls, ["lookup-record", "lookup-record", "drive-upload", "sheet-append", "cleanup:fake-file"]);
   } finally {
     parcelService.getOwnedParcelById = originalParcelLookup;
-    require("../src/services/parcelMirrorService").mirrorParcel = originalMirror;
+    mirrorService.getParcelMirrorRecord = originalLookupRecord;
   }
 });
 
