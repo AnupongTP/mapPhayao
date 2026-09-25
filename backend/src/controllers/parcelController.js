@@ -142,28 +142,17 @@ async function deleteParcel(req, res, next) {
 }
 
 async function uploadImage(req, res, next) {
-  const attempt = Number(req.get?.("X-Photo-Attempt"));
-  const safeAttempt = Number.isInteger(attempt) && attempt >= 0 && attempt <= 3 ? attempt : 0;
   try {
     const appUser = await resolveAppUser(req);
     const image = await parcelService.withParcelMutationLock(req.params.parcelId, (client) =>
       parcelImageService.uploadOwnedImage(req.params.parcelId, appUser.id, req.file,
-        req.googleIntegration, req.body?.clientPhotoId, client));
-    return res.status(201).json({ success: true, image });
+        req.googleIntegration, req.body?.clientPhotoId, client,
+        (stage) => { req.uploadDiagnostic.stage = stage; }));
+    req.uploadDiagnostic.stage = "UPLOAD_COMPLETE";
+    return res.status(201).json({ success: true, image,
+      stage: "UPLOAD_COMPLETE", requestId: req.uploadDiagnostic.requestId });
   } catch (error) {
-    if (error.photoAmbiguous || error.photoRetryable || error.code === "PARCEL_IMAGE_CONFLICT") {
-      logGoogleFailure(error.photoAmbiguous ? "parcel-image-upload-ambiguous" :
-        error.photoRetryable ? "parcel-image-upload-safe-transient" : "parcel-image-integrity-conflict",
-      error, { parcelId: req.params.parcelId, attempt: safeAttempt });
-      return res.status(error.code === "PARCEL_IMAGE_CONFLICT" ? 409 : 503).json({
-        success: false,
-        error: error.photoAmbiguous ? "ไม่ทราบผลการอัปโหลดรูปภาพ กรุณาติดต่อผู้ดูแล" :
-          error.photoRetryable ? "บริการรูปภาพขัดข้องชั่วคราว" : "ข้อมูลรูปภาพแปลงขัดแย้งกัน",
-        ...(error.photoAmbiguous ? { ambiguous: true } : {}),
-        ...(error.photoRetryable ? { retryable: true } : {}),
-      });
-    }
-    return handleParcelError(error, next, req.params.parcelId);
+    return next(error);
   }
 }
 

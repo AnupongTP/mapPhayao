@@ -50,23 +50,62 @@
       error.ambiguous = true;
       throw error;
     }
-    onProgress(`กำลังเตรียมรูป ${position}/${total}...`);
+    const context = { photoIndex: position, totalPhotos: total };
+    onProgress(`กำลังเตรียมรูป ${position}/${total}...`, { stage: "IMAGE_PREPARING" });
+    window.console?.info?.("[ParcelUpload] IMAGE_PREPARING", context);
     photo.uploadFile ||= await prepareFile(photo.file);
+    onProgress(`เตรียมรูป ${position}/${total} สำเร็จ`, { stage: "IMAGE_PREPARED" });
+    window.console?.info?.("[ParcelUpload] IMAGE_PREPARED", context);
     const wait = options.wait || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     for (let attempt = 0; attempt <= 3; attempt += 1) {
       if (attempt) {
         onProgress(`กำลังลองอัปโหลดรูป ${position}/${total} อีกครั้ง... (${attempt}/3)`);
         await wait(500 * (2 ** (attempt - 1)));
-      } else {
-        onProgress(`กำลังอัปโหลดรูป ${position}/${total}...`);
       }
       try {
         photo.image = await window.MapApi.uploadParcelImage(parcelId, photo.uploadFile, photo.clientPhotoId,
-          { attempt });
+          { attempt,
+            onRequestStart: () => {
+              onProgress(`กำลังอัปโหลดรูป ${position}/${total}...`, { stage: "REQUEST_STARTING" });
+              window.console?.info?.("[ParcelUpload] REQUEST_STARTING", { ...context, attempt });
+            },
+            onWaiting: () => {
+              onProgress(`กำลังรอการตอบกลับรูป ${position}/${total}...`, { stage: "WAITING_FOR_SERVER" });
+              window.console?.info?.("[ParcelUpload] WAITING_FOR_SERVER", { ...context, attempt });
+            },
+            onDiagnostic: (diagnostic) => { photo.diagnostic = diagnostic; },
+          });
+        onProgress(`อัปโหลดรูป ${position}/${total} สำเร็จ`,
+          { stage: "UPLOAD_SUCCESS", requestId: photo.diagnostic?.requestId });
+        window.console?.info?.("[ParcelUpload] UPLOAD_SUCCESS", {
+          ...context, stage: photo.diagnostic?.stage || null, requestId: photo.diagnostic?.requestId || null,
+        });
         return photo.image;
       } catch (error) {
+        if (error.stage === "NETWORK_NO_RESPONSE") {
+          window.console?.error?.("[ParcelUpload] NETWORK_NO_RESPONSE", {
+            ...context, stage: "NETWORK_NO_RESPONSE", ambiguous: true,
+            possibleCause: "CORS_OR_NETWORK", message: "ไม่ได้รับการตอบกลับจากเซิร์ฟเวอร์",
+          });
+        } else if (error.stage === "REQUEST_ABORTED" || error.name === "AbortError") {
+          window.console?.warn?.("[ParcelUpload] REQUEST_ABORTED", { ...context, stage: "REQUEST_ABORTED" });
+        } else if (Number.isInteger(error.statusCode)) {
+          window.console?.error?.("[ParcelUpload] BACKEND_HTTP_ERROR", {
+            ...context, status: error.statusCode, stage: error.stage || "BACKEND_HTTP_ERROR",
+            code: error.code || "BACKEND_HTTP_ERROR", requestId: error.requestId || null,
+            retryable: error.retryable === true, ambiguous: error.ambiguous === true,
+            message: "เซิร์ฟเวอร์ไม่สามารถอัปโหลดรูปภาพได้",
+          });
+        } else {
+          window.console?.error?.("[ParcelUpload] UPLOAD_FAILED", {
+            ...context, message: "ไม่สามารถเริ่มคำขออัปโหลดได้",
+          });
+        }
         if (error.ambiguous) photo.uploadState = "ambiguous";
-        if (!error.retryable || attempt === 3) throw error;
+        if (!error.retryable || attempt === 3) {
+          onProgress(`อัปโหลดรูป ${position}/${total} ไม่สำเร็จ`, { stage: "UPLOAD_FAILED", error });
+          throw error;
+        }
       }
     }
   }

@@ -83,10 +83,51 @@ test("photo API exposes only explicit retry classification and treats lost respo
     (error) => error.statusCode === 500 && !error.retryable && !error.ambiguous);
   const ambiguous = createApiHarness(new TypeError("network failed"));
   await assert.rejects(() => ambiguous.MapApi.uploadParcelImage(parcelId, file, photoId),
-    (error) => error.ambiguous === true);
+    (error) => error.ambiguous === true && error.diagnosticStage === "NETWORK_NO_RESPONSE" &&
+      error.diagnosticCode === "NETWORK_NO_RESPONSE" && error.stage === "NETWORK_NO_RESPONSE" &&
+      error.code === "NETWORK_NO_RESPONSE" && !error.requestId);
   const aborted = createApiHarness(Object.assign(new Error("aborted"), { name: "AbortError" }));
   await assert.rejects(() => aborted.MapApi.uploadParcelImage(parcelId, file, photoId),
-    (error) => error.name === "AbortError" && !error.ambiguous);
+    (error) => error.name === "AbortError" && error.ambiguous &&
+      error.diagnosticStage === "REQUEST_ABORTED" && error.stage === "REQUEST_ABORTED");
+});
+
+test("photo API reports waiting, safe backend diagnostics, and successful completion", async () => {
+  const parcelId = "11111111-1111-4111-8111-111111111111";
+  const file = new Blob(["fixture"], { type: "image/png" });
+  const photoId = "22222222-2222-4222-8222-222222222222";
+  const events = [];
+  const success = createApiHarness({ image: { id: "saved.webp" },
+    stage: "UPLOAD_COMPLETE", requestId: "A1B2C3D4" });
+  await success.MapApi.uploadParcelImage(parcelId, file, photoId, {
+    onRequestStart: () => events.push("starting"),
+    onWaiting: () => events.push("waiting"),
+    onDiagnostic: (value) => events.push(value),
+  });
+  assert.equal(events[0], "starting");
+  assert.equal(events[1], "waiting");
+  assert.equal(events[2].stage, "UPLOAD_COMPLETE");
+  assert.equal(events[2].requestId, "A1B2C3D4");
+  const failure = createApiHarness({ error: "provider raw secret", stage: "DRIVE_UPLOAD",
+    code: "APPS_SCRIPT_TIMEOUT", requestId: "B2C3D4E5", ambiguous: true },
+  { ok: false, status: 503 });
+  await assert.rejects(() => failure.MapApi.uploadParcelImage(parcelId, file, photoId),
+    (error) => error.statusCode === 503 && error.ambiguous &&
+      error.diagnosticStage === "DRIVE_UPLOAD" && error.diagnosticCode === "APPS_SCRIPT_TIMEOUT" &&
+      error.stage === "DRIVE_UPLOAD" && error.code === "APPS_SCRIPT_TIMEOUT" &&
+      error.requestId === "B2C3D4E5");
+});
+
+test("photo API does not forward unrecognized diagnostic stage, code, or request ID", async () => {
+  const parcelId = "11111111-1111-4111-8111-111111111111";
+  const file = new Blob(["fixture"], { type: "image/png" });
+  const photoId = "22222222-2222-4222-8222-222222222222";
+  const response = createApiHarness({ error: "provider detail", stage: "RAW_SECRET_STAGE",
+    code: "RAW_SECRET_CODE", requestId: "invalid-id" }, { ok: false, status: 502 });
+  await assert.rejects(() => response.MapApi.uploadParcelImage(parcelId, file, photoId),
+    (error) => error instanceof Error && error.statusCode === 502 &&
+      error.stage === "BACKEND_HTTP_ERROR" && error.code === "BACKEND_HTTP_ERROR" &&
+      error.requestId === null);
 });
 
 test("saved photo content uses the owned backend route and existing LINE token provider", async () => {

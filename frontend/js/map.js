@@ -1314,8 +1314,11 @@
     }
 
     const pendingPhotos = (parcel.photos || []).filter((photo) => !photo.image);
+    onProgress("บันทึกข้อมูลแปลงสำเร็จ", { stage: "PARCEL_SAVED" });
+    window.console?.info?.("[ParcelUpload] PARCEL_SAVED");
     let failed = 0;
     let ambiguous = 0;
+    let firstFailure;
     for (const [index, photo] of pendingPhotos.entries()) {
       const count = index + 1;
       try {
@@ -1326,11 +1329,15 @@
             const fileName = `${parcel.savedParcelRecord.parcelCode}_${photo.clientPhotoId}.webp`;
             photo.image = detail.parcel?.images?.find((image) => image.id === fileName);
           } catch { /* An unresolved write must never be replayed. */ }
-          if (photo.image) continue;
+          if (photo.image) {
+            onProgress(`อัปโหลดรูป ${count}/${pendingPhotos.length} สำเร็จ`, { stage: "UPLOAD_SUCCESS" });
+            continue;
+          }
         }
         await window.MapParcelPhotoProcessing.uploadWithRetry(photo, parcel.savedParcelId,
           count, pendingPhotos.length, onProgress);
       } catch (error) {
+        firstFailure ||= error;
         failed += 1;
         if (error.ambiguous) ambiguous += 1;
         onProgress(error.ambiguous
@@ -1344,6 +1351,7 @@
         ? `บันทึกแปลงแล้ว แต่มีรูปภาพ ${ambiguous} รูปไม่ทราบผลการอัปโหลด กรุณาตรวจสอบและติดต่อผู้ดูแล ห้ามอัปโหลดรูปเดิมซ้ำ`
         : `บันทึกแปลงแล้ว แต่มีรูปภาพ ${failed} รูปอัปโหลดไม่สำเร็จ กดบันทึกอีกครั้งเพื่อลองใหม่`);
       error.partialSuccess = true;
+      error.diagnostic = firstFailure;
       throw error;
     }
 

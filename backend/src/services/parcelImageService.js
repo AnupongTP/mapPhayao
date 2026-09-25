@@ -67,17 +67,22 @@ async function normalizeImage(file) {
   }
 }
 
-async function uploadOwnedImage(parcelId, ownerUserId, file, google, clientPhotoId, database) {
+async function uploadOwnedImage(parcelId, ownerUserId, file, google, clientPhotoId, database, onStage = () => {}) {
   const photoId = validateClientPhotoId(clientPhotoId);
   if (!google?.enabled) throw createHttpError(503, "ยังไม่ได้ตั้งค่าบริการรูปภาพแปลง");
+  onStage("PARCEL_LOOKUP");
   const parcel = await parcelService.getOwnedParcelById(parcelId, ownerUserId, database);
+  onStage("PARCEL_VERIFIED");
+  onStage("IMAGE_VALIDATION");
   const normalized = await normalizeImage(file);
+  onStage("IMAGE_PROCESSED");
   const mirrorRecord = await parcelMirrorService.getParcelMirrorRecord(parcel.id, database);
   if (!mirrorRecord || mirrorRecord.owner_user_id !== ownerUserId || mirrorRecord.parcel_code !== parcel.parcelCode) {
     throw createHttpError(404, "Parcel not found");
   }
   const fileName = `${parcel.parcelCode}_${photoId}.webp`;
   let existing;
+  onStage("SHEET_CHECK");
   try {
     existing = await google.findParcelImage?.(parcel.parcelCode, ownerUserId, fileName);
   } catch (error) {
@@ -98,6 +103,7 @@ async function uploadOwnedImage(parcelId, ownerUserId, file, google, clientPhoto
     throw error;
   }
   let driveFileId;
+  onStage("DRIVE_UPLOAD");
   try {
     driveFileId = await google.uploadImage(normalized.bytes, fileName);
   } catch (error) {
@@ -105,6 +111,7 @@ async function uploadOwnedImage(parcelId, ownerUserId, file, google, clientPhoto
     throw error;
   }
   try {
+    onStage("SHEET_UPDATE");
     let stored;
     try {
       stored = await google.appendParcelImage(parcel.parcelCode, ownerUserId, fileName, driveFileId, mirrorRecord);

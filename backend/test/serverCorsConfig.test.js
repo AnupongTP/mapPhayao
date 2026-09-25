@@ -16,6 +16,6 @@ test("repository CORS allowlist uses the permanent Netlify frontend origin", () 
   assert.equal(serverSource.includes(OLD_FRONTEND_ORIGIN), false);
   assert.match(serverSource, /process\.env\.CORS_ORIGINS/);
   assert.doesNotMatch(serverSource, /allowedOrigins[\s\S]*"\*"/);
-  assert.match(serverSource, /allowedHeaders:\s*\["Content-Type", "Authorization"\]/);
+  assert.match(serverSource, /allowedHeaders:\s*\["Content-Type", "Authorization", "X-Photo-Attempt"\]/);
   assert.match(serverSource, /Origin is not allowed by CORS/);
 });

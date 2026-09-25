@@ -53,6 +53,52 @@
     { value: "rice", label: "ข้าว" },
     { value: "maize", label: "ข้าวโพด" },
   ];
+  const UPLOAD_STAGES = {
+    PARCEL_SAVED: "บันทึกข้อมูลแปลงสำเร็จ",
+    IMAGE_PREPARING: "กำลังเตรียมรูปภาพ...",
+    IMAGE_PREPARED: "เตรียมรูปภาพสำเร็จ",
+    REQUEST_STARTING: "กำลังเชื่อมต่อเซิร์ฟเวอร์...",
+    WAITING_FOR_SERVER: "กำลังรอการตอบกลับจากเซิร์ฟเวอร์...",
+    UPLOAD_SUCCESS: "อัปโหลดรูปภาพสำเร็จ",
+    UPLOAD_FAILED: "อัปโหลดรูปภาพไม่สำเร็จ",
+  };
+  const FAILURE_BOUNDARIES = {
+    NETWORK_NO_RESPONSE: "การเชื่อมต่อ Browser → Server",
+    REQUEST_ABORTED: "การเชื่อมต่อ Browser → Server",
+    BACKEND_HTTP_ERROR: "เซิร์ฟเวอร์",
+    REQUEST_RECEIVED: "เซิร์ฟเวอร์",
+    AUTH_VERIFIED: "การยืนยันตัวตน",
+    MULTIPART_PARSED: "ข้อมูลรูปภาพ",
+    PARCEL_LOOKUP: "ข้อมูลแปลง",
+    PARCEL_VERIFIED: "ข้อมูลแปลง",
+    IMAGE_VALIDATION: "การตรวจสอบรูปภาพ",
+    IMAGE_PROCESSED: "การประมวลผลรูปภาพ",
+    SHEET_CHECK: "Google Sheet",
+    DRIVE_UPLOAD: "Google Drive / Apps Script",
+    SHEET_UPDATE: "Google Sheet",
+  };
+  const FAILURE_DETAILS = {
+    NETWORK_NO_RESPONSE: "ไม่ได้รับการตอบกลับจากเซิร์ฟเวอร์",
+    REQUEST_ABORTED: "คำขออัปโหลดถูกยกเลิก",
+    APPS_SCRIPT_TIMEOUT: "บริการจัดเก็บรูปภาพไม่ตอบกลับภายในเวลาที่กำหนด",
+    APPS_SCRIPT_NETWORK_ERROR: "บริการจัดเก็บรูปภาพขัดข้อง",
+    APPS_SCRIPT_REJECTED: "บริการจัดเก็บรูปภาพปฏิเสธคำขอ",
+    APPS_SCRIPT_HTTP_ERROR: "บริการจัดเก็บรูปภาพขัดข้อง",
+    APPS_SCRIPT_INVALID_RESPONSE: "บริการจัดเก็บรูปภาพส่งข้อมูลไม่ถูกต้อง",
+    DRIVE_NOT_CONFIGURED: "บริการจัดเก็บรูปภาพยังไม่พร้อมใช้งาน",
+    DRIVE_UPLOAD_ERROR: "บริการจัดเก็บรูปภาพขัดข้อง",
+    SHEET_READ_ERROR: "ไม่สามารถตรวจสอบข้อมูลรูปภาพได้",
+    SHEET_UPDATE_ERROR: "ไม่สามารถบันทึกข้อมูลรูปภาพได้",
+    SHEET_HEADER_MISMATCH: "รูปแบบตารางข้อมูลรูปภาพไม่ตรงตามที่กำหนด",
+    IMAGE_CONFLICT: "ข้อมูลรูปภาพแปลงขัดแย้งกัน",
+    AUTH_REQUIRED: "กรุณาเปิดระบบผ่าน LINE ใหม่อีกครั้ง",
+    PARCEL_NOT_FOUND: "ไม่พบแปลงนี้หรือไม่มีสิทธิ์เข้าถึง",
+    IMAGE_TOO_LARGE: "รูปภาพมีขนาดใหญ่เกิน 12 MB",
+    IMAGE_UNSUPPORTED: "ไม่รองรับไฟล์รูปภาพนี้",
+    INVALID_UPLOAD: "ข้อมูลรูปภาพไม่ถูกต้อง",
+    UPLOAD_FAILED: "ไม่สามารถอัปโหลดรูปภาพได้",
+    BACKEND_HTTP_ERROR: "เซิร์ฟเวอร์ไม่สามารถดำเนินการได้",
+  };
 
   let handlers = {};
   let liffReady = false;
@@ -294,6 +340,49 @@
     status.id = "parcel-save-status";
     status.hidden = true;
     status.setAttribute("aria-live", "polite");
+    const diagnostic = createElement("section", "parcel-upload-diagnostic");
+    diagnostic.hidden = true;
+    diagnostic.setAttribute("aria-live", "polite");
+    diagnostic.appendChild(createElement("h3", null, "สถานะระบบ"));
+    const steps = createElement("div", "parcel-upload-steps");
+    const failure = createElement("p", "parcel-upload-failure");
+    failure.hidden = true;
+    diagnostic.append(steps, failure);
+    const completed = new Set();
+    let active = "";
+    function renderDiagnostic(event) {
+      if (!event || !UPLOAD_STAGES[event.stage]) return;
+      diagnostic.hidden = false;
+      if (event.stage === "UPLOAD_FAILED") {
+        active = event.stage;
+        const error = event.error || {};
+        const stage = Object.hasOwn(FAILURE_BOUNDARIES, error.diagnosticStage)
+          ? error.diagnosticStage : "BACKEND_HTTP_ERROR";
+        const code = Object.hasOwn(FAILURE_DETAILS, error.diagnosticCode)
+          ? error.diagnosticCode : "UPLOAD_FAILED";
+        const requestId = /^[A-F0-9]{8}$/.test(error.requestId || "") ? error.requestId : "ไม่มี";
+        failure.textContent = `จุดที่เกิดปัญหา: ${FAILURE_BOUNDARIES[stage]}\n` +
+          `รายละเอียด: ${FAILURE_DETAILS[code]}\nรหัสตรวจสอบ: ${requestId}`;
+        failure.hidden = false;
+      } else if (event.stage === "IMAGE_PREPARING" || event.stage === "REQUEST_STARTING" ||
+        event.stage === "WAITING_FOR_SERVER") {
+        active = event.stage;
+      } else {
+        completed.add(event.stage);
+        active = "";
+        failure.hidden = true;
+      }
+      steps.replaceChildren();
+      for (const stage of completed) {
+        steps.appendChild(createElement("p", null, `✓ ${UPLOAD_STAGES[stage]}`));
+      }
+      if (active) steps.appendChild(createElement("p", null,
+        `${active === "UPLOAD_FAILED" ? "✕" : "•"} ${UPLOAD_STAGES[active]}`));
+      if (event.stage === "UPLOAD_SUCCESS") {
+        steps.appendChild(createElement("p", null, "✓ เซิร์ฟเวอร์ตอบกลับสำเร็จ"));
+        steps.appendChild(createElement("p", null, "✓ บันทึกข้อมูลรูปภาพสำเร็จ"));
+      }
+    }
     const actions = createElement("div", "parcel-sheet-actions");
     const cancel = createElement("button", "panel-button secondary", TEXT.cancel);
     cancel.type = "button";
@@ -305,17 +394,23 @@
       confirm.disabled = true;
       setStatus(status, TEXT.saving);
       try {
-        await onSubmit((message) => setStatus(status, message));
+        await onSubmit((message, event) => {
+          setStatus(status, message);
+          renderDiagnostic(event);
+        });
         setStatus(status, TEXT.saved, "success");
         window.setTimeout(() => closeSheet(backdrop), 700);
       } catch (error) {
         cancel.disabled = false;
         confirm.disabled = false;
         setStatus(status, error.partialSuccess ? error.message : TEXT.saveFailed, "error");
+        if (error.diagnostic && failure.hidden) {
+          renderDiagnostic({ stage: "UPLOAD_FAILED", error: error.diagnostic });
+        }
       }
     });
     actions.append(cancel, confirm);
-    body.append(summary, status, actions);
+    body.append(summary, status, diagnostic, actions);
     return backdrop;
   }
 

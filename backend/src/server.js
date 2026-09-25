@@ -50,7 +50,7 @@ app.use(
       return callback(new Error("Origin is not allowed by CORS"));
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Photo-Attempt"],
   }),
 );
 // รับ JSON request body จาก frontend โดยจำกัดขนาดไว้พอเหมาะ

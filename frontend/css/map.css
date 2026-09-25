@@ -1572,6 +1572,29 @@ body {
   overflow-wrap: anywhere;
 }
 
+.parcel-upload-diagnostic {
+  border-top: 1px solid #cbd5e1;
+  padding: 10px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.parcel-upload-diagnostic h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.parcel-upload-steps p,
+.parcel-upload-failure {
+  margin: 2px 0;
+}
+
+.parcel-upload-failure {
+  white-space: pre-line;
+  color: #9f1239;
+}
+
 .parcel-photo-picker h4 {
   margin: 16px 0 8px;
   font-size: 15px;

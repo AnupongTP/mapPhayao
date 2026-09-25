@@ -2,10 +2,11 @@ const lineTokenService = require("../services/lineTokenService");
 
 const AUTH_ERROR_MESSAGE = "LINE authentication required";
 
-function sendAuthenticationError(res) {
+function sendAuthenticationError(res, diagnostic) {
   return res.status(401).json({
     success: false,
     error: AUTH_ERROR_MESSAGE,
+    ...(diagnostic ? { stage: "REQUEST_RECEIVED", code: "AUTH_REQUIRED", requestId: diagnostic.requestId } : {}),
   });
 }
 
@@ -38,14 +39,14 @@ function createLineAuthMiddleware(dependencies = {}) {
   return async function requireLineAuth(req, res, next) {
     const token = parseBearerToken(req.get ? req.get("authorization") : req.headers?.authorization);
     if (!token) {
-      return sendAuthenticationError(res);
+      return sendAuthenticationError(res, req.uploadDiagnostic);
     }
 
     try {
       const verifiedToken = await tokenService.verifyIdToken(token);
       const lineUserId = getVerifiedLineUserId(verifiedToken);
       if (!lineUserId) {
-        return sendAuthenticationError(res);
+        return sendAuthenticationError(res, req.uploadDiagnostic);
       }
 
       req.lineIdentity = {
@@ -57,7 +58,7 @@ function createLineAuthMiddleware(dependencies = {}) {
 
       return next();
     } catch (error) {
-      return sendAuthenticationError(res);
+      return sendAuthenticationError(res, req.uploadDiagnostic);
     }
   };
 }

@@ -3,6 +3,14 @@
   const PARCEL_ID_PATTERN =
     /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/;
   const AUTH_REQUIRED_MESSAGE = "กรุณาเปิดระบบผ่าน LINE ใหม่อีกครั้ง";
+  const UPLOAD_STAGES = new Set(["REQUEST_RECEIVED", "AUTH_VERIFIED", "MULTIPART_PARSED",
+    "PARCEL_LOOKUP", "PARCEL_VERIFIED", "IMAGE_VALIDATION", "IMAGE_PROCESSED",
+    "SHEET_CHECK", "DRIVE_UPLOAD", "SHEET_UPDATE", "UPLOAD_COMPLETE"]);
+  const UPLOAD_CODES = new Set(["IMAGE_CONFLICT", "DRIVE_NOT_CONFIGURED", "APPS_SCRIPT_TIMEOUT",
+    "APPS_SCRIPT_NETWORK_ERROR", "APPS_SCRIPT_REJECTED", "APPS_SCRIPT_HTTP_ERROR",
+    "APPS_SCRIPT_INVALID_RESPONSE", "DRIVE_UPLOAD_ERROR", "SHEET_HEADER_MISMATCH",
+    "SHEET_UPDATE_ERROR", "SHEET_READ_ERROR", "AUTH_REQUIRED", "PARCEL_NOT_FOUND",
+    "IMAGE_TOO_LARGE", "IMAGE_UNSUPPORTED", "INVALID_UPLOAD", "UPLOAD_FAILED"]);
 
   function buildUrl(path) {
     return `${window.AppConfig.apiBaseUrl}${path}`;
@@ -241,18 +249,35 @@
       body.append("clientPhotoId", clientPhotoId);
       let response;
       try {
-        response = await fetch(buildUrl(`/parcels/${encodeURIComponent(assertParcelId(parcelId))}/images`), {
+        options.onRequestStart?.();
+        const request = fetch(buildUrl(`/parcels/${encodeURIComponent(assertParcelId(parcelId))}/images`), {
           method: "POST",
           headers: { Authorization: `Bearer ${idToken}`, "X-Photo-Attempt": String(options.attempt || 0) },
           body,
           ...(options.signal ? { signal: options.signal } : {}),
         });
+        options.onWaiting?.();
+        response = await request;
       } catch (error) {
-        if (error?.name !== "AbortError") error.ambiguous = true;
+        error.ambiguous = true;
+        error.diagnosticStage = error?.name === "AbortError" ? "REQUEST_ABORTED" : "NETWORK_NO_RESPONSE";
+        error.diagnosticCode = error.diagnosticStage;
+        error.stage = error.diagnosticStage;
+        error.code = error.diagnosticCode;
         throw error;
       }
       const result = await parseJsonSafely(response);
-      if (!response.ok) throw createRequestError(response, result);
+      if (!response.ok) {
+        const error = createRequestError(response, result);
+        error.diagnosticStage = UPLOAD_STAGES.has(result?.stage) ? result.stage : "BACKEND_HTTP_ERROR";
+        error.diagnosticCode = UPLOAD_CODES.has(result?.code) ? result.code : "BACKEND_HTTP_ERROR";
+        error.stage = error.diagnosticStage;
+        error.code = error.diagnosticCode;
+        error.requestId = /^[A-F0-9]{8}$/.test(result?.requestId || "") ? result.requestId : null;
+        throw error;
+      }
+      options.onDiagnostic?.({ stage: result?.stage === "UPLOAD_COMPLETE" ? result.stage : null,
+        requestId: /^[A-F0-9]{8}$/.test(result?.requestId || "") ? result.requestId : null });
       return result.image;
     },
     getParcelImageBlob: async function (parcelId, imageId, options = {}) {
