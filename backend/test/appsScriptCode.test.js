@@ -6,21 +6,35 @@ const vm = require("node:vm");
 const { createHash, createHmac } = require("node:crypto");
 const { createAppsScriptDriveBridge } = require("../src/services/appsScriptDriveBridge");
 
-test("checked-in Apps Script verifies signed upload/read/delete and blocks replay or foreign files", async () => {
+test("checked-in Apps Script shares new uploads before success and keeps signed Drive operations", async () => {
   const source = fs.readFileSync(path.join(__dirname, "../../scripts/google-drive-apps-script/Code.gs"), "utf8");
   const files = new Map();
   const nonces = new Map();
+  const events = [];
+  const replies = [];
   let nextId = 1;
+  let sharingFails = false;
+  let cleanupFails = false;
   const folder = { getId: () => "owned-folder", createFile(blob) {
+    events.push("create");
     const id = `file_${nextId++}`;
     const file = {
-      getId: () => id,
+      getId: () => { events.push("fileId"); return id; },
       getParents: () => {
         let used = false;
         return { hasNext: () => !used, next: () => { used = true; return folder; } };
       },
       isTrashed: () => file.trashed || false,
-      setTrashed(value) { file.trashed = value; },
+      setTrashed(value) {
+        events.push("trash");
+        if (cleanupFails) throw new Error("private cleanup failure");
+        file.trashed = value;
+      },
+      setSharing(access, permission) {
+        events.push("share");
+        if (sharingFails) throw new Error("private sharing failure");
+        file.sharing = { access, permission };
+      },
       getMimeType: () => blob.mimeType,
       getBlob: () => ({ getBytes: () => blob.bytes }),
     };
@@ -32,6 +46,8 @@ test("checked-in Apps Script verifies signed upload/read/delete and blocks repla
       return { BRIDGE_SECRET: "LOCAL_TEST_SECRET", FOLDER_ID: "owned-folder" }[name];
     } }) },
     ContentService: { MimeType: { JSON: "application/json" }, createTextOutput(value) {
+      replies.push(JSON.parse(value));
+      events.push("reply");
       return { value, setMimeType() { return this; } };
     } },
     CacheService: { getScriptCache: () => ({ get: (key) => nonces.get(key),
@@ -46,7 +62,8 @@ test("checked-in Apps Script verifies signed upload/read/delete and blocks repla
       base64Decode: (value) => [...Buffer.from(value, "base64")],
       newBlob: (bytes, mimeType, name) => ({ bytes, mimeType, name }),
     },
-    DriveApp: { getFolderById: () => folder, getFileById(id) { return files.get(id); } },
+    DriveApp: { Access: { ANYONE_WITH_LINK: "anyone-with-link" }, Permission: { VIEW: "view" },
+      getFolderById: () => folder, getFileById(id) { return files.get(id); } },
   });
   vm.runInContext(source, context);
   const requests = [];
@@ -60,6 +77,9 @@ test("checked-in Apps Script verifies signed upload/read/delete and blocks repla
   });
   const id = await bridge.uploadImage(Buffer.from("WEBP"), "a.webp");
   assert.equal(id, "file_1");
+  assert.deepEqual(events.slice(0, 4), ["create", "share", "fileId", "reply"]);
+  assert.deepEqual(files.get(id).sharing, { access: "anyone-with-link", permission: "view" });
+  assert.deepEqual(replies[0], { success: true, fileId: id });
   const chunks = [];
   for await (const chunk of await bridge.getImage(id)) chunks.push(chunk);
   assert.equal(Buffer.concat(chunks).toString(), "WEBP");
@@ -72,6 +92,19 @@ test("checked-in Apps Script verifies signed upload/read/delete and blocks repla
   assert.equal(JSON.parse(invalid.value).error, "invalid-signature");
   files.set("foreign", { isTrashed: () => false, getParents: () => ({ hasNext: () => false }) });
   await assert.rejects(() => bridge.getImage("foreign"), { bridgeCategory: "rejected" });
+
+  sharingFails = true;
+  const beforeFailure = events.length;
+  await assert.rejects(() => bridge.uploadImage(Buffer.from("WEBP"), "b.webp"),
+    { bridgeCategory: "rejected" });
+  assert.deepEqual(events.slice(beforeFailure), ["create", "share", "trash", "reply"]);
+  assert.equal(files.get("file_2").trashed, true);
+  assert.deepEqual(replies.at(-1), { success: false, error: "operation-failed" });
+  cleanupFails = true;
+  await assert.rejects(() => bridge.uploadImage(Buffer.from("WEBP"), "c.webp"),
+    { bridgeCategory: "rejected" });
+  assert.deepEqual(replies.at(-1), { success: false, error: "operation-failed" });
+  assert.equal(replies.some((reply) => JSON.stringify(reply).includes("private")), false);
 });
 
 test("Apps Script signs weather coordinates and keeps Drive folder configuration separate", async () => {

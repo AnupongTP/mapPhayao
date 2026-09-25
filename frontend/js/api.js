@@ -241,6 +241,23 @@
       if (!response.ok) throw createRequestError(response, result);
       return result.image;
     },
+    getParcelImageBlob: async function (parcelId, imageId, options = {}) {
+      if (typeof imageId !== "string" || !/^[A-Za-z0-9_-]+\.webp$/.test(imageId)) {
+        throw new TypeError("imageId is invalid");
+      }
+      const idToken = await getCurrentLiffIdToken();
+      const response = await fetch(buildUrl(`/parcels/${encodeURIComponent(assertParcelId(parcelId))}` +
+        `/images/${encodeURIComponent(imageId)}/content`), {
+        ...options,
+        method: "GET",
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      if (!response.ok) throw createRequestError(response, await parseJsonSafely(response));
+      if (!/^image\/webp(?:;|$)/i.test(response.headers.get("Content-Type") || "")) {
+        throw new Error("Invalid parcel image response");
+      }
+      return response.blob();
+    },
     listMyParcels: function (options) {
       return sendAuthenticatedParcelJson("/parcels/mine", undefined, "GET", options);
     },

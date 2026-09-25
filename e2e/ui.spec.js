@@ -1,6 +1,7 @@
 const { test, expect } = require("@playwright/test");
 const { readFileSync } = require("node:fs");
 const path = require("node:path");
+const sharp = require("../backend/node_modules/sharp");
 const { prepareContext, watchPageErrors, openMap, panMap, expectVisualSnapshot } = require("./support");
 
 const photoFixture = readFileSync(path.resolve(__dirname, "../geoserver/data_dir/styles/grass_fill.png"));
@@ -17,43 +18,60 @@ test("public privacy page works without LIFF and map has no floating privacy lin
   expect(forbidden).toEqual([]);
 });
 
-test("direct parcel photos fail independently and share one fullscreen viewer", async ({ page, context }, testInfo) => {
+test("protected parcel photos fail independently and share one fullscreen viewer", async ({ page, context }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium");
-  const forbidden = await prepareContext(context);
+  const forbidden = await prepareContext(context, { token: "e2e-line-token-user-a" });
   await page.setViewportSize({ width: 390, height: 844 });
   let releaseGood;
   const goodGate = new Promise((resolve) => { releaseGood = resolve; });
-  let proxyCalls = 0;
-  await page.route("**/api/parcels/*/images/*/content", (route) => {
-    proxyCalls += 1;
-    return route.abort();
-  });
-  await page.route(/^https:\/\/drive\.usercontent\.google\.com\/download\?/, async (route) => {
-    if (new URL(route.request().url()).searchParams.get("id") === "bad") {
+  const imageBytes = await sharp(photoFixture).webp().toBuffer();
+  const proxyCalls = [];
+  await page.route("**/api/parcels/*/images/*/content", async (route) => {
+    proxyCalls.push(route.request().url());
+    if (route.request().url().endsWith("/bad.webp/content")) {
       return route.fulfill({ status: 404, body: "" });
     }
     await goodGate;
-    return route.fulfill({ status: 200, contentType: "image/png", body: photoFixture });
+    return route.fulfill({ status: 200, contentType: "image/webp", body: imageBytes });
   });
-  await openMap(page);
-  const links = ["bad", "good"].map((id) => `https://drive.usercontent.google.com/download?id=${id}&export=view`);
-  await page.evaluate((urls) => window.MapUi.renderSavedParcelDetail({
-    id: "11111111-1111-4111-8111-111111111111", parcelName: "DIRECT-LINK-TEST",
-    photos: urls.map((linkImage, index) => ({ id: `${index}.webp`, linkImage, previewUrl: linkImage })),
-  }), links);
+  await openMap(page, true);
+  await expect.poll(() => page.evaluate(() => window.MapLiffMode.isReady())).toBe(true);
+  const parcelId = "11111111-1111-4111-8111-111111111111";
+  await page.evaluate((id) => window.MapUi.renderSavedParcelDetail({
+    id, parcelName: "PROTECTED-PHOTO-TEST",
+    photos: [{ id: "bad.webp", loading: true }, { id: "good.webp", loading: true }],
+  }), parcelId);
   const result = page.locator("#result-panel-content");
-  await expect(result).toContainText("DIRECT-LINK-TEST");
+  await expect(result).toContainText("PROTECTED-PHOTO-TEST");
   await result.locator(".parcel-photo-section").scrollIntoViewIfNeeded();
+  const loading = await page.evaluate(async (id) => {
+    const photos = [{ id: "bad.webp", loading: true }, { id: "good.webp", loading: true }];
+    window.__protectedPhotoResults = Promise.all(photos.map(async (photo) => {
+      try {
+        const blob = await window.MapApi.getParcelImageBlob(id, photo.id);
+        photo.previewUrl = URL.createObjectURL(blob);
+      } catch {
+        photo.loadError = true;
+      }
+      photo.loading = false;
+      window.MapUi.updateSavedParcelPhotos(id, photos);
+    }));
+    return true;
+  }, parcelId);
+  expect(loading).toBe(true);
   await expect(result).toContainText("โหลดรูปภาพ 1 ไม่สำเร็จ");
-  await expect(result.locator(".parcel-photo-item")).toHaveCount(1);
+  await expect(result).toContainText("กำลังโหลดรูปภาพ...");
   releaseGood();
+  await page.evaluate(() => window.__protectedPhotoResults);
   const good = result.locator(".parcel-photo-item");
   await expect(good).toBeEnabled();
-  await page.screenshot({ path: testInfo.outputPath("direct-photos-mobile.png") });
+  await expect(good.locator("img")).toHaveAttribute("src", /^blob:/);
+  const photoUrl = await good.locator("img").getAttribute("src");
+  await page.screenshot({ path: testInfo.outputPath("protected-photos-mobile.png") });
   await good.click();
   const viewer = page.locator(".parcel-photo-viewer");
   await expect(viewer).toBeVisible();
-  await expect(viewer.locator("img")).toHaveAttribute("src", links[1]);
+  await expect(viewer.locator("img")).toHaveAttribute("src", photoUrl);
   await page.screenshot({ path: testInfo.outputPath("photo-viewer-mobile.png") });
   const layering = await page.evaluate(() => ({
     overlay: parseInt(getComputedStyle(document.querySelector(".parcel-photo-viewer")).zIndex, 10),
@@ -75,7 +93,7 @@ test("direct parcel photos fail independently and share one fullscreen viewer", 
   await expect(viewer).toHaveCount(1);
   expect(await page.evaluate(() => document.body.style.overflow)).toBe("");
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
-  expect(proxyCalls).toBe(0);
+  expect(proxyCalls).toHaveLength(2);
   expect(forbidden).toEqual([]);
 });
 

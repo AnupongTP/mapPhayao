@@ -25,6 +25,11 @@
   let pendingSavedParcelId = null;
   let savedParcelDetailRevision = 0;
   let pendingSavedParcelController = null;
+  let activeSavedImageParcelId = null;
+  let savedImageLoadRevision = 0;
+  let savedImageController = null;
+  const savedImageObjectUrls = new Map();
+  const pendingSavedImageLoads = new Map();
   const savedParcelAnalysisById = new Map();
   const deletedSavedParcelIds = new Set();
   let ownedParcelLayerRevision = 0;
@@ -40,6 +45,7 @@
   const savedBoundaryEditLayers = new L.FeatureGroup();
   window.addEventListener("pagehide", () => {
     temporaryParcels.forEach((parcel) => parcel.photos?.forEach((photo) => URL.revokeObjectURL(photo.previewUrl)));
+    releaseSavedImages();
   });
 
   const GEOLOCATION_OPTIONS = {
@@ -505,6 +511,7 @@
   function clearParcelDetailPanelState() {
     currentDetailParcelId = null;
     parcelDetailPanelOpen = false;
+    releaseSavedImages();
   }
 
   function isParcelDetailPanelOpenFor(parcelId) {
@@ -538,6 +545,7 @@
   }
 
   function clearSavedParcelHighlight(options = {}) {
+    releaseSavedImages();
     selectedSavedParcelId = null;
     refreshSavedParcelStyles();
     currentSavedParcel = null;
@@ -767,11 +775,69 @@
     return response.parcel;
   }
 
+  function releaseSavedImages() {
+    savedImageLoadRevision += 1;
+    savedImageController?.abort();
+    savedImageController = null;
+    pendingSavedImageLoads.clear();
+    if (savedImageObjectUrls.size) window.MapUi.closeParcelPhotoViewer?.();
+    savedImageObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+    savedImageObjectUrls.clear();
+    activeSavedImageParcelId = null;
+  }
+
   function setInitialSavedPhotos(parcel) {
+    const ids = new Set((parcel.images || []).map((image) => image.id));
+    if (activeSavedImageParcelId !== parcel.id ||
+      [...savedImageObjectUrls.keys(), ...pendingSavedImageLoads.keys()].some((id) => !ids.has(id))) {
+      releaseSavedImages();
+    }
+    activeSavedImageParcelId = parcel.id;
+    savedImageController ||= new AbortController();
+    savedImageLoadRevision += 1;
     parcel.photosLoading = false;
     parcel.photos = (parcel.images || []).map((image) => ({
-      ...image, previewUrl: image.linkImage,
+      ...image,
+      previewUrl: savedImageObjectUrls.get(image.id) || null,
+      loading: !savedImageObjectUrls.has(image.id),
     }));
+  }
+
+  function fetchSavedImage(parcelId, imageId) {
+    let pending = pendingSavedImageLoads.get(imageId);
+    if (pending) return pending;
+    const controller = savedImageController;
+    pending = window.MapApi.getParcelImageBlob(parcelId, imageId, { signal: controller.signal })
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        if (controller.signal.aborted || activeSavedImageParcelId !== parcelId) {
+          URL.revokeObjectURL(url);
+          return null;
+        }
+        savedImageObjectUrls.set(imageId, url);
+        return url;
+      })
+      .finally(() => {
+        if (pendingSavedImageLoads.get(imageId) === pending) pendingSavedImageLoads.delete(imageId);
+      });
+    pendingSavedImageLoads.set(imageId, pending);
+    return pending;
+  }
+
+  function loadSavedPhotos(parcel) {
+    const revision = savedImageLoadRevision;
+    parcel.photos.filter((photo) => photo.loading).forEach(async (photo) => {
+      try {
+        photo.previewUrl = await fetchSavedImage(parcel.id, photo.id);
+        photo.loadError = !photo.previewUrl;
+      } catch (error) {
+        photo.loadError = true;
+      }
+      photo.loading = false;
+      if (revision === savedImageLoadRevision && activeSavedImageParcelId === parcel.id) {
+        window.MapUi.updateSavedParcelPhotos(parcel.id, parcel.photos);
+      }
+    });
   }
 
   async function openSavedParcel(parcel, options = {}) {
@@ -811,6 +877,7 @@
       window.MapParcelManagement.closeMyParcelsSheet();
       setInitialSavedPhotos(detail);
       window.MapUi.renderSavedParcelDetail(detail);
+      loadSavedPhotos(detail);
     } catch (error) {
       if (deletedSavedParcelIds.has(parcel.id) || !window.MapParcelState.shouldAcceptDetailResponse(
         parcel.id, pendingSavedParcelId, requestRevision, savedParcelDetailRevision,
@@ -870,6 +937,7 @@
         photos: detail.photos,
         photosLoading: detail.photosLoading,
       });
+      loadSavedPhotos(detail);
     } catch (error) {
       if (deletedSavedParcelIds.has(parcel.id) || !window.MapParcelState.shouldAcceptDetailResponse(
         parcel.id, pendingSavedParcelId, requestRevision, savedParcelDetailRevision,
@@ -901,7 +969,9 @@
       ...parcel,
       geometry: parcel.geometry || currentSavedParcel?.geometry,
     };
+    setInitialSavedPhotos(currentSavedParcel);
     window.MapUi.renderSavedParcelDetail(currentSavedParcel);
+    loadSavedPhotos(currentSavedParcel);
   }
 
   function handleSavedParcelDeleted(parcelId) {
@@ -1194,7 +1264,6 @@
       handleSavedParcelUpdated(updatedParcel);
       selectSavedParcelLayer(updatedParcel);
       finishSavedBoundaryEdit({ silent: true });
-      window.MapUi.renderSavedParcelDetail(updatedParcel);
     } catch (error) {
       if (savedBoundaryEditState === state) {
         state.isSaving = false;

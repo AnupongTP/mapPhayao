@@ -2421,7 +2421,15 @@
     }
     const strip = createElement("div", "parcel-photo-strip");
     photos.forEach((photo, index) => {
+      if (photo.loading) {
+        strip.appendChild(createElement("p", "parcel-photo-empty", "กำลังโหลดรูปภาพ..."));
+        return;
+      }
       if (photo.loadError) {
+        strip.appendChild(createElement("p", "parcel-photo-load-error", `โหลดรูปภาพ ${index + 1} ไม่สำเร็จ`));
+        return;
+      }
+      if (!photo.previewUrl) {
         strip.appendChild(createElement("p", "parcel-photo-load-error", `โหลดรูปภาพ ${index + 1} ไม่สำเร็จ`));
         return;
       }
@@ -2439,7 +2447,7 @@
       });
       open.addEventListener("click", () => openParcelPhotoViewer(image.src, image.alt));
       open.appendChild(image);
-      image.src = photo.previewUrl || photo.linkImage;
+      image.src = photo.previewUrl;
       strip.appendChild(open);
     });
     section.appendChild(strip);
@@ -2932,6 +2940,7 @@
     renderParcelResult,
     renderSavedParcelDetail,
     updateSavedParcelPhotos,
+    closeParcelPhotoViewer,
     setSavedParcelPanelActions: function (actions) {
       savedParcelPanelActions = actions || {};
     },

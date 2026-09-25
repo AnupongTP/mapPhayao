@@ -19,14 +19,12 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   const forbidden = await prepareContext(context, { token });
   const errors = watchPageErrors(page);
   const driveRequests = [];
-  let imageProxyRequests = 0;
-  await page.route(/^https:\/\/drive\.usercontent\.google\.com\/download\?/, (route) => {
-    driveRequests.push(route.request().url());
-    return route.fulfill({ status: 200, contentType: "image/png", body: readFileSync(fixture) });
-  });
-  await page.route("**/api/parcels/*/images/*/content", (route) => {
-    imageProxyRequests += 1;
-    return route.abort();
+  const imageProxyRequests = [];
+  page.on("request", (item) => {
+    if (item.url().includes("drive.usercontent.google.com")) driveRequests.push(item.url());
+    if (/\/api\/parcels\/[^/]+\/images\/[^/]+\/content$/.test(item.url())) {
+      imageProxyRequests.push(item.url());
+    }
   });
   await context.addInitScript(() => {
     window.__revokedPhotoUrls = [];
@@ -156,6 +154,15 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   expect((await request.get(`${backendUrl}/api/parcels/${parcel.id}/images/${google.files[1].id}/content`, {
     headers: auth,
   })).status()).toBe(404);
+  const imageId = (await detail.json()).parcel.images[0].id;
+  const ownedImage = await request.get(`${backendUrl}/api/parcels/${parcel.id}/images/${imageId}/content`, {
+    headers: auth,
+  });
+  expect(ownedImage.status()).toBe(200);
+  expect(ownedImage.headers()["content-type"]).toMatch(/^image\/webp/);
+  expect(ownedImage.headers()["cache-control"]).toContain("private");
+  expect((await ownedImage.body()).length).toBeGreaterThan(0);
+  expect((await request.get(`${backendUrl}/api/parcels/${parcel.id}/images/${imageId}/content`)).status()).toBe(401);
 
   await page.reload();
   await expect.poll(() => page.evaluate(() => window.MapLiffMode.isReady())).toBe(true);
@@ -167,12 +174,13 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   await expect(page.locator("#result-panel-content .parcel-photo-section img")).toHaveCount(2);
   const firstSavedPhoto = page.locator("#result-panel-content .parcel-photo-item").first();
   await firstSavedPhoto.scrollIntoViewIfNeeded();
-  await expect.poll(() => driveRequests.length).toBe(2);
-  expect(imageProxyRequests).toBe(0);
-  await expect(firstSavedPhoto.locator("img")).toHaveAttribute("src", JSON.parse(sheetRow[12])[0]);
+  await expect.poll(() => imageProxyRequests.length).toBe(2);
+  expect(driveRequests).toEqual([]);
+  await expect(firstSavedPhoto.locator("img")).toHaveAttribute("src", /^blob:/);
+  const savedPhotoUrl = await firstSavedPhoto.locator("img").getAttribute("src");
   await firstSavedPhoto.click();
   await expect(page.locator(".parcel-photo-viewer")).toBeVisible();
-  await expect(page.locator(".parcel-photo-viewer img")).toHaveAttribute("src", JSON.parse(sheetRow[12])[0]);
+  await expect(page.locator(".parcel-photo-viewer img")).toHaveAttribute("src", savedPhotoUrl);
   await page.locator(".parcel-photo-viewer img").click();
   await expect(page.locator(".parcel-photo-viewer")).toBeVisible();
   await page.locator(".parcel-photo-viewer").click({ position: { x: 5, y: 5 } });
@@ -180,6 +188,7 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   await firstSavedPhoto.click();
   await page.keyboard.press("Escape");
   await expect(page.locator(".parcel-photo-viewer")).toBeHidden();
+  expect(imageProxyRequests).toHaveLength(2);
   expect(await page.evaluate(() => document.body.style.overflow)).toBe("");
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
   await expect(page.locator("#result-panel-content")).toContainText(`พิกัดแปลง${sheetRow[7]}`);

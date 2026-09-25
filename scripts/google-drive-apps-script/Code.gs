@@ -124,7 +124,17 @@ function doPost(e) {
       var bytes = Utilities.base64Decode(body.contentBase64);
       var blob = Utilities.newBlob(bytes, "image/webp", body.filename);
       var created = DriveApp.getFolderById(folderId).createFile(blob);
-      return reply_({ success: true, fileId: created.getId() });
+      try {
+        created.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        return reply_({ success: true, fileId: created.getId() });
+      } catch (error) {
+        try {
+          created.setTrashed(true);
+        } catch (cleanupError) {
+          // Cleanup is best-effort; the upload still fails closed.
+        }
+        return reply_({ success: false, error: "operation-failed" });
+      }
     }
     if (body.filename !== "" || body.mimeType !== "" || body.contentSha256 !== "" ||
       body.contentBase64 !== undefined) {

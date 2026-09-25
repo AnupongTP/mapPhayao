@@ -35,6 +35,7 @@ function createApiHarness(responseBody = { ok: true, status: "SENT" }, harnessOp
       return {
         ok: harnessOptions?.ok ?? true,
         status: harnessOptions?.status || 200,
+        headers: { get: () => harnessOptions?.contentType || "image/webp" },
         json: async () => {
           if (harnessOptions?.nonJson) {
             throw new Error("not json");
@@ -67,9 +68,30 @@ test("parcel photo upload uses authenticated multipart without client owner fiel
   assert.deepEqual([...calls[0].options.body.keys()], ["image"]);
 });
 
-test("normal saved photo display has no image-content API helper", () => {
-  const { MapApi } = createApiHarness();
-  assert.equal(MapApi.getParcelImageBlob, undefined);
+test("saved photo content uses the owned backend route and existing LINE token provider", async () => {
+  const { MapApi, calls, tokenCalls } = createApiHarness();
+  const parcelId = "11111111-1111-4111-8111-111111111111";
+  const controller = new AbortController();
+  const blob = await MapApi.getParcelImageBlob(parcelId, "photo_1.webp", { signal: controller.signal });
+  assert.equal(blob.type, "image/webp");
+  assert.deepEqual(tokenCalls, ["getCurrentIdToken"]);
+  assert.equal(calls[0].url,
+    `https://backend.example.test/api/parcels/${parcelId}/images/photo_1.webp/content`);
+  assert.equal(calls[0].options.headers.Authorization, "Bearer test-id-token");
+  assert.equal(calls[0].options.signal, controller.signal);
+  assert.equal(calls[0].options.method, "GET");
+  assert.equal(Object.keys(calls[0].options.headers).length, 1);
+});
+
+test("saved photo content rejects unsafe image ids and non-WebP responses", async () => {
+  const { MapApi, calls, tokenCalls } = createApiHarness();
+  const parcelId = "11111111-1111-4111-8111-111111111111";
+  await assert.rejects(() => MapApi.getParcelImageBlob(parcelId, "../secret"), TypeError);
+  assert.equal(calls.length, 0);
+  assert.equal(tokenCalls.length, 0);
+  const invalid = createApiHarness({}, { contentType: "text/html" });
+  await assert.rejects(() => invalid.MapApi.getParcelImageBlob(parcelId, "photo.webp"),
+    /Invalid parcel image response/);
 });
 
 test("sendLineLocationSummary posts map-click coordinates to the summary endpoint", async () => {
