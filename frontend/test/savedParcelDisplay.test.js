@@ -72,7 +72,7 @@ test("saved parcel detail uses display formatters and generic variety label", ()
   assert.doesNotMatch(detailBlock, /พันธุ์ข้าว/);
   assert.match(detailBlock, /label: "วันที่ปลูก"[\s\S]*formatter: formatters\.formatThaiDateOnly/);
   assert.match(detailBlock, /label: "อัปเดตล่าสุด"[\s\S]*formatter: formatters\.formatThaiDateTime/);
-  assert.match(detailBlock, /label: "พิกัดแปลง"[^\n]*renderer: createCoordinateMapLink/);
+  assert.match(detailBlock, /label: "พิกัดแปลง"[\s\S]*renderer: \(point\) => createCoordinateMapLink\(point, parcel\?\.parcelName\)/);
 });
 
 test("representative point displays latitude first to six places or the normal empty value", () => {
@@ -86,32 +86,74 @@ test("representative point displays latitude first to six places or the normal e
   assert.match(resultBlock, /label: "พิกัดแปลง"[^\n]*renderer: createCoordinateMapLink/);
 });
 
-test("coordinate destinations validate latitude-first values without provider lock-in", () => {
+test("coordinate destinations keep exact coordinates and safely label Android parcels", () => {
   const formatters = createFormatters();
   const point = { latitude: 19.037525, longitude: 99.941463 };
-  assert.equal(formatters.coordinateMapHref(point, true),
+  assert.equal(formatters.coordinateMapHref(point, { isAndroid: true }),
     "geo:19.037525,99.941463?q=19.037525,99.941463");
-  assert.equal(formatters.coordinateMapHref({ lat: 19.037525, lng: 99.941463 }, true),
-    formatters.coordinateMapHref(point, true));
-  assert.equal(formatters.coordinateMapHref(point, false),
-    "https://www.openstreetmap.org/?mlat=19.037525&mlon=99.941463#map=16/19.037525/99.941463");
-  assert.doesNotMatch(formatters.coordinateMapHref(point, true), /google\.com|package=/);
+  assert.equal(formatters.coordinateMapHref(point, { isAndroid: true, label: " แปลงที่ 1 " }),
+    `geo:19.037525,99.941463?q=19.037525,99.941463(${encodeURIComponent("แปลงที่ 1")})`);
+  assert.equal(formatters.coordinateMapHref(point, { isAndroid: true, label: "  " }),
+    formatters.coordinateMapHref(point, { isAndroid: true }));
+  assert.equal(formatters.coordinateMapHref({ lat: 19.037525, lng: 99.941463 }, { isAndroid: true }),
+    formatters.coordinateMapHref(point, { isAndroid: true }));
+  const special = formatters.coordinateMapHref(point, { isAndroid: true,
+    label: " A   & (B) <script>alert('x')</script> " });
+  assert.equal(special,
+    "geo:19.037525,99.941463?q=19.037525,99.941463(A%20%26%20%28B%29%20%3Cscript%3Ealert%28%27x%27%29%3C%2Fscript%3E)");
+  assert.doesNotMatch(special, /<script>|& \(B\)/);
+  const googleUrl = "https://www.google.com/maps/search/?api=1&query=19.037525%2C99.941463";
+  assert.equal(formatters.coordinateMapHref(point, { isAndroid: false, label: "Wrong place" }), googleUrl);
+  assert.equal(formatters.coordinateMapHref(point), googleUrl);
+  assert.doesNotMatch(googleUrl, /openstreetmap|Wrong place/);
   for (const invalid of [null, {}, { latitude: null, longitude: 99 },
     { latitude: 91, longitude: 99 }, { latitude: 19, longitude: -181 },
     { latitude: "19", longitude: 99 }]) {
-    assert.equal(formatters.coordinateMapHref(invalid, true), null);
+    assert.equal(formatters.coordinateMapHref(invalid, { isAndroid: true }), null);
+    assert.equal(formatters.coordinateMapHref(invalid), null);
   }
+});
+
+test("coordinate link renderer uses HTTPS on iOS and desktop and encoded labels on Android", () => {
+  const source = uiSource.slice(uiSource.indexOf("function createCoordinateMapLink(point, label)"),
+    uiSource.indexOf("function formatYearRange", uiSource.indexOf("function createCoordinateMapLink(point, label)")));
+  const point = { latitude: 19.055414, longitude: 99.964642 };
+  function render(userAgent) {
+    const createElement = (tag, className, textContent) => ({ tag, className, textContent,
+      attributes: {}, setAttribute(name, value) { this.attributes[name] = value; } });
+    const link = vm.runInNewContext(`(${source.trim()})`, {
+      window: { navigator: { userAgent } }, createElement,
+      formatters: createFormatters(), TEXT: { empty: "ไม่มีข้อมูล" },
+    });
+    return link(point, "<script>แปลงที่ 1</script>");
+  }
+  for (const userAgent of ["iPhone", "iPad", "Windows NT 10.0"]) {
+    const link = render(userAgent);
+    assert.equal(link.href,
+      "https://www.google.com/maps/search/?api=1&query=19.055414%2C99.964642");
+    assert.equal(link.textContent, "19.055414, 99.964642");
+    assert.equal(link.attributes["aria-label"], "เปิดพิกัด 19.055414, 99.964642 ในแผนที่");
+    assert.equal(link.target, "_blank");
+    assert.equal(link.rel, "noopener noreferrer");
+  }
+  const android = render("Android 15");
+  assert.equal(android.href,
+    `geo:19.055414,99.964642?q=19.055414,99.964642(${encodeURIComponent("<script>แปลงที่ 1</script>")})`);
+  assert.equal(android.textContent, "19.055414, 99.964642");
+  assert.equal(android.target, undefined);
+  assert.doesNotMatch(android.href, /<script>/);
 });
 
 test("coordinate rows alone use the DOM renderer and themed keyboard-accessible links", () => {
   const css = fs.readFileSync(path.join(frontendRoot, "css/map.css"), "utf8");
-  assert.match(uiSource, /function createCoordinateMapLink\(point\)/);
+  assert.match(uiSource, /function createCoordinateMapLink\(point, label\)/);
   assert.match(uiSource, /display\.appendChild\(renderer\(value\)\)/);
   assert.match(uiSource, /link\.setAttribute\("aria-label"/);
   assert.doesNotMatch(uiSource, /coordinateMapHref[\s\S]{0,300}innerHTML/);
   assert.match(uiSource, /label: "พิกัด"[^\n]*renderer: createCoordinateMapLink/g);
   assert.equal((uiSource.match(/label: "พิกัด"[^\n]*renderer: createCoordinateMapLink/g) || []).length, 2);
-  assert.equal((uiSource.match(/label: "พิกัดแปลง"[^\n]*renderer: createCoordinateMapLink/g) || []).length, 2);
+  assert.equal((uiSource.match(/label: "พิกัดแปลง"[^\n]*renderer: createCoordinateMapLink/g) || []).length, 1);
+  assert.match(uiSource, /renderer: \(point\) => createCoordinateMapLink\(point, parcel\?\.parcelName\)/);
   assert.match(css, /\.coordinate-map-link \{[\s\S]*?color: #0f766e;/);
   assert.match(css, /\.coordinate-map-link:focus-visible \{/);
 });

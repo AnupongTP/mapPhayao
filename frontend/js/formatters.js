@@ -77,7 +77,7 @@
     return `${point.latitude.toFixed(6)}, ${point.longitude.toFixed(6)}`;
   }
 
-  function coordinateMapHref(point, isAndroid) {
+  function coordinateMapHref(point, { isAndroid = false, label = "" } = {}) {
     const latitude = point?.latitude ?? point?.lat;
     const longitude = point?.longitude ?? point?.lng;
     if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 ||
@@ -87,10 +87,12 @@
     const lat = latitude.toFixed(6);
     const lng = longitude.toFixed(6);
     if (isAndroid) {
-      return `geo:${lat},${lng}?q=${lat},${lng}`;
+      const name = typeof label === "string" ? label.trim().replace(/\s+/g, " ") : "";
+      const encodedLabel = encodeURIComponent(name).replace(/[!'()*]/g,
+        (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+      return `geo:${lat},${lng}?q=${lat},${lng}${encodedLabel ? `(${encodedLabel})` : ""}`;
     }
-    return `https://www.openstreetmap.org/?mlat=${encodeURIComponent(lat)}` +
-      `&mlon=${encodeURIComponent(lng)}#map=16/${encodeURIComponent(lat)}/${encodeURIComponent(lng)}`;
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lng}`)}`;
   }
 
   function formatDistance(value) {

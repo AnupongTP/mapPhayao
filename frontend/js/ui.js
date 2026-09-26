@@ -605,9 +605,9 @@
     parent.appendChild(section);
   }
 
-  function createCoordinateMapLink(point) {
+  function createCoordinateMapLink(point, label) {
     const isAndroid = /Android/i.test(window.navigator?.userAgent || "");
-    const href = formatters.coordinateMapHref(point, isAndroid);
+    const href = formatters.coordinateMapHref(point, { isAndroid, label });
     if (!href) return createElement("span", null, TEXT.empty);
     const latitude = point.latitude ?? point.lat;
     const longitude = point.longitude ?? point.lng;
@@ -2686,7 +2686,8 @@
       { label: "หมายเหตุ", value: parcel?.note },
       { label: "พื้นที่", value: parcel?.areaSqm, formatter: formatters.formatThaiLandArea },
       { label: "พื้นที่ไร่", value: parcel?.areaRai, formatter: formatters.formatAreaRai },
-      { label: "พิกัดแปลง", value: parcel?.representativePoint, renderer: createCoordinateMapLink },
+      { label: "พิกัดแปลง", value: parcel?.representativePoint,
+        renderer: (point) => createCoordinateMapLink(point, parcel?.parcelName) },
       { label: "วันที่สร้าง", value: parcel?.createdAt, formatter: formatters.formatThaiDateTime },
       { label: "อัปเดตล่าสุด", value: parcel?.updatedAt, formatter: formatters.formatThaiDateTime },
     ]);

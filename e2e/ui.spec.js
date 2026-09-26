@@ -122,7 +122,7 @@ test("mobile parcel weather and empty photo cards retain readable available and 
   expect(forbidden).toEqual([]);
 });
 
-test("mobile point and parcel coordinates open a generic map destination without changing the result", async ({ page, context }, testInfo) => {
+test("mobile point and parcel coordinates keep exact destinations without changing the result", async ({ page, context }, testInfo) => {
   test.skip(!testInfo.project.name.startsWith("mobile"));
   const forbidden = await prepareContext(context);
   const errors = watchPageErrors(page);
@@ -134,11 +134,11 @@ test("mobile point and parcel coordinates open a generic map destination without
   });
   const point = { latitude: 19.037525, longitude: 99.941463 };
   const android = testInfo.project.name === "mobile-chromium";
-  const expectedHref = android
+  const pointHref = android
     ? "geo:19.037525,99.941463?q=19.037525,99.941463"
-    : "https://www.openstreetmap.org/?mlat=19.037525&mlon=99.941463#map=16/19.037525/99.941463";
+    : "https://www.google.com/maps/search/?api=1&query=19.037525%2C99.941463";
   const result = page.locator("#result-panel-content");
-  async function checkCoordinate(label) {
+  async function checkCoordinate(label, expectedHref = pointHref) {
     const row = result.locator(".result-field").filter({ has: page.locator(".result-label", { hasText: label }) }).first();
     const link = row.getByRole("link", { name: "เปิดพิกัด 19.037525, 99.941463 ในแผนที่" });
     await expect(link).toHaveText("19.037525, 99.941463");
@@ -172,7 +172,8 @@ test("mobile point and parcel coordinates open a generic map destination without
   await page.evaluate((representativePoint) => window.MapUi.renderSavedParcelDetail({
     parcelName: "Saved", representativePoint,
   }), point);
-  await checkCoordinate("พิกัดแปลง");
+  await checkCoordinate("พิกัดแปลง", android
+    ? "geo:19.037525,99.941463?q=19.037525,99.941463(Saved)" : pointHref);
 
   await page.evaluate((clickedPoint) => window.MapUi.renderResultPanel({ clickedPoint }), point);
   await checkCoordinate("พิกัด");
