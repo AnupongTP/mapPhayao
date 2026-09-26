@@ -66,7 +66,7 @@ test("PostgreSQL cleanup checkpoints partial Drive progress across worker restar
   const failed = (await db.query(`SELECT status, attempts, sheet_deleted, remaining_file_ids,
     next_attempt_at, last_error FROM app.cleanup_jobs WHERE id = $1`, [id])).rows[0];
   expect(failed).toMatchObject({ status: "pending", attempts: 1, sheet_deleted: true,
-    remaining_file_ids: ["file_2", "file_3"], last_error: "drive-delete:http-503" });
+    remaining_file_ids: ["file_2", "file_3"], last_error: "DRIVE_DELETE_STARTED:drive-delete:http-503" });
   expect(failed.next_attempt_at.getTime()).toBeGreaterThan(Date.now());
   expect(calls).toEqual(["sheet", "file_1", "file_2"]);
   await db.query("UPDATE app.cleanup_jobs SET next_attempt_at = now() - interval '1 day' WHERE id = $1", [id]);

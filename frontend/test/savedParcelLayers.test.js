@@ -371,6 +371,7 @@ function createLeafletStub(state) {
 }
 
 function createHarness(options = {}) {
+  let persistedUpdatedParcel = null;
   const windowEvents = createEventTarget();
   const documentEvents = createEventTarget();
   const leafletState = {
@@ -436,12 +437,15 @@ function createHarness(options = {}) {
       }
       return {
         success: true,
-        parcel: (options.detailParcels || []).find((item) => item.id === id),
+        parcel: persistedUpdatedParcel?.id === id ? persistedUpdatedParcel :
+          (options.detailParcels || []).find((item) => item.id === id),
       };
     },
     analyzeMyParcel: async (id) => {
       apiCalls.push({ method: "analyzeMyParcel", id });
-      return { success: true };
+      if (options.analysisHandler) return options.analysisHandler(id);
+      if (options.analysisRejects) throw new Error("analysis unavailable");
+      return options.analysisResponse || { success: true };
     },
     updateMyParcel: async (id, patch) => {
       apiCalls.push({ method: "updateMyParcel", id, patch });
@@ -450,7 +454,7 @@ function createHarness(options = {}) {
         error.statusCode = options.updateStatusCode || 500;
         throw error;
       }
-      return {
+      const result = {
         success: true,
         parcel: options.updatedParcel || {
           ...(options.detailParcels || options.listParcels || []).find((item) => item.id === id),
@@ -461,6 +465,8 @@ function createHarness(options = {}) {
           updatedAt: "2026-07-16T10:00:00.000Z",
         },
       };
+      persistedUpdatedParcel = result.parcel;
+      return result;
     },
     getLocationReport: async () => ({ success: true }),
     getParcelImageBlob: async (parcelId, imageId, requestOptions) => {
@@ -1053,7 +1059,7 @@ test("saved boundary edit mode edits only the selected parcel and blocks point s
   assert.equal(harness.uiState.mobileStates.at(-1).isBlocked, true);
 });
 
-test("saving a saved boundary sends geometry and replaces only that persisted layer", async () => {
+test("saving a saved boundary updates once, invalidates old analysis, and analyzes the new parcel once", async () => {
   const parcelA = parcel(PARCEL_A_ID, "เธเนเธฒเธงเธเนเธฒ", polygon(0));
   const parcelB = parcel(PARCEL_B_ID, "เธเนเธฒเธงเนเธเธ”เธเนเธฒ", polygon(0.002));
   const updatedA = parcel(PARCEL_A_ID, "เธเนเธฒเธงเธเนเธฒ", polygon(0.006));
@@ -1066,20 +1072,68 @@ test("saving a saved boundary sends geometry and replaces only that persisted la
   const replacementA = harness.savedGroup.layers.find((layer) => layer._mapPhayaoParcelId === PARCEL_A_ID);
   const untouchedB = harness.savedGroup.layers.find((layer) => layer._mapPhayaoParcelId === PARCEL_B_ID);
 
-  assert.equal(harness.apiCalls.at(-1).method, "updateMyParcel");
-  assert.equal(harness.apiCalls.at(-1).id, PARCEL_A_ID);
+  assert.equal(harness.apiCalls.filter((call) => call.method === "updateMyParcel").length, 1);
+  assert.equal(harness.apiCalls.filter((call) => call.method === "analyzeMyParcel").length, 1);
+  assert.deepEqual(harness.apiCalls.filter((call) => ["updateMyParcel", "analyzeMyParcel"].includes(call.method))
+    .map((call) => call.method), ["updateMyParcel", "analyzeMyParcel"]);
+  const update = harness.apiCalls.find((call) => call.method === "updateMyParcel");
+  assert.equal(update.id, PARCEL_A_ID);
   assert.deepEqual(
-    JSON.parse(JSON.stringify(harness.apiCalls.at(-1).patch.geometry)),
+    JSON.parse(JSON.stringify(update.patch.geometry)),
     parcelA.geometry,
   );
   assert.equal(editGroup.layers.length, 0);
   assert.deepEqual(replacementA.data.geometry, updatedA.geometry);
   assert.deepEqual(untouchedB.data.geometry, parcelB.geometry);
   assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.areaRai, updatedA.areaRai);
+  assert.equal(harness.uiState.renderedParcelResults.at(-1).analysisStatus, "success");
+  assert.equal(harness.uiState.renderedParcelResults.at(-1).id, updatedA.id);
 
   harness.leafletState.map.fire("click", { latlng: { lat: 19.22, lng: 99.82 } });
   assert.deepEqual(harness.leafletState.marker.getLatLng(), { lat: 19.22, lng: 99.82 });
   assert.equal(harness.uiState.mapReady.at(-1).lat, 19.22);
+});
+
+test("saved boundary save does not reuse analysis cached for the old geometry", async () => {
+  const parcelA = parcel(PARCEL_A_ID, "Field A", polygon(0));
+  const updatedA = parcel(PARCEL_A_ID, "Field A", polygon(0.01));
+  updatedA.updatedAt = "2026-07-16T10:00:00.000Z";
+  let analyses = 0;
+  const harness = createHarness({ updatedParcel: updatedA,
+    analysisHandler: async () => ({ generation: ++analyses }) });
+  harness.parcelHandlers.onParcelsLoaded([parcelA]);
+  await harness.parcelHandlers.onAnalyzeParcel(parcelA);
+  assert.equal(analyses, 1);
+  await harness.parcelHandlers.onEditBoundary(parcelA);
+  await harness.uiState.parcelControlHandlers.onSaveEdit();
+  assert.equal(analyses, 2);
+  assert.equal(harness.uiState.renderedParcelResults.at(-1).analysis.generation, 2);
+  assert.deepEqual(harness.savedGroup.layers[0].data.geometry, updatedA.geometry);
+  assert.equal(harness.apiCalls.filter((call) => call.method === "updateMyParcel").length, 1);
+});
+
+test("analysis failure after boundary save keeps new geometry and allows a later retry", async () => {
+  const parcelA = parcel(PARCEL_A_ID, "Field A", polygon(0));
+  const updatedA = parcel(PARCEL_A_ID, "Field A", polygon(0.01));
+  let attempts = 0;
+  const harness = createHarness({ updatedParcel: updatedA,
+    analysisHandler: async () => {
+      if (++attempts === 1) throw new Error("analysis unavailable");
+      return { generation: attempts };
+    } });
+  harness.parcelHandlers.onParcelsLoaded([parcelA]);
+  await harness.parcelHandlers.onEditBoundary(parcelA);
+  await harness.uiState.parcelControlHandlers.onSaveEdit();
+  assert.equal(attempts, 1);
+  assert.equal(harness.editGroup.layers.length, 0);
+  assert.deepEqual(harness.savedGroup.layers[0].data.geometry, updatedA.geometry);
+  assert.deepEqual(harness.uiState.renderedSavedDetails.at(-1).parcel.geometry, updatedA.geometry);
+  assert.equal(harness.apiCalls.filter((call) => call.method === "updateMyParcel").length, 1);
+  await harness.parcelHandlers.onAnalyzeParcel(updatedA);
+  assert.equal(attempts, 2);
+  assert.equal(harness.uiState.renderedParcelResults.at(-1).analysisStatus, "success");
+  assert.equal(harness.uiState.renderedParcelResults.at(-1).analysis.generation, 2);
+  assert.equal(harness.apiCalls.filter((call) => call.method === "updateMyParcel").length, 1);
 });
 
 test("saved boundary edit enables every MultiPolygon child and saves reconstructed MultiPolygon geometry", async () => {
@@ -1109,9 +1163,10 @@ test("saved boundary edit enables every MultiPolygon child and saves reconstruct
 
   await harness.uiState.parcelControlHandlers.onSaveEdit();
 
-  assert.equal(harness.apiCalls.at(-1).method, "updateMyParcel");
+  assert.equal(harness.apiCalls.filter((call) => call.method === "updateMyParcel").length, 1);
+  assert.equal(harness.apiCalls.filter((call) => call.method === "analyzeMyParcel").length, 1);
   assert.deepEqual(
-    JSON.parse(JSON.stringify(harness.apiCalls.at(-1).patch.geometry)),
+    JSON.parse(JSON.stringify(harness.apiCalls.find((call) => call.method === "updateMyParcel").patch.geometry)),
     editedGeometry,
   );
   assert.equal(harness.editGroup.layers.length, 0);
@@ -1127,6 +1182,7 @@ test("canceling saved boundary edit discards the copy without an API request", a
 
   assert.equal(harness.editGroup.layers.length, 0);
   assert.equal(harness.apiCalls.some((call) => call.method === "updateMyParcel"), false);
+  assert.equal(harness.apiCalls.some((call) => call.method === "analyzeMyParcel"), false);
   assert.deepEqual(harness.savedGroup.layers[0].data.geometry, parcelA.geometry);
 
   harness.leafletState.map.fire("click", { latlng: { lat: 19.44, lng: 99.91 } });
@@ -1143,6 +1199,7 @@ test("failed saved boundary save keeps editable draft and original persisted lay
   await harness.uiState.parcelControlHandlers.onSaveEdit();
 
   assert.equal(harness.editGroup.layers.length, 1);
+  assert.equal(harness.apiCalls.some((call) => call.method === "analyzeMyParcel"), false);
   assert.deepEqual(harness.savedGroup.layers[0].data.geometry, parcelA.geometry);
   assert.equal(harness.uiState.messages.includes("raw owner detail should not leak"), false);
 });

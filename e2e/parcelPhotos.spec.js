@@ -205,8 +205,8 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   });
   const created = page.waitForResponse((response) => response.url().endsWith("/api/parcels") && response.request().method() === "POST");
   await sheet.getByRole("button", { name: "บันทึกแปลง" }).click();
-  await expect(sheet.locator("#parcel-save-status")).toContainText("กำลังอัปโหลดรูป 1/2");
-  await expect(sheet.locator("#parcel-save-status")).toContainText("กำลังอัปโหลดรูป 2/2");
+  await expect(sheet.locator("#parcel-save-status")).toContainText("กำลังรอการตอบกลับรูป 1/2");
+  await expect(sheet.locator("#parcel-save-status")).toContainText("กำลังรอการตอบกลับรูป 2/2");
   const parcel = (await (await created).json()).parcel;
   expect(parcel.note).toBe("ทดสอบหมายเหตุแปลง");
   expect(parcel.riceVariety).toBe("KDML105");
@@ -243,8 +243,8 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   expect(JSON.parse(sheetRow[12])).toEqual(google.files.map((file) =>
     `https://drive.usercontent.google.com/download?id=${file.id}&export=view`));
   expect(sheetRow[13]).toBe("ทดสอบหมายเหตุแปลง");
-  expect(sheetRow[14]).toMatch(/\+07:00$/);
-  expect(sheetRow[15]).toMatch(/\+07:00$/);
+  expect(sheetRow[14]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  expect(sheetRow[15]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
   expect(google.files).toHaveLength(2);
   const denied = await request.post(`${backendUrl}/api/parcels/${parcel.id}/images`, {
     headers: { Authorization: "Bearer e2e-line-token-user-b" },
@@ -411,7 +411,7 @@ test("failed photo upload keeps saved parcel and retries without duplicate creat
   expect(beforeRetry.rows[0].count).toBe(1);
   const failedGoogle = await (await request.get(`${backendUrl}/__e2e__/google`)).json();
   expect(imageAttempts).toBe(2);
-  expect(failedGoogle.files).toHaveLength(1);
+  expect(failedGoogle.files.filter((file) => file.fileName.startsWith(`${parcel.parcelCode}_`))).toHaveLength(1);
   const failedRow = failedGoogle.parcels.find((row) => row[2] === parcel.parcelCode);
   expect(JSON.parse(failedRow[11])).toHaveLength(1);
   expect(JSON.parse(failedRow[12])).toHaveLength(1);
@@ -423,12 +423,14 @@ test("failed photo upload keeps saved parcel and retries without duplicate creat
   await expect(sheet).toHaveCount(0);
   expect(createAttempts).toBe(0);
   expect(imageAttempts).toBe(3);
-  expect((await (await request.get(`${backendUrl}/__e2e__/google`)).json()).files).toHaveLength(2);
+  expect((await (await request.get(`${backendUrl}/__e2e__/google`)).json()).files
+    .filter((file) => file.fileName.startsWith(`${parcel.parcelCode}_`))).toHaveLength(2);
   const detail = await request.get(`${backendUrl}/api/parcels/${parcel.id}`, { headers: auth });
   expect((await detail.json()).parcel.images).toHaveLength(2);
   expect(forbidden).toEqual([]);
   expect(errors).toEqual([
     "Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
+    expect.stringMatching(/^\[ParcelUpload\] BACKEND_HTTP_ERROR \{photoIndex: 1, totalPhotos: 2, status: 500, stage: DRIVE_UPLOAD, code: UPLOAD_FAILED\}$/),
   ]);
   expect((await request.delete(`${backendUrl}/api/parcels/${parcel.id}`, { headers: auth })).status()).toBe(200);
 });
@@ -491,6 +493,7 @@ test("mobile save retries one safe transient photo with its original ID before t
   expect(forbidden).toEqual([]);
   expect(errors).toEqual([
     "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
+    expect.stringMatching(/^\[ParcelUpload\] BACKEND_HTTP_ERROR \{photoIndex: 1, totalPhotos: 2, status: 503, stage: BACKEND_HTTP_ERROR, code: BACKEND_HTTP_ERROR\}$/),
   ]);
   expect((await request.delete(`${backendUrl}/api/parcels/${parcel.id}`, { headers: auth })).status()).toBe(200);
 });

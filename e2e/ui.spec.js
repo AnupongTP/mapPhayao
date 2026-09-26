@@ -60,7 +60,7 @@ test("protected parcel photos fail independently and share one fullscreen viewer
   }, parcelId);
   expect(loading).toBe(true);
   await expect(result).toContainText("โหลดรูปภาพ 1 ไม่สำเร็จ");
-  await expect(result).toContainText("กำลังโหลดรูปภาพ...");
+  await expect(result.locator(".parcel-photo-loading .parcel-photo-spinner")).toHaveCount(1);
   releaseGood();
   await page.evaluate(() => window.__protectedPhotoResults);
   const good = result.locator(".parcel-photo-item");
@@ -93,7 +93,8 @@ test("protected parcel photos fail independently and share one fullscreen viewer
   await expect(viewer).toHaveCount(1);
   expect(await page.evaluate(() => document.body.style.overflow)).toBe("");
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
-  expect(proxyCalls).toHaveLength(2);
+  expect(proxyCalls.filter((url) => url.endsWith("/bad.webp/content"))).toHaveLength(4);
+  expect(proxyCalls.filter((url) => url.endsWith("/good.webp/content"))).toHaveLength(1);
   expect(forbidden).toEqual([]);
 });
 

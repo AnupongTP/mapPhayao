@@ -1293,6 +1293,7 @@
     state.isSaving = true;
     syncSavedBoundaryEditControls(true);
 
+    let savedParcel;
     try {
       const result = await window.MapApi.updateMyParcel(state.parcelId, { geometry });
       const updatedParcel = result.parcel;
@@ -1303,13 +1304,16 @@
       handleSavedParcelUpdated(updatedParcel);
       selectSavedParcelLayer(updatedParcel);
       finishSavedBoundaryEdit({ silent: true });
+      savedParcel = updatedParcel;
     } catch (error) {
       if (savedBoundaryEditState === state) {
         state.isSaving = false;
         syncSavedBoundaryEditControls(false);
         window.MapUi.showLocationMessage(getSavedBoundaryEditErrorMessage(error));
       }
+      return;
     }
+    await analyzeSavedParcel(savedParcel);
   }
 
   function cancelSavedBoundaryEdit(options = {}) {

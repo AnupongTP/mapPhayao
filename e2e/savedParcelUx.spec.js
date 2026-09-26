@@ -463,9 +463,16 @@ test("a UI-drawn saved parcel deletes once without stale follow-up requests", as
   ]);
   await page.reload();
   await expect.poll(() => page.evaluate(() => window.MapLiffMode.isReady())).toBe(true);
-  await expect(page.locator("#saved-parcels-control-button")).toBeHidden();
   const remaining = await request.get(`${backendUrl}/api/parcels/mine`, { headers });
-  expect((await remaining.json()).parcels.map((item) => item.id)).not.toContain(id);
+  const remainingParcels = (await remaining.json()).parcels;
+  expect(remainingParcels.map((item) => item.id)).not.toContain(id);
+  if (remainingParcels.length === 0) {
+    await expect(page.locator("#saved-parcels-control-button")).toBeHidden();
+  } else {
+    await expect(page.locator("#saved-parcels-control-button")).toBeVisible();
+    await page.locator("#saved-parcels-control-button").click();
+    await expect(page.locator(`#my-parcels-list .saved-parcel-card[data-parcel-id="${id}"]`)).toHaveCount(0);
+  }
   expect(forbidden).toEqual([]);
   expect(errors).toEqual([
     "Failed to load resource: the server responded with a status of 503 (Service Unavailable)",
