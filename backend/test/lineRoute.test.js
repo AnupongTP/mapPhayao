@@ -99,7 +99,7 @@ test("LINE route verifies token, ignores client userId, and returns analysis JSO
         floodRecurrence: { status: "none_detected" },
         droughtRecurrence: { status: "detected" },
       },
-      weather: { status: "UNAVAILABLE", source: "Open-Meteo" },
+      weather: { status: "UNAVAILABLE", source: "WeatherAPI" },
       location: { tambon: "sample" },
     };
   };
@@ -119,7 +119,7 @@ test("LINE route verifies token, ignores client userId, and returns analysis JSO
   assert.notEqual(res.body.userId, "client-supplied-user");
   assert.equal(res.body.riceLandSuitability.class, "S2");
   assert.equal(res.body.maizeLandSuitability.class, "S3");
-  assert.equal(res.body.weather.source, "Open-Meteo");
+  assert.equal(res.body.weather.source, "WeatherAPI");
   assert.ok(res.body.hazardHistory);
   assert.equal(JSON.stringify(res.body).includes("test-id-token"), false);
 });
@@ -162,7 +162,7 @@ test("LINE route does not require channel access token or send messages", async 
       riceLandSuitability: { status: "NO_COVERAGE" },
       maizeLandSuitability: { status: "NO_COVERAGE" },
       hazardHistory: {},
-      weather: { status: "UNAVAILABLE", source: "Open-Meteo" },
+      weather: { status: "UNAVAILABLE", source: "WeatherAPI" },
       partialErrors: [],
     };
   };

@@ -81,7 +81,7 @@ function sampleAnalysis(overrides = {}) {
       temperatureC: 24.1,
       nextHourPrecipitationProbabilityPercent: 82,
       nextHourForecastAt: "2026-07-15T01:00:00+07:00",
-      source: "Open-Meteo",
+      source: "WeatherAPI",
     }),
     ...overrides.root,
   };

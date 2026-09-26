@@ -1,13 +1,13 @@
 const db = require("../config/database");
-const { createAppsScriptDriveBridge, safeWeatherRejectionReason } = require("./appsScriptDriveBridge");
 
-const OPEN_METEO_BASE_URL = "https://api.open-meteo.com/v1/forecast";
-const SOURCE = "Open-Meteo";
+const WEATHERAPI_BASE_URL = "https://api.weatherapi.com/v1/forecast.json";
+const SOURCE = "WeatherAPI";
 const DEFAULT_TIMEOUT_MS = 5000;
-const CACHE_TTL_MS = 10 * 60 * 1000;
+const CACHE_TTL_MS = 60 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 500;
 const DEFAULT_RATE_LIMIT_SECONDS = 60;
 const MAX_RATE_LIMIT_SECONDS = 5 * 60;
+const WEATHER_API_KEY_PATTERN = /^[A-Za-z0-9_-]{10,128}$/;
 
 const cache = new Map();
 const inFlight = new Map();
@@ -33,104 +33,57 @@ function buildOutsideServiceAreaResult() {
 }
 
 function isValidCoordinate(latitude, longitude) {
-  return (
-    Number.isFinite(latitude) &&
-    Number.isFinite(longitude) &&
-    latitude >= -90 &&
-    latitude <= 90 &&
-    longitude >= -180 &&
-    longitude <= 180
-  );
+  return Number.isFinite(latitude) && Number.isFinite(longitude) &&
+    latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
 }
 
-function toNumberOrNull(value) {
-  if (value === null || value === undefined || value === "") {
-    return null;
-  }
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
+function bangkokTimestamp(epochSeconds) {
+  if (!Number.isInteger(epochSeconds) || epochSeconds <= 0) return null;
+  const date = new Date(epochSeconds * 1000);
+  if (!Number.isFinite(date.getTime())) return null;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).formatToParts(date).map(({ type, value }) => [type, value]));
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}+07:00`;
 }
 
-function clampPercent(value) {
-  const number = toNumberOrNull(value);
-  if (number === null) {
-    return null;
+function normalizeWeatherResponse(body) {
+  const localTime = body?.location?.localtime_epoch;
+  const temperature = body?.current?.temp_c;
+  const updatedAt = bangkokTimestamp(body?.current?.last_updated_epoch);
+  const days = body?.forecast?.forecastday;
+  if (body?.location?.tz_id !== "Asia/Bangkok" || !Number.isInteger(localTime) ||
+    !Number.isFinite(temperature) || !updatedAt || !Array.isArray(days)) {
+    return buildUnavailableResult();
   }
-  if (number < 0 || number > 100) {
-    return null;
-  }
-  return number;
+  if (days.some((day) => !Array.isArray(day?.hour))) return buildUnavailableResult();
+  const hours = days.flatMap((day) => day.hour);
+  if (hours.some((hour) => !Number.isInteger(hour?.time_epoch))) return buildUnavailableResult();
+  const nextHour = hours
+    .filter((hour) => hour.time_epoch > localTime)
+    .sort((a, b) => a.time_epoch - b.time_epoch)[0];
+  const probability = nextHour?.chance_of_rain;
+  const nextHourForecastAt = bangkokTimestamp(nextHour?.time_epoch);
+  if (!Number.isInteger(probability) || probability < 0 || probability > 100 ||
+    !nextHourForecastAt) return buildUnavailableResult();
+  return createWeatherResult("AVAILABLE", {
+    temperatureC: temperature,
+    nextHourPrecipitationProbabilityPercent: probability,
+    nextHourForecastAt,
+    updatedAt,
+  });
 }
 
-function getOffsetString(offsetSeconds) {
-  const number = Number(offsetSeconds);
-  if (!Number.isFinite(number)) {
-    return "+07:00";
-  }
-  const sign = number < 0 ? "-" : "+";
-  const absolute = Math.abs(number);
-  const hours = String(Math.floor(absolute / 3600)).padStart(2, "0");
-  const minutes = String(Math.floor((absolute % 3600) / 60)).padStart(2, "0");
-  return `${sign}${hours}:${minutes}`;
-}
-
-function normalizeCurrentTime(value, offsetSeconds) {
-  if (typeof value !== "string" || !value.trim()) {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(trimmed)) {
-    const date = new Date(trimmed);
-    return Number.isNaN(date.getTime()) ? null : date.toISOString();
-  }
-
-  const withSeconds = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmed)
-    ? `${trimmed}:00`
-    : trimmed;
-  const normalized = `${withSeconds}${getOffsetString(offsetSeconds)}`;
-  const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? null : normalized;
-}
-
-function getComparableTimestamp(value) {
-  if (typeof value !== "string" || !value.trim()) {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  const localMatch = trimmed.match(
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/,
-  );
-  if (localMatch) {
-    const [, year, month, day, hour, minute, second = "0"] = localMatch;
-    return Date.UTC(
-      Number(year),
-      Number(month) - 1,
-      Number(day),
-      Number(hour),
-      Number(minute),
-      Number(second),
-    );
-  }
-
-  if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(trimmed)) {
-    const timestamp = Date.parse(trimmed);
-    return Number.isNaN(timestamp) ? null : timestamp;
-  }
-
-  return null;
-}
-
-function buildUrl(latitude, longitude) {
-  const url = new URL(OPEN_METEO_BASE_URL);
-  url.searchParams.set("latitude", String(latitude));
-  url.searchParams.set("longitude", String(longitude));
-  url.searchParams.set("current", "temperature_2m");
-  url.searchParams.set("hourly", "precipitation_probability");
-  url.searchParams.set("timezone", "Asia/Bangkok");
-  url.searchParams.set("forecast_hours", "3");
-  url.searchParams.set("temperature_unit", "celsius");
+function buildUrl(latitude, longitude, key) {
+  const url = new URL(WEATHERAPI_BASE_URL);
+  url.searchParams.set("key", key);
+  url.searchParams.set("q", `${latitude},${longitude}`);
+  url.searchParams.set("days", "2");
+  url.searchParams.set("aqi", "no");
+  url.searchParams.set("alerts", "no");
+  url.searchParams.set("current_fields", "temp_c,last_updated_epoch");
+  url.searchParams.set("hour_fields", "time_epoch,chance_of_rain");
   return url;
 }
 
@@ -140,9 +93,7 @@ function getCacheKey(latitude, longitude) {
 
 function getCached(key, now) {
   const entry = cache.get(key);
-  if (!entry) {
-    return null;
-  }
+  if (!entry) return null;
   if (entry.expiresAt <= now) {
     cache.delete(key);
     return null;
@@ -153,14 +104,9 @@ function getCached(key, now) {
 function setCached(key, value, now) {
   if (cache.size >= MAX_CACHE_ENTRIES) {
     const firstKey = cache.keys().next().value;
-    if (firstKey) {
-      cache.delete(firstKey);
-    }
+    if (firstKey) cache.delete(firstKey);
   }
-  cache.set(key, {
-    value,
-    expiresAt: now + CACHE_TTL_MS,
-  });
+  cache.set(key, { value, expiresAt: now + CACHE_TTL_MS });
 }
 
 function retryAfterSeconds(value, now) {
@@ -176,157 +122,66 @@ function retryAfterSeconds(value, now) {
 }
 
 async function isInsidePhayao(latitude, longitude) {
-  if (!isValidCoordinate(latitude, longitude)) {
-    return false;
-  }
-
-  const result = await db.query(
-    `
+  if (!isValidCoordinate(latitude, longitude)) return false;
+  const result = await db.query(`
     WITH point AS (
       SELECT ST_Transform(
-        ST_SetSRID(
-          ST_MakePoint($1::double precision, $2::double precision),
-          4326
-        ),
+        ST_SetSRID(ST_MakePoint($1::double precision, $2::double precision), 4326),
         32647
       ) AS geom
     )
     SELECT EXISTS (
-      SELECT 1
-      FROM gis.amphoe a
-      CROSS JOIN point p
-      WHERE a.prov_code = 56
-        AND ST_Covers(a.geom, p.geom)
+      SELECT 1 FROM gis.amphoe a CROSS JOIN point p
+      WHERE a.prov_code = 56 AND ST_Covers(a.geom, p.geom)
     ) AS is_inside;
-    `,
-    [longitude, latitude],
-  );
-
+  `, [longitude, latitude]);
   return Boolean(result.rows[0]?.is_inside);
 }
 
-function normalizeWeatherResponse(body) {
-  if (!body || typeof body !== "object") {
-    return buildUnavailableResult();
-  }
-
-  const temperatureC = toNumberOrNull(body.current?.temperature_2m);
-  const currentTime = body.current?.time;
-  const updatedAt = normalizeCurrentTime(body.current?.time, body.utc_offset_seconds);
-  const currentComparable = getComparableTimestamp(currentTime);
-  const hourlyTimes = body.hourly?.time;
-  const hourlyProbabilities = body.hourly?.precipitation_probability;
-
-  if (
-    !updatedAt ||
-    currentComparable === null ||
-    !Array.isArray(hourlyTimes) ||
-    !Array.isArray(hourlyProbabilities)
-  ) {
-    return buildUnavailableResult();
-  }
-
-  const nextIndex = hourlyTimes.findIndex((time) => {
-    const comparable = getComparableTimestamp(time);
-    return comparable !== null && comparable > currentComparable;
-  });
-  if (nextIndex < 0 || nextIndex >= hourlyProbabilities.length) {
-    return buildUnavailableResult();
-  }
-
-  const probability = clampPercent(hourlyProbabilities[nextIndex]);
-  const nextHourForecastAt = normalizeCurrentTime(hourlyTimes[nextIndex], body.utc_offset_seconds);
-  if (probability === null || !nextHourForecastAt) {
-    return buildUnavailableResult();
-  }
-
-  return createWeatherResult("AVAILABLE", {
-    temperatureC,
-    nextHourPrecipitationProbabilityPercent: probability,
-    nextHourForecastAt,
-    updatedAt,
-  });
-}
-
-async function fetchDirectWeather(latitude, longitude, options) {
-  const fetchImpl = options.fetchImpl || fetch;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
-  try {
-    const response = await fetchImpl(buildUrl(latitude, longitude), {
-      method: "GET",
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
-    });
-    const result = { providerStatus: response.status,
-      retryAfter: response.headers?.get?.("retry-after") ?? null, body: null };
-    if (!response.ok) return result;
-    try {
-      result.body = await response.json();
-    } catch (error) {
-      result.invalidJson = true;
-    }
-    return result;
-  } catch (error) {
-    return { failureStage: controller.signal.aborted ? "timeout" : "network" };
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function requestOpenMeteo(latitude, longitude, options = {}) {
-  const env = options.env || process.env;
-  const transport = options.transport || env.WEATHER_OPEN_METEO_TRANSPORT;
-  if (transport !== "direct" && transport !== "apps-script") {
+async function requestWeatherApi(latitude, longitude, options = {}) {
+  const key = (options.env || process.env).WEATHER_API_KEY;
+  if (typeof key !== "string" || !WEATHER_API_KEY_PATTERN.test(key)) {
     console.warn("weather-provider-unavailable", { stage: "config" });
     return buildUnavailableResult();
   }
-  let result;
-  if (transport === "direct") {
-    result = await fetchDirectWeather(latitude, longitude, options);
-  } else {
-    try {
-      const bridge = options.appsScriptBridge || createAppsScriptDriveBridge({
-        url: env.GOOGLE_DRIVE_APPS_SCRIPT_URL,
-        secret: env.GOOGLE_DRIVE_APPS_SCRIPT_SECRET,
-        fetchImpl: options.bridgeFetchImpl || fetch,
-        now: options.now || Date.now,
-      });
-      result = await bridge.getWeather(latitude, longitude);
-    } catch (error) {
-      const category = error?.bridgeCategory;
-      const stage = ["timeout", "network", "rejected"].includes(category)
-        ? `apps-script-${category}` : "apps-script-invalid-response";
-      const reason = category === "rejected"
-        ? safeWeatherRejectionReason(error?.weatherRejectionReason) : null;
-      console.warn("weather-provider-unavailable", { stage, ...(reason ? { reason } : {}) });
-      return buildUnavailableResult();
-    }
-  }
-  if (result.failureStage) {
-    console.warn("weather-provider-unavailable", { stage: result.failureStage });
+  const now = options.now || Date.now;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
+  let response;
+  try {
+    response = await (options.fetchImpl || fetch)(buildUrl(latitude, longitude, key), {
+      method: "GET", headers: { Accept: "application/json" },
+      redirect: "error", signal: controller.signal,
+    });
+  } catch {
+    console.warn("weather-provider-unavailable", { stage: controller.signal.aborted ? "timeout" : "network" });
     return buildUnavailableResult();
+  } finally {
+    clearTimeout(timeoutId);
   }
-  if (result.providerStatus === 429) {
-    const now = options.now || Date.now;
-    const seconds = retryAfterSeconds(result.retryAfter, now());
+  const status = response?.status;
+  if (status === 429) {
+    let retryAfter = null;
+    try { retryAfter = response.headers?.get?.("retry-after") ?? null; } catch { /* Use bounded default. */ }
+    const seconds = retryAfterSeconds(retryAfter, now());
     rateLimitedUntil = Math.max(rateLimitedUntil, now() + seconds * 1000);
     console.warn("weather-provider-unavailable", {
-      stage: "rate-limit", status: 429, retryAfterSeconds: seconds,
+      stage: "rate-limit", status, retryAfterSeconds: seconds,
     });
     return buildUnavailableResult();
   }
-  if (!Number.isInteger(result.providerStatus) || result.providerStatus < 200 || result.providerStatus >= 300) {
-    console.warn("weather-provider-unavailable", {
-      stage: "http", status: Number.isInteger(result.providerStatus) ? result.providerStatus : undefined,
-    });
+  if (!Number.isInteger(status) || status < 200 || status >= 300) {
+    const stage = status === 400 ? "bad-request" : [401, 403].includes(status) ? "auth" :
+      Number.isInteger(status) && status >= 500 ? "upstream" : "http";
+    console.warn("weather-provider-unavailable", { stage, status: Number.isInteger(status) ? status : undefined });
     return buildUnavailableResult();
   }
-  if (result.invalidJson) {
+  let body;
+  try { body = await response.json(); } catch {
     console.warn("weather-provider-unavailable", { stage: "invalid-json" });
     return buildUnavailableResult();
   }
-  const weather = normalizeWeatherResponse(result.body);
+  const weather = normalizeWeatherResponse(body);
   if (weather.status !== "AVAILABLE") {
     console.warn("weather-provider-unavailable", { stage: "invalid-payload" });
   }
@@ -334,27 +189,20 @@ async function requestOpenMeteo(latitude, longitude, options = {}) {
 }
 
 async function getWeatherForLocation({ latitude, longitude }, options = {}) {
-  if (!isValidCoordinate(latitude, longitude)) {
-    return buildUnavailableResult();
-  }
-
+  if (!isValidCoordinate(latitude, longitude)) return buildUnavailableResult();
   const inside = typeof options.isInsidePhayao === "function"
     ? await options.isInsidePhayao(latitude, longitude)
     : await isInsidePhayao(latitude, longitude);
-  if (!inside) {
-    return buildOutsideServiceAreaResult();
-  }
+  if (!inside) return buildOutsideServiceAreaResult();
 
   const cacheKey = getCacheKey(latitude, longitude);
   const now = options.now || Date.now;
   const cached = getCached(cacheKey, now());
-  if (cached) {
-    return cached;
-  }
+  if (cached) return cached;
   if (now() < rateLimitedUntil) return buildUnavailableResult();
   const existing = inFlight.get(cacheKey);
   if (existing) return existing;
-  const pending = requestOpenMeteo(latitude, longitude, options).then((weather) => {
+  const pending = requestWeatherApi(latitude, longitude, options).then((weather) => {
     if (weather.status === "AVAILABLE") setCached(cacheKey, weather, now());
     return weather;
   }).finally(() => inFlight.delete(cacheKey));
@@ -369,21 +217,8 @@ function clearCache() {
 }
 
 module.exports = {
-  OPEN_METEO_BASE_URL,
-  SOURCE,
-  getWeatherForLocation,
-  isInsidePhayao,
-  normalizeWeatherResponse,
-  normalizeCurrentTime,
-  buildUrl,
-  buildUnavailableResult,
-  buildOutsideServiceAreaResult,
-  clearCache,
-  _private: {
-    isValidCoordinate,
-    getComparableTimestamp,
-    getCacheKey,
-    retryAfterSeconds,
-    requestOpenMeteo,
-  },
+  WEATHERAPI_BASE_URL, SOURCE, CACHE_TTL_MS,
+  getWeatherForLocation, isInsidePhayao, normalizeWeatherResponse,
+  buildUnavailableResult, buildOutsideServiceAreaResult, clearCache,
+  _private: { isValidCoordinate, getCacheKey, retryAfterSeconds, requestWeatherApi },
 };

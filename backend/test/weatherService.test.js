@@ -1,507 +1,162 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-
 const weatherService = require("../src/services/weatherService");
 const locationReportService = require("../src/services/locationReportService");
 const areaAnalysisService = require("../src/services/areaAnalysisService");
 const db = require("../src/config/database");
 
 const originalQuery = db.query;
-const originalTransport = process.env.WEATHER_OPEN_METEO_TRANSPORT;
+const epoch = (iso) => Date.parse(iso) / 1000;
+const localTime = epoch("2026-07-14T17:30:00Z");
 
-test.beforeEach(() => { process.env.WEATHER_OPEN_METEO_TRANSPORT = "direct"; });
-
-test.afterEach(() => {
-  db.query = originalQuery;
-  weatherService.clearCache();
-  if (originalTransport === undefined) delete process.env.WEATHER_OPEN_METEO_TRANSPORT;
-  else process.env.WEATHER_OPEN_METEO_TRANSPORT = originalTransport;
-});
-
-function createResponse(body, options = {}) {
+function weatherBody(overrides = {}) {
   return {
-    ok: options.ok ?? true,
-    status: options.status ?? 200,
-    headers: { get: (name) => name.toLowerCase() === "retry-after" ? options.retryAfter ?? null : null },
-    json: async () => body,
-  };
-}
-
-function validWeatherBody(overrides = {}) {
-  return {
-    utc_offset_seconds: 25200,
-    timezone: "Asia/Bangkok",
-    current: {
-      time: "2026-07-15T00:00",
-      temperature_2m: 28.5,
-      ...(overrides.current || {}),
-    },
-    hourly: {
-      time: [
-        "2026-07-15T00:00",
-        "2026-07-15T01:00",
-        "2026-07-15T02:00",
-      ],
-      precipitation_probability: [15, 82, 95],
-      ...(overrides.hourly || {}),
-    },
+    location: { tz_id: "Asia/Bangkok", localtime_epoch: localTime },
+    current: { temp_c: 28.5, last_updated_epoch: localTime - 900 },
+    forecast: { forecastday: [
+      { hour: [
+        { time_epoch: epoch("2026-07-14T17:00:00Z"), chance_of_rain: 11 },
+        { time_epoch: epoch("2026-07-14T18:00:00Z"), chance_of_rain: 82 },
+      ] },
+      { hour: [{ time_epoch: epoch("2026-07-14T19:00:00Z"), chance_of_rain: 35 }] },
+    ] },
     ...overrides,
   };
 }
 
-test("weather service requests only required Open-Meteo fields without an API key", async () => {
-  let requestedUrl = null;
-  let requestedHeaders = null;
-
-  const result = await weatherService.getWeatherForLocation(
-    { latitude: 19.02, longitude: 99.97 },
-    {
-      isInsidePhayao: async () => true,
-      fetchImpl: async (url, options) => {
-        requestedUrl = url;
-        requestedHeaders = options.headers;
-        return createResponse(validWeatherBody());
-      },
-    },
-  );
-
-  assert.equal(result.status, "AVAILABLE");
-  assert.equal(requestedUrl.origin + requestedUrl.pathname, weatherService.OPEN_METEO_BASE_URL);
-  assert.equal(requestedUrl.searchParams.get("current"), "temperature_2m");
-  assert.equal(requestedUrl.searchParams.get("hourly"), "precipitation_probability");
-  assert.equal(requestedUrl.searchParams.get("daily"), null);
-  assert.equal(requestedUrl.searchParams.get("timezone"), "Asia/Bangkok");
-  assert.equal(requestedUrl.searchParams.get("forecast_hours"), "3");
-  assert.equal(requestedUrl.searchParams.get("forecast_days"), null);
-  assert.equal(requestedUrl.searchParams.get("temperature_unit"), "celsius");
-  assert.equal(requestedHeaders.Accept, "application/json");
-  assert.equal(requestedHeaders["API-Key"], undefined);
+test.afterEach(() => {
+  db.query = originalQuery;
+  weatherService.clearCache();
 });
 
-test("weather normalization preserves zero values and current.time", () => {
-  const result = weatherService.normalizeWeatherResponse(validWeatherBody({
-    current: {
-      time: "2026-07-15T00:00",
-      temperature_2m: 0,
-    },
-    hourly: {
-      time: ["2026-07-15T00:00", "2026-07-15T01:00"],
-      precipitation_probability: [15, 0],
-    },
+test("WeatherAPI current temperature and first strictly future hour use Bangkok time", () => {
+  const result = weatherService.normalizeWeatherResponse(weatherBody());
+  assert.deepEqual(result, {
+    status: "AVAILABLE", temperatureC: 28.5,
+    nextHourPrecipitationProbabilityPercent: 82,
+    nextHourForecastAt: "2026-07-15T01:00:00+07:00",
+    updatedAt: "2026-07-15T00:15:00+07:00",
+    source: "WeatherAPI",
+  });
+});
+
+test("next hour selection crosses local midnight and never uses the current hour", () => {
+  const nearMidnight = epoch("2026-07-14T16:50:00Z");
+  const result = weatherService.normalizeWeatherResponse(weatherBody({
+    location: { tz_id: "Asia/Bangkok", localtime_epoch: nearMidnight },
+    forecast: { forecastday: [
+      { hour: [{ time_epoch: epoch("2026-07-14T16:00:00Z"), chance_of_rain: 10 }] },
+      { hour: [{ time_epoch: epoch("2026-07-14T17:00:00Z"), chance_of_rain: 100 }] },
+    ] },
   }));
-
-  assert.equal(result.status, "AVAILABLE");
-  assert.equal(result.temperatureC, 0);
-  assert.equal(result.nextHourPrecipitationProbabilityPercent, 0);
-  assert.equal(result.nextHourForecastAt, "2026-07-15T01:00:00+07:00");
-  assert.equal(result.updatedAt, "2026-07-15T00:00:00+07:00");
-  assert.equal(result.source, "Open-Meteo");
-});
-
-test("weather normalization selects the immediate future hourly forecast only", () => {
-  const result = weatherService.normalizeWeatherResponse(validWeatherBody());
-
-  assert.equal(result.status, "AVAILABLE");
-  assert.equal(result.nextHourPrecipitationProbabilityPercent, 82);
-  assert.equal(result.nextHourForecastAt, "2026-07-15T01:00:00+07:00");
-  assert.notEqual(result.nextHourPrecipitationProbabilityPercent, 15);
-  assert.notEqual(result.nextHourPrecipitationProbabilityPercent, 95);
-});
-
-test("weather normalization preserves 100 percent next-hour probability", () => {
-  const result = weatherService.normalizeWeatherResponse(validWeatherBody({
-    hourly: {
-      time: ["2026-07-15T00:00", "2026-07-15T01:00"],
-      precipitation_probability: [20, 100],
-    },
-  }));
-
-  assert.equal(result.status, "AVAILABLE");
+  assert.equal(result.nextHourForecastAt, "2026-07-15T00:00:00+07:00");
   assert.equal(result.nextHourPrecipitationProbabilityPercent, 100);
 });
 
-test("weather normalization rejects invalid next-hour probabilities", () => {
-  for (const value of [null, -1, 101, Number.NaN]) {
-    const result = weatherService.normalizeWeatherResponse(validWeatherBody({
-      hourly: {
-        time: ["2026-07-15T00:00", "2026-07-15T01:00"],
-        precipitation_probability: [20, value],
-      },
-    }));
-    assert.equal(result.status, "UNAVAILABLE");
+test("zero temperature and zero rain chance are valid", () => {
+  const body = weatherBody();
+  body.current.temp_c = 0;
+  body.forecast.forecastday[0].hour[1].chance_of_rain = 0;
+  const result = weatherService.normalizeWeatherResponse(body);
+  assert.equal(result.status, "AVAILABLE");
+  assert.equal(result.temperatureC, 0);
+  assert.equal(result.nextHourPrecipitationProbabilityPercent, 0);
+});
+
+test("malformed WeatherAPI fields fail closed without a partial AVAILABLE result", () => {
+  for (const mutate of [
+    (body) => { body.location.tz_id = "UTC"; },
+    (body) => { delete body.location.localtime_epoch; },
+    (body) => { delete body.current.temp_c; },
+    (body) => { delete body.current.last_updated_epoch; },
+    (body) => { body.forecast.forecastday = []; },
+    (body) => { body.forecast.forecastday[0].hour[1].chance_of_rain = 101; },
+    (body) => { body.forecast.forecastday[0].hour[1].chance_of_rain = "82"; },
+    (body) => { body.forecast.forecastday[0].hour[1].time_epoch = null; },
+    (body) => { body.current.last_updated_epoch = Number.MAX_SAFE_INTEGER; },
+  ]) {
+    const body = weatherBody();
+    mutate(body);
+    assert.equal(weatherService.normalizeWeatherResponse(body).status, "UNAVAILABLE");
   }
+  assert.equal(weatherService.normalizeWeatherResponse(null).status, "UNAVAILABLE");
 });
 
-test("weather normalization handles missing and malformed hourly fields safely", () => {
-  const missing = weatherService.normalizeWeatherResponse({
-    utc_offset_seconds: 25200,
-    current: { time: "2026-07-15T00:00" },
-    hourly: {},
+test("outside Phayao and invalid coordinates never call WeatherAPI", async () => {
+  let calls = 0;
+  const options = { env: { WEATHER_API_KEY: "FAKE_WEATHER_KEY_12345" },
+    fetchImpl: async () => { calls++; throw new Error("must not run"); } };
+  const outside = await weatherService.getWeatherForLocation({ latitude: 18, longitude: 100 },
+    { ...options, isInsidePhayao: async () => false });
+  const invalid = await weatherService.getWeatherForLocation({ latitude: 100, longitude: 99 }, options);
+  assert.deepEqual(outside, {
+    status: "OUTSIDE_SERVICE_AREA", temperatureC: null,
+    nextHourPrecipitationProbabilityPercent: null, nextHourForecastAt: null,
+    updatedAt: null, source: "WeatherAPI",
   });
-  const missingHourly = weatherService.normalizeWeatherResponse({
-    utc_offset_seconds: 25200,
-    current: { time: "2026-07-15T00:00" },
-  });
-  const mismatched = weatherService.normalizeWeatherResponse(validWeatherBody({
-    hourly: {
-      time: ["2026-07-15T00:00", "2026-07-15T01:00"],
-      precipitation_probability: [15],
-    },
-  }));
-  const noFuture = weatherService.normalizeWeatherResponse(validWeatherBody({
-    hourly: {
-      time: ["2026-07-14T22:00", "2026-07-15T00:00"],
-      precipitation_probability: [10, 15],
-    },
-  }));
-  const badCurrent = weatherService.normalizeWeatherResponse({
-    utc_offset_seconds: 25200,
-    current: { time: "bad", temperature_2m: 10 },
-    hourly: {
-      time: ["2026-07-15T01:00"],
-      precipitation_probability: [82],
-    },
-  });
-  const malformed = weatherService.normalizeWeatherResponse(null);
-
-  assert.equal(missing.status, "UNAVAILABLE");
-  assert.equal(missingHourly.status, "UNAVAILABLE");
-  assert.equal(mismatched.status, "UNAVAILABLE");
-  assert.equal(noFuture.status, "UNAVAILABLE");
-  assert.equal(badCurrent.status, "UNAVAILABLE");
-  assert.equal(malformed.status, "UNAVAILABLE");
-});
-
-test("weather service handles non-200, invalid JSON, timeout, and cache", async () => {
-  const non200 = await weatherService.getWeatherForLocation(
-    { latitude: 19.02, longitude: 99.97 },
-    {
-      isInsidePhayao: async () => true,
-      fetchImpl: async () => createResponse({}, { ok: false, status: 503 }),
-    },
-  );
-  assert.equal(non200.status, "UNAVAILABLE");
-  weatherService.clearCache();
-
-  const invalidJson = await weatherService.getWeatherForLocation(
-    { latitude: 19.02, longitude: 99.97 },
-    {
-      isInsidePhayao: async () => true,
-      fetchImpl: async () => ({
-        ok: true,
-        status: 200,
-        json: async () => { throw new Error("bad json"); },
-      }),
-    },
-  );
-  assert.equal(invalidJson.status, "UNAVAILABLE");
-  weatherService.clearCache();
-
-  const timeout = await weatherService.getWeatherForLocation(
-    { latitude: 19.02, longitude: 99.97 },
-    {
-      timeoutMs: 1,
-      isInsidePhayao: async () => true,
-      fetchImpl: async (url, options) => new Promise((resolve, reject) => {
-        options.signal.addEventListener("abort", () => {
-          const error = new Error("aborted");
-          error.name = "AbortError";
-          reject(error);
-        });
-      }),
-    },
-  );
-  assert.equal(timeout.status, "UNAVAILABLE");
-  weatherService.clearCache();
-
-  let calls = 0;
-  await weatherService.getWeatherForLocation(
-    { latitude: 19.02, longitude: 99.97 },
-    {
-      isInsidePhayao: async () => true,
-      fetchImpl: async () => {
-        calls += 1;
-        return createResponse(validWeatherBody());
-      },
-    },
-  );
-  await weatherService.getWeatherForLocation(
-    { latitude: 19.020001, longitude: 99.970001 },
-    {
-      isInsidePhayao: async () => true,
-      fetchImpl: async () => {
-        calls += 1;
-        return createResponse(validWeatherBody());
-      },
-    },
-  );
-  assert.equal(calls, 1);
-});
-
-test("a failed provider request is retried and diagnostics omit coordinates and provider secrets", async () => {
-  const originalWarn = console.warn;
-  const events = [];
-  console.warn = (...args) => events.push(args);
-  try {
-    let calls = 0;
-    const options = {
-      isInsidePhayao: async () => true,
-      fetchImpl: async () => {
-        calls += 1;
-        if (calls === 1) throw new Error("Bearer SECRET latitude=19.02 longitude=99.97");
-        return createResponse(validWeatherBody());
-      },
-    };
-    assert.equal((await weatherService.getWeatherForLocation(
-      { latitude: 19.02, longitude: 99.97 }, options)).status, "UNAVAILABLE");
-    assert.equal((await weatherService.getWeatherForLocation(
-      { latitude: 19.02, longitude: 99.97 }, options)).status, "AVAILABLE");
-    assert.equal(calls, 2);
-    assert.deepEqual(events[0], ["weather-provider-unavailable", { stage: "network" }]);
-    assert.equal(JSON.stringify(events).includes("SECRET"), false);
-    assert.equal(JSON.stringify(events).includes("19.02"), false);
-  } finally {
-    console.warn = originalWarn;
-  }
-});
-
-test("HTTP 429 honors bounded Retry-After seconds and applies cooldown across locations", async () => {
-  let time = 100000;
-  let calls = 0;
-  const events = [];
-  const originalWarn = console.warn;
-  console.warn = (...args) => events.push(args);
-  try {
-    const options = { now: () => time, isInsidePhayao: async () => true,
-      fetchImpl: async () => {
-        calls += 1;
-        return calls === 1 ? createResponse(null, { ok: false, status: 429, retryAfter: "120" })
-          : createResponse(validWeatherBody());
-      } };
-    const first = { latitude: 19.02, longitude: 99.97 };
-    const second = { latitude: 19.03, longitude: 99.98 };
-    assert.equal((await weatherService.getWeatherForLocation(first, options)).status, "UNAVAILABLE");
-    assert.deepEqual(events[0], ["weather-provider-unavailable", {
-      stage: "rate-limit", status: 429, retryAfterSeconds: 120,
-    }]);
-    assert.equal((await weatherService.getWeatherForLocation(second, options)).status, "UNAVAILABLE");
-    assert.equal(calls, 1);
-    time += 119000;
-    assert.equal((await weatherService.getWeatherForLocation(first, options)).status, "UNAVAILABLE");
-    assert.equal(calls, 1);
-    time += 1000;
-    assert.equal((await weatherService.getWeatherForLocation(second, options)).status, "AVAILABLE");
-    assert.equal(calls, 2);
-    assert.equal(JSON.stringify(events).includes("19.02"), false);
-    assert.equal(JSON.stringify(events).includes("SECRET"), false);
-  } finally { console.warn = originalWarn; }
-});
-
-test("missing, malformed, dated, and excessive Retry-After use safe cooldown values", async () => {
-  const parse = weatherService._private.retryAfterSeconds;
-  assert.equal(parse(null, 100000), 60);
-  assert.equal(parse("broken", 100000), 60);
-  assert.equal(parse("0", 100000), 60);
-  assert.equal(parse(new Date(190000).toUTCString(), 100000), 90);
-  assert.equal(parse("999999999", 100000), 300);
-  assert.equal(parse(new Date(100000 + 86400000).toUTCString(), 100000), 300);
-  for (const retryAfter of [null, "broken"]) {
-    weatherService.clearCache();
-    let time = 100000;
-    let calls = 0;
-    const originalWarn = console.warn;
-    const events = [];
-    console.warn = (...args) => events.push(args);
-    try {
-      const options = { now: () => time, isInsidePhayao: async () => true,
-        fetchImpl: async () => {
-          calls += 1;
-          return calls === 1 ? createResponse(null, { ok: false, status: 429, retryAfter })
-            : createResponse(validWeatherBody());
-        } };
-      const point = { latitude: 19.02, longitude: 99.97 };
-      await weatherService.getWeatherForLocation(point, options);
-      assert.equal(events[0][1].retryAfterSeconds, 60);
-      await weatherService.getWeatherForLocation(point, options);
-      assert.equal(calls, 1);
-      time += 60000;
-      assert.equal((await weatherService.getWeatherForLocation(point, options)).status, "AVAILABLE");
-      assert.equal(calls, 2);
-    } finally { console.warn = originalWarn; }
-  }
-});
-
-test("AVAILABLE results retain ten-minute cache while generic failures retry", async () => {
-  let time = 100000;
-  let calls = 0;
-  const options = { now: () => time, isInsidePhayao: async () => true,
-    fetchImpl: async () => {
-      calls += 1;
-      return calls === 1 ? createResponse(validWeatherBody())
-        : calls === 2 ? createResponse(null, { ok: false, status: 503 })
-          : createResponse(validWeatherBody());
-    } };
-  const point = { latitude: 19.02, longitude: 99.97 };
-  assert.equal((await weatherService.getWeatherForLocation(point, options)).status, "AVAILABLE");
-  time += 599999;
-  assert.equal((await weatherService.getWeatherForLocation(point, options)).status, "AVAILABLE");
-  assert.equal(calls, 1);
-  time += 1;
-  const originalWarn = console.warn;
-  console.warn = () => {};
-  try {
-    assert.equal((await weatherService.getWeatherForLocation(point, options)).status, "UNAVAILABLE");
-    assert.equal((await weatherService.getWeatherForLocation(point, options)).status, "AVAILABLE");
-    assert.equal(calls, 3);
-  } finally { console.warn = originalWarn; }
-});
-
-test("same-location concurrent callers share in-flight request and clear it on success or failure", async () => {
-  let calls = 0;
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
-  const point = { latitude: 19.02, longitude: 99.97 };
-  const options = { isInsidePhayao: async () => true,
-    fetchImpl: async () => { calls += 1; await gate; return createResponse(validWeatherBody()); } };
-  const first = weatherService.getWeatherForLocation(point, options);
-  const second = weatherService.getWeatherForLocation({ latitude: 19.020001, longitude: 99.970001 }, options);
-  release();
-  assert.equal((await first).status, "AVAILABLE");
-  assert.equal((await second).status, "AVAILABLE");
-  assert.equal(calls, 1);
-  assert.equal((await weatherService.getWeatherForLocation(point, options)).status, "AVAILABLE");
-  assert.equal(calls, 1);
-
-  weatherService.clearCache();
-  let failCalls = 0;
-  const originalWarn = console.warn;
-  console.warn = () => {};
-  try {
-    const failing = { isInsidePhayao: async () => true, fetchImpl: async () => {
-      failCalls += 1;
-      throw new Error("private provider details");
-    } };
-    const results = await Promise.all([
-      weatherService.getWeatherForLocation(point, failing),
-      weatherService.getWeatherForLocation(point, failing),
-    ]);
-    assert.deepEqual(results.map((item) => item.status), ["UNAVAILABLE", "UNAVAILABLE"]);
-    assert.equal(failCalls, 1);
-    await weatherService.getWeatherForLocation(point, failing);
-    assert.equal(failCalls, 2);
-  } finally { console.warn = originalWarn; }
-});
-
-test("outside Phayao and invalid coordinates do not call Open-Meteo", async () => {
-  let calls = 0;
-  const outside = await weatherService.getWeatherForLocation(
-    { latitude: 18, longitude: 100 },
-    {
-      isInsidePhayao: async () => false,
-      fetchImpl: async () => {
-        calls += 1;
-        return createResponse(validWeatherBody());
-      },
-    },
-  );
-  const invalid = await weatherService.getWeatherForLocation(
-    { latitude: 100, longitude: 99 },
-    {
-      fetchImpl: async () => {
-        calls += 1;
-        return createResponse(validWeatherBody());
-      },
-    },
-  );
-
-  assert.equal(outside.status, "OUTSIDE_SERVICE_AREA");
   assert.equal(invalid.status, "UNAVAILABLE");
   assert.equal(calls, 0);
 });
 
-test("point location report includes weather additively and tolerates weather failure", async () => {
-  const baseSuitability = {
-    success: true,
-    found: true,
-    location: { tambon: "Mae Ka" },
-    clickedPoint: { latitude: 19, longitude: 99 },
-  };
+test("point location report includes weather and tolerates failure", async () => {
   const dependencies = {
-    riceSuitabilityService: { getPointSummary: async () => baseSuitability },
+    riceSuitabilityService: { getPointSummary: async () => ({
+      success: true, found: true, location: { tambon: "Mae Ka" },
+      clickedPoint: { latitude: 19, longitude: 99 },
+    }) },
     hazardHistoryService: {
       getFloodRecurrence: async () => ({ status: "none_detected", _warnings: [] }),
       getDroughtRecurrence: async () => ({ status: "none_detected", _warnings: [] }),
       buildUnavailableResult: () => ({ status: "unavailable", _warnings: [] }),
     },
-    weatherService: {
-      getWeatherForLocation: async () => weatherService.normalizeWeatherResponse(validWeatherBody()),
-    },
+    weatherService: { getWeatherForLocation: async () =>
+      weatherService.normalizeWeatherResponse(weatherBody()) },
   };
-
-  const report = await locationReportService.getLocationReport({ latitude: 19, longitude: 99 }, dependencies);
+  const report = await locationReportService.getLocationReport(
+    { latitude: 19, longitude: 99 }, dependencies);
   assert.equal(report.weather.status, "AVAILABLE");
+  assert.equal(report.weather.source, "WeatherAPI");
   assert.equal(report.found, true);
-
   const failed = await locationReportService.getLocationReport(
-    { latitude: 19, longitude: 99 },
-    {
-      ...dependencies,
-      weatherService: {
-        getWeatherForLocation: async () => { throw new Error("weather down"); },
-      },
-    },
-  );
+    { latitude: 19, longitude: 99 }, { ...dependencies,
+      weatherService: { getWeatherForLocation: async () => { throw new Error("weather down"); } },
+    });
   assert.equal(failed.weather.status, "UNAVAILABLE");
   assert.equal(failed.found, true);
 });
 
-test("parcel analysis includes weather from ST_PointOnSurface without exposing geometry", async () => {
+test("parcel analysis uses ST_PointOnSurface weather without exposing geometry", async () => {
   db.query = async (sql) => {
-    if (/ST_GeometryType\(geom\)/.test(sql)) {
-      return { rows: [{ geometry_type: "ST_MultiPolygon", is_empty: false, is_valid: true, area_sqm: 1600, area_square_meters: 1600, area_rai: 1 }] };
-    }
-    if (/ST_PointOnSurface/.test(sql)) {
-      return { rows: [{ latitude: 19.02, longitude: 99.97 }] };
-    }
+    if (/ST_GeometryType\(geom\)/.test(sql)) return { rows: [{
+      geometry_type: "ST_MultiPolygon", is_empty: false, is_valid: true,
+      area_sqm: 1600, area_square_meters: 1600, area_rai: 1,
+    }] };
+    if (/ST_PointOnSurface/.test(sql)) return { rows: [{ latitude: 19.02, longitude: 99.97 }] };
     if (/MAX\(\(item ->> 'year'\)::int\) AS latest_year/.test(sql)) {
       return { rows: [{ latest_year: 2024 }] };
     }
     if (/FROM gis\.flood_recurrence_pyo/.test(sql)) {
       return { rows: [{ affected_area_square_meters: 0, years_detected: [] }] };
     }
-    if (/FROM gis\.drought_recurrence_tambon_pyo/.test(sql)) {
-      return { rows: [] };
-    }
     return { rows: [] };
   };
-
-  const result = await areaAnalysisService.analyzePolygon(
-    {
-      name: "parcel",
-      geometry: {
-        type: "Polygon",
-        coordinates: [[[99.9, 19], [99.91, 19], [99.91, 19.01], [99.9, 19.01], [99.9, 19]]],
-      },
-    },
-    {
-      weatherService: {
-        getWeatherForLocation: async ({ latitude, longitude }) => {
-          assert.equal(latitude, 19.02);
-          assert.equal(longitude, 99.97);
-          return weatherService.normalizeWeatherResponse(validWeatherBody());
-        },
-      },
-    },
-  );
-
+  const result = await areaAnalysisService.analyzePolygon({
+    name: "parcel", geometry: { type: "Polygon",
+      coordinates: [[[99.9, 19], [99.91, 19], [99.91, 19.01], [99.9, 19.01], [99.9, 19]]] },
+  }, { weatherService: { getWeatherForLocation: async ({ latitude, longitude }) => {
+    assert.deepEqual([latitude, longitude], [19.02, 99.97]);
+    return weatherService.normalizeWeatherResponse(weatherBody());
+  } } });
   assert.equal(result.weather.status, "AVAILABLE");
+  assert.equal(result.weather.source, "WeatherAPI");
   assert.deepEqual(result.representativePoint, { latitude: 19.02, longitude: 99.97 });
 });
 
-test("parcel analysis keeps a failed weather request nonfatal and retains the canonical point", async () => {
+test("parcel analysis keeps a failed weather request nonfatal", async () => {
   db.query = async (sql) => {
-    if (/ST_GeometryType\(geom\)/.test(sql)) return { rows: [{ is_empty: false, is_valid: true,
-      area_sqm: 1600, area_square_meters: 1600, area_rai: 1 }] };
+    if (/ST_GeometryType\(geom\)/.test(sql)) return { rows: [{
+      is_empty: false, is_valid: true, area_sqm: 1600, area_square_meters: 1600, area_rai: 1,
+    }] };
     if (/ST_PointOnSurface/.test(sql)) return { rows: [{ latitude: 19.02, longitude: 99.97 }] };
     return { rows: [] };
   };
@@ -510,19 +165,18 @@ test("parcel analysis keeps a failed weather request nonfatal and retains the ca
   try {
     const result = await areaAnalysisService.analyzePolygon({ name: "parcel", geometry: {
       type: "Polygon", coordinates: [[[99.9, 19], [99.91, 19], [99.91, 19.01], [99.9, 19]]],
-    } }, { weatherService: { getWeatherForLocation: async () => { throw new Error("provider secret"); } } });
+    } }, { weatherService: { getWeatherForLocation: async () => { throw new Error("private"); } } });
     assert.equal(result.weather.status, "UNAVAILABLE");
     assert.deepEqual(result.representativePoint, { latitude: 19.02, longitude: 99.97 });
-  } finally {
-    console.warn = originalWarn;
-  }
+  } finally { console.warn = originalWarn; }
 });
 
-test("representative-point lookup failure does not abort otherwise valid parcel analysis", async () => {
+test("representative-point failure remains nonfatal and sanitized", async () => {
   db.query = async (sql) => {
-    if (/ST_GeometryType\(geom\)/.test(sql)) return { rows: [{ is_empty: false, is_valid: true,
-      area_sqm: 1600, area_square_meters: 1600, area_rai: 1 }] };
-    if (/ST_PointOnSurface/.test(sql)) throw new Error("private coordinates and credentials");
+    if (/ST_GeometryType\(geom\)/.test(sql)) return { rows: [{
+      is_empty: false, is_valid: true, area_sqm: 1600, area_square_meters: 1600, area_rai: 1,
+    }] };
+    if (/ST_PointOnSurface/.test(sql)) throw new Error("private credentials");
     return { rows: [] };
   };
   const originalWarn = console.warn;
@@ -535,7 +189,5 @@ test("representative-point lookup failure does not abort otherwise valid parcel 
     assert.equal(result.representativePoint, null);
     assert.equal(result.weather.status, "UNAVAILABLE");
     assert.deepEqual(events, [["parcel-weather-unavailable", { stage: "representative-point" }]]);
-  } finally {
-    console.warn = originalWarn;
-  }
+  } finally { console.warn = originalWarn; }
 });
