@@ -177,7 +177,7 @@ test("EXIF orientation is applied before WebP resize and metadata is omitted", a
 
 test("Sheet cells keep deterministic aligned JSON arrays and never export picture_url", () => {
   const user = { id: "internal-uuid", display_name: "Verified", picture_url: "private", line_user_id: "U_PRIVATE", created_at: "2026-01-01T00:00:00Z" };
-  assert.deepEqual(userCells(user), ["internal-uuid", "Verified", "2026-01-01T07:00:00+07:00", ""]);
+  assert.deepEqual(userCells(user), ["internal-uuid", "Verified", "2026-01-01 07:00:00", ""]);
   const parcel = {
     owner_user_id: user.id, display_name: user.display_name, parcel_code: "PY-2026-0001",
     parcel_name: "Field", crop_type: "rice", rice_variety: "Khao Dawk Mali",
@@ -216,7 +216,19 @@ test("Sheet cells keep deterministic aligned JSON arrays and never export pictur
   assert.equal(parcelCells({ ...parcel, representative_lat: null })[7], "");
   assert.deepEqual(parcelCells({ ...parcel, created_at: "2026-09-25T17:49:00Z",
     updated_at: "2026-09-25T17:49:00Z" }).slice(14),
-  ["2026-09-26T00:49:00+07:00", "2026-09-26T00:49:00+07:00"]);
+  ["2026-09-26 00:49:00", "2026-09-26 00:49:00"]);
+});
+
+test("Sheet created_at and updated_at use Bangkok wall time without a timezone suffix", () => {
+  const timestamp = "2026-09-25T23:20:00Z";
+  const user = userCells({ id: "owner", created_at: timestamp, updated_at: timestamp });
+  const parcel = parcelCells({ owner_user_id: "owner", parcel_code: "PY-1", geometry: {},
+    created_at: timestamp, updated_at: timestamp });
+  for (const cells of [user.slice(2), parcel.slice(14)]) {
+    assert.deepEqual(cells, ["2026-09-26 06:20:00", "2026-09-26 06:20:00"]);
+    assert.doesNotMatch(cells.join(""), /T|Z|\+07:00/);
+  }
+  assert.deepEqual(PARCEL_HEADERS.slice(14), ["created_at", "updated_at"]);
 });
 
 test("Coordinate formatter uses EPSG:4326 latitude, longitude with six decimals", () => {
@@ -326,7 +338,7 @@ test("photo append restores a missing full Sheet row and retries are idempotent"
   assert.equal(rows[0].length, 16);
   assert.equal(rows[0][3], "Field");
   assert.equal(rows[0][13], "Stored note");
-  assert.deepEqual(rows[0].slice(14), ["2026-09-25T07:00:00+07:00", "2026-09-25T07:00:00+07:00"]);
+  assert.deepEqual(rows[0].slice(14), ["2026-09-25 07:00:00", "2026-09-25 07:00:00"]);
   assert.deepEqual(JSON.parse(rows[0][11]), ["a.webp"]);
   assert.deepEqual(JSON.parse(rows[0][12]), [imageLink("file_a")]);
   assert.deepEqual(await integration.appendParcelImage("PY-1", "owner", "a.webp", "file_a", record), first);
@@ -341,7 +353,7 @@ test("photo append restores a missing full Sheet row and retries are idempotent"
   assert.deepEqual(JSON.parse(rows[0][11]), ["a.webp", "b.webp", "c.webp", "d.webp", "e.webp"]);
   assert.deepEqual(JSON.parse(rows[0][12]), ["a", "b", "c", "d", "e"].map((letter) => imageLink(`file_${letter}`)));
   assert.equal(rows[0][13], "Stored note");
-  assert.deepEqual(rows[0].slice(14), ["2026-09-25T07:00:00+07:00", "2026-09-25T07:00:00+07:00"]);
+  assert.deepEqual(rows[0].slice(14), ["2026-09-25 07:00:00", "2026-09-25 07:00:00"]);
   assert.equal(calls.filter((call) => call === "append").length, 1);
   assert.equal(calls.filter((call) => call === "update").length, 4);
 });
