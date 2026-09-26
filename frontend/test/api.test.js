@@ -27,6 +27,7 @@ function createApiHarness(responseBody = { ok: true, status: "SENT" }, harnessOp
         },
       },
       console: harnessOptions.console,
+      performance: harnessOptions.performance,
     },
     setTimeout: harnessOptions.setTimeout || setTimeout,
     clearTimeout: harnessOptions.clearTimeout || clearTimeout,
@@ -202,10 +203,62 @@ test("saved image read succeeds on first attempt without retry", async () => {
   assert.equal(client.calls.length, 1);
   assert.deepEqual(client.delays, []);
   assert.deepEqual(client.logs.map((item) => item[0]), [
-    "[ParcelImageRead] FETCH", "[ParcelImageRead] SUCCESS",
+    "[ParcelImageRead] FETCH", "[ParcelImageTiming]", "[ParcelImageRead] SUCCESS",
   ]);
   assert.equal(client.logs[0][1].attempt, 1);
-  assert.equal(client.logs[1][1].attempts, 1);
+  assert.equal(client.logs[2][1].attempts, 1);
+});
+
+test("saved image network GET logs bounded Server-Timing metrics without sensitive content", async () => {
+  const response = imageReadResponse();
+  response.headers.get = (name) => name.toLowerCase() === "content-type" ? "image/webp" :
+    "ownership;dur=82.4, provider;dur=3810.7, backend;dur=3902.6";
+  const client = imageReadHarness([response]);
+  const blob = await client.MapApi.getParcelImageBlob(
+    "11111111-1111-4111-8111-111111111111", "photo.webp");
+  assert.equal(blob.type, "image/webp");
+  assert.equal(client.calls.length, 1);
+  const timing = client.logs.find((entry) => entry[0] === "[ParcelImageTiming]")[1];
+  assert.equal(timing.attempt, 1);
+  assert.equal(timing.status, 200);
+  assert.ok(Number.isFinite(timing.clientMs) && timing.clientMs >= 0);
+  assert.deepEqual([timing.ownershipMs, timing.providerMs, timing.backendMs], [82.4, 3810.7, 3902.6]);
+  assert.doesNotMatch(JSON.stringify(client.logs), /Bearer|test-id-token|photo\.webp|webp\x22/);
+});
+
+test("missing or malformed diagnostic timing cannot affect saved image reads", async () => {
+  for (const timingHeader of [null, "provider;dur=SECRET", "backend;dur=Infinity"]) {
+    const response = imageReadResponse();
+    response.headers.get = (name) => name.toLowerCase() === "content-type" ? "image/webp" : timingHeader;
+    const client = imageReadHarness([response]);
+    assert.equal((await client.MapApi.getParcelImageBlob(
+      "11111111-1111-4111-8111-111111111111", "photo.webp")).type, "image/webp");
+    assert.equal(client.calls.length, 1);
+    assert.deepEqual(client.delays, []);
+    assert.equal(client.logs.at(-1)[0], "[ParcelImageRead] SUCCESS");
+  }
+});
+
+test("Server-Timing header or diagnostic logger throwing never retries a successful read", async () => {
+  const response = imageReadResponse();
+  response.headers.get = (name) => {
+    if (name.toLowerCase() === "content-type") return "image/webp";
+    throw new Error("diagnostic header failure");
+  };
+  const first = imageReadHarness([response]);
+  assert.equal((await first.MapApi.getParcelImageBlob(
+    "11111111-1111-4111-8111-111111111111", "photo.webp")).type, "image/webp");
+  assert.equal(first.calls.length, 1);
+  const logs = [];
+  const second = createApiHarness({}, { fetchImpl: async () => imageReadResponse(),
+    console: { info: (label) => {
+      if (label === "[ParcelImageTiming]") throw new Error("logger failed");
+      logs.push(label);
+    }, error: () => { throw new Error("unexpected failure"); } } });
+  assert.equal((await second.MapApi.getParcelImageBlob(
+    "11111111-1111-4111-8111-111111111111", "photo.webp")).type, "image/webp");
+  assert.equal(second.calls.length, 1);
+  assert.deepEqual(logs, ["[ParcelImageRead] FETCH", "[ParcelImageRead] SUCCESS"]);
 });
 
 test("saved image read retries 500, 404, and network failure then succeeds", async () => {
@@ -218,12 +271,12 @@ test("saved image read retries 500, 404, and network failure then succeeds", asy
     assert.deepEqual(client.delays, [500]);
     assert.deepEqual(client.logs.map((item) => item[0]), [
       "[ParcelImageRead] FETCH", "[ParcelImageRead] RETRY",
-      "[ParcelImageRead] FETCH", "[ParcelImageRead] SUCCESS",
+      "[ParcelImageRead] FETCH", "[ParcelImageTiming]", "[ParcelImageRead] SUCCESS",
     ]);
     assert.equal(client.logs[1][1].attempt, 2);
     assert.equal(client.logs[1][1].maxAttempts, 4);
     assert.equal(client.logs[1][1].status, outcome instanceof Error ? null : outcome);
-    assert.equal(client.logs[3][1].attempts, 2);
+    assert.equal(client.logs[4][1].attempts, 2);
     assert.doesNotMatch(JSON.stringify(client.logs), /network failed|Authorization|Bearer|photo\.webp/);
   }
 });

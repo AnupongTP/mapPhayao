@@ -121,7 +121,16 @@ test("photo section shares the result card in analyzed and saved parcel views", 
     uiSource.indexOf("function renderParcelResult(parcelState)"));
   assert.match(photoBlock, /"parcel-result-card parcel-photo-section"/);
   assert.match(photoBlock, /ยังไม่มีรูปภาพแปลง/);
-  assert.match(photoBlock, /กำลังโหลดรูปภาพ\.\.\./);
+  assert.match(photoBlock, /parcel-photo-item parcel-photo-loading/);
+  assert.match(photoBlock, /parcel-photo-spinner/);
+  assert.match(photoBlock, /tile\.setAttribute\("role", "status"\)/);
+  assert.match(photoBlock, /strip\.appendChild\(loadingTile\(\)\)/g);
+  assert.equal((photoBlock.match(/strip\.appendChild\(loadingTile\(\)\)/g) || []).length, 2);
+  assert.doesNotMatch(photoBlock, /กำลังโหลดรูปภาพ\.\.\./);
+  assert.match(photoBlock, /photo\.loadError[\s\S]*parcel-photo-load-error/);
+  const css = fs.readFileSync(path.join(frontendRoot, "css/map.css"), "utf8");
+  assert.match(css, /\.parcel-photo-loading \{[\s\S]*?align-items: center;[\s\S]*?justify-content: center;/);
+  assert.match(css, /\.parcel-photo-spinner \{[\s\S]*?animation: parcel-photo-spin/);
   assert.match(photoBlock, /image\.loading = "lazy"/);
   const resultBlock = uiSource.slice(uiSource.indexOf("function renderParcelResult(parcelState)"),
     uiSource.indexOf("function renderSavedParcelDetail(parcel, message)"));
@@ -129,6 +138,41 @@ test("photo section shares the result card in analyzed and saved parcel views", 
     uiSource.indexOf("function addParcelDrawControl", uiSource.indexOf("function renderSavedParcelDetail(parcel, message)")));
   assert.match(resultBlock, /createParcelPhotoSection\(parcelState\.photos,/);
   assert.match(savedBlock, /createParcelPhotoSection\(parcel\?\.photos,/);
+});
+
+test("saved photo tiles independently replace spinners with images or per-image errors", () => {
+  const source = uiSource.slice(uiSource.indexOf("function createParcelPhotoSection(photos, options = {})"),
+    uiSource.indexOf("function renderParcelResult(parcelState)"));
+  function element(tag) {
+    return { tag, children: [], attributes: {}, className: "", setAttribute(name, value) {
+      this.attributes[name] = value;
+    }, appendChild(child) { this.children.push(child); }, addEventListener() {} };
+  }
+  const document = { createElement: element };
+  const createElement = (tag, className, text) => Object.assign(element(tag), {
+    className: className || "", textContent: text,
+  });
+  const render = vm.runInNewContext(`(${source.trim()})`, {
+    document, createElement, openParcelPhotoViewer: () => {},
+  });
+  const photos = [{ loading: true }, { loading: true }];
+  let strip = render(photos).children[1];
+  assert.equal(strip.children.length, 2);
+  for (const tile of strip.children) {
+    assert.match(tile.className, /parcel-photo-loading/);
+    assert.equal(tile.attributes.role, "status");
+    assert.equal(tile.children[0].className, "parcel-photo-spinner");
+  }
+  photos[0] = { previewUrl: "blob:first" };
+  strip = render(photos).children[1];
+  assert.match(strip.children[0].className, /parcel-photo-open/);
+  assert.equal(strip.children[0].children[0].src, "blob:first");
+  assert.match(strip.children[1].className, /parcel-photo-loading/);
+  photos[1] = { loadError: true };
+  strip = render(photos).children[1];
+  assert.match(strip.children[1].className, /parcel-photo-load-error/);
+  assert.match(strip.children[1].textContent, /โหลดรูปภาพ 2 ไม่สำเร็จ/);
+  assert.equal(strip.children.some((tile) => tile.className.includes("parcel-photo-loading")), false);
 });
 
 test("public privacy page remains available without a floating map link", () => {

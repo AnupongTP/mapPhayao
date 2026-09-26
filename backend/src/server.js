@@ -51,6 +51,7 @@ app.use(
     },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Photo-Attempt"],
+    exposedHeaders: ["Server-Timing"],
   }),
 );
 // รับ JSON request body จาก frontend โดยจำกัดขนาดไว้พอเหมาะ

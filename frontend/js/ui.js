@@ -2497,8 +2497,19 @@
     const section = createElement("section", "parcel-result-card parcel-photo-section");
     if (options.parcelId) section.dataset.parcelId = options.parcelId;
     section.appendChild(createElement("h3", "parcel-result-card-title", "รูปภาพแปลง"));
+    function loadingTile() {
+      const tile = createElement("div", "parcel-photo-item parcel-photo-loading");
+      tile.setAttribute("role", "status");
+      tile.setAttribute("aria-label", "กำลังโหลดรูปภาพ");
+      const spinner = createElement("span", "parcel-photo-spinner");
+      spinner.setAttribute("aria-hidden", "true");
+      tile.appendChild(spinner);
+      return tile;
+    }
     if (options.loading) {
-      section.appendChild(createElement("p", "parcel-photo-empty", "กำลังโหลดรูปภาพ..."));
+      const strip = createElement("div", "parcel-photo-strip");
+      strip.appendChild(loadingTile());
+      section.appendChild(strip);
       return section;
     }
     if (!Array.isArray(photos) || photos.length === 0) {
@@ -2508,7 +2519,7 @@
     const strip = createElement("div", "parcel-photo-strip");
     photos.forEach((photo, index) => {
       if (photo.loading) {
-        strip.appendChild(createElement("p", "parcel-photo-empty", "กำลังโหลดรูปภาพ..."));
+        strip.appendChild(loadingTile());
         return;
       }
       if (photo.loadError) {

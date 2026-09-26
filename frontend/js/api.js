@@ -316,6 +316,7 @@
         window.console?.info?.("[ParcelImageRead] FETCH", { attempt });
         try {
           let response;
+          const started = window.performance?.now?.() ?? Date.now();
           try {
             response = await fetch(url, {
               ...options,
@@ -340,6 +341,18 @@
           }
           const blob = await response.blob();
           if (options.signal?.aborted) throw savedImageAbortError();
+          try {
+            const timing = { attempt, status: response.status,
+              clientMs: Math.max(0, (window.performance?.now?.() ?? Date.now()) - started) };
+            const header = response.headers.get("Server-Timing") || "";
+            for (const match of header.matchAll(/(?:^|,)\s*(ownership|provider|backend);dur=([0-9]+(?:\.[0-9]+)?)(?=,|$)/g)) {
+              const value = Number(match[2]);
+              if (Number.isFinite(value)) timing[`${match[1]}Ms`] = value;
+            }
+            window.console?.info?.("[ParcelImageTiming]", timing);
+          } catch (_) {
+            // Diagnostics must not affect a successful protected image read.
+          }
           window.console?.info?.("[ParcelImageRead] SUCCESS", { attempts: attempt });
           return blob;
         } catch (error) {

@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { Readable } = require("node:stream");
 const { createApp } = require("../src/server");
 const appUserService = require("../src/services/appUserService");
 const parcelService = require("../src/services/parcelService");
@@ -12,18 +13,20 @@ const oldFind = appUserService.findOrCreateLineUser;
 const oldUpdate = appUserService.updateVerifiedDisplayName;
 const oldLock = parcelService.withParcelMutationLock;
 const oldUpload = parcelImageService.uploadOwnedImage;
+const oldGetOwnedImageFileId = parcelImageService.getOwnedImageFileId;
 
 test.afterEach(() => {
   appUserService.findOrCreateLineUser = oldFind;
   appUserService.updateVerifiedDisplayName = oldUpdate;
   parcelService.withParcelMutationLock = oldLock;
   parcelImageService.uploadOwnedImage = oldUpload;
+  parcelImageService.getOwnedImageFileId = oldGetOwnedImageFileId;
 });
 
-async function withServer(action) {
+async function withServer(action, googleOverrides = {}) {
   const app = createApp({
     lineTokenService: { verifyIdToken: async () => ({ sub: "U_TEST" }) },
-    googleIntegration: { enabled: true },
+    googleIntegration: { enabled: true, ...googleOverrides },
   });
   const server = await new Promise((resolve) => {
     const instance = app.listen(0, "127.0.0.1", () => resolve(instance));
@@ -42,6 +45,43 @@ function upload(base) {
       "X-Photo-Attempt": "0" }, body,
   });
 }
+
+test("protected image GET exposes safe Server-Timing while preserving ownership and streaming", async () => {
+  appUserService.findOrCreateLineUser = async () => ({ id: PARCEL_ID });
+  appUserService.updateVerifiedDisplayName = async () => {};
+  let ownerChecks = 0;
+  parcelImageService.getOwnedImageFileId = async (parcelId, imageId, ownerId) => {
+    ownerChecks++;
+    assert.deepEqual([parcelId, imageId, ownerId], [PARCEL_ID, "photo.webp", PARCEL_ID]);
+    return "private-drive-id";
+  };
+  const bytes = Buffer.from("test-image-bytes");
+  await withServer(async (base) => {
+    const response = await fetch(`${base}/api/parcels/${PARCEL_ID}/images/photo.webp/content`, {
+      headers: { Origin: origin, Authorization: "Bearer synthetic-test-token" },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "image/webp");
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
+    assert.equal(response.headers.get("access-control-allow-origin"), origin);
+    assert.ok(response.headers.get("access-control-expose-headers").toLowerCase()
+      .split(/,\s*/).includes("server-timing"));
+    const timing = response.headers.get("server-timing");
+    for (const name of ["ownership", "provider", "backend"]) {
+      const match = timing.match(new RegExp(`(?:^|,)\\s*${name};dur=([0-9]+(?:\\.[0-9]+)?)`));
+      assert.ok(match, `${name} timing missing`);
+      assert.ok(Number.isFinite(Number(match[1])) && Number(match[1]) >= 0);
+    }
+    assert.doesNotMatch(timing, /private-drive-id|synthetic-test-token|test-image-bytes/);
+    const unauthenticated = await fetch(`${base}/api/parcels/${PARCEL_ID}/images/photo.webp/content`);
+    assert.equal(unauthenticated.status, 401);
+    assert.equal(ownerChecks, 1);
+  }, { getImage: async (fileId) => {
+    assert.equal(fileId, "private-drive-id");
+    return Readable.from([bytes]);
+  } });
+});
 
 test("production photo preflight allows authorization and x-photo-attempt without wildcard origin", async () => {
   await withServer(async (base) => {

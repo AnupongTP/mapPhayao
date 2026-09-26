@@ -5,6 +5,7 @@ const areaAnalysisService = require("../services/areaAnalysisService");
 const parcelImageService = require("../services/parcelImageService");
 const parcelMirrorService = require("../services/parcelMirrorService");
 const createHttpError = require("../utils/httpError");
+const { performance } = require("node:perf_hooks");
 const { logGoogleFailure, tagGoogleError } = require("../utils/googleError");
 
 const AUTH_REQUIRED_MESSAGE = "LINE authentication required";
@@ -157,6 +158,7 @@ async function uploadImage(req, res, next) {
 }
 
 async function getImageContent(req, res, next) {
+  const started = performance.now();
   try {
     const appUser = await resolveAppUser(req);
     const fileId = await parcelImageService.getOwnedImageFileId(
@@ -165,8 +167,13 @@ async function getImageContent(req, res, next) {
     if (!req.googleIntegration?.enabled) {
       throw createHttpError(503, "ยังไม่ได้ตั้งค่าบริการรูปภาพแปลง");
     }
+    const ownershipEnd = performance.now();
     const stream = await req.googleIntegration.getImage(fileId);
-    res.set({ "Content-Type": "image/webp", "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" });
+    const providerEnd = performance.now();
+    const duration = (start, end) => Math.max(0, end - start).toFixed(1);
+    res.set({ "Content-Type": "image/webp", "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+      "Server-Timing": `ownership;dur=${duration(started, ownershipEnd)}, ` +
+        `provider;dur=${duration(ownershipEnd, providerEnd)}, backend;dur=${duration(started, providerEnd)}` });
     stream.on("error", (error) => {
       logGoogleFailure("google-parcel-operation-failed", tagGoogleError(error, "drive-read"),
         { parcelId: req.params.parcelId });
