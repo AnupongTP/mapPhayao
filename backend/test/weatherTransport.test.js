@@ -187,3 +187,29 @@ test("Apps Script network, rejected, and invalid responses stay sanitized with n
     assert.equal(JSON.stringify(logs).includes("99.97"), false);
   } finally { console.warn = original; }
 });
+
+test("Apps Script weather rejection logs only allowlisted reasons", async () => {
+  const original = console.warn;
+  const logs = [];
+  console.warn = (...args) => logs.push(args);
+  try {
+    for (const reason of ["invalid-request", "invalid-signature", "replay", "config",
+      "operation-failed", "SECRET_BODY signature=PRIVATE", null]) {
+      const result = await weatherService.getWeatherForLocation(point, { ...local,
+        env: { WEATHER_OPEN_METEO_TRANSPORT: "apps-script",
+          GOOGLE_DRIVE_APPS_SCRIPT_URL: "https://script.google.com/macros/s/fake/exec",
+          GOOGLE_DRIVE_APPS_SCRIPT_SECRET: "PRIVATE" },
+        bridgeFetchImpl: async () => ({ ok: true, json: async () => ({
+          success: false, error: reason, signature: "PRIVATE", body: "SECRET_BODY",
+        }) }),
+      });
+      assert.equal(result.status, "UNAVAILABLE");
+      assert.deepEqual(logs.at(-1), ["weather-provider-unavailable", {
+        stage: "apps-script-rejected",
+        ...(["invalid-request", "invalid-signature", "replay", "config", "operation-failed"]
+          .includes(reason) ? { reason } : {}),
+      }]);
+    }
+    assert.doesNotMatch(JSON.stringify(logs), /PRIVATE|SECRET_BODY|19\.02|99\.97/);
+  } finally { console.warn = original; }
+});

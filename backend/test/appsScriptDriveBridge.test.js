@@ -109,6 +109,25 @@ test("weather bridge validates provider response and sanitizes rejection or netw
     error.bridgeCategory === "network" && !error.message.includes(secret));
 });
 
+test("weather bridge retains only allowlisted rejection reasons", async () => {
+  for (const reason of ["invalid-request", "invalid-signature", "replay", "config",
+    "operation-failed"]) {
+    const { bridge } = harness({ success: false, error: reason, signature: secret });
+    await assert.rejects(() => bridge.getWeather(19, 99), (error) =>
+      error.bridgeCategory === "rejected" && error.weatherRejectionReason === reason &&
+      !error.message.includes(secret));
+  }
+  for (const reason of [`secret=${secret}`, "INVALID-SIGNATURE", { private: secret }, null]) {
+    const { bridge } = harness({ success: false, error: reason });
+    await assert.rejects(() => bridge.getWeather(19, 99), (error) =>
+      error.bridgeCategory === "rejected" && error.weatherRejectionReason === null &&
+      !error.message.includes(secret));
+  }
+  const { bridge: drive } = harness({ success: false, error: "invalid-signature" });
+  await assert.rejects(() => drive.deleteImage("file_1"), (error) =>
+    error.bridgeCategory === "rejected" && error.weatherRejectionReason === undefined);
+});
+
 test("read decodes bytes to the existing stream contract; delete signs only trusted file ID", async () => {
   const { bridge, calls } = harness({ success: true, contentBase64: Buffer.from("webp").toString("base64") });
   const chunks = [];

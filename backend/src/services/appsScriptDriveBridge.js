@@ -5,6 +5,13 @@ const { tagGoogleError } = require("../utils/googleError");
 const REQUEST_TIMEOUT_MS = 30000;
 const MAX_READ_BASE64_LENGTH = 16 * 1024 * 1024;
 const FILE_ID = /^[A-Za-z0-9_-]+$/;
+const SAFE_WEATHER_REJECTION_REASONS = new Set([
+  "invalid-request", "invalid-signature", "replay", "config", "operation-failed",
+]);
+
+function safeWeatherRejectionReason(value) {
+  return typeof value === "string" && SAFE_WEATHER_REJECTION_REASONS.has(value) ? value : null;
+}
 
 function bridgeError(stage, category, status) {
   const error = tagGoogleError(new Error("Google Apps Script bridge request failed"), stage);
@@ -83,7 +90,11 @@ function createAppsScriptDriveBridge({ url, secret, fetchImpl = fetch, now = Dat
     try { data = await response.json(); } catch {
       throw bridgeError("apps-script-weather", "invalid-response");
     }
-    if (!data || data.success !== true) throw bridgeError("apps-script-weather", "rejected");
+    if (!data || data.success !== true) {
+      const error = bridgeError("apps-script-weather", "rejected");
+      error.weatherRejectionReason = safeWeatherRejectionReason(data?.error);
+      throw error;
+    }
     if (!Number.isInteger(data.providerStatus) || data.providerStatus < 100 || data.providerStatus > 599 ||
       (data.retryAfter !== null && data.retryAfter !== undefined &&
         (typeof data.retryAfter !== "string" || data.retryAfter.length > 100)) ||
@@ -121,4 +132,4 @@ function createAppsScriptDriveBridge({ url, secret, fetchImpl = fetch, now = Dat
   };
 }
 
-module.exports = { createAppsScriptDriveBridge };
+module.exports = { createAppsScriptDriveBridge, safeWeatherRejectionReason };

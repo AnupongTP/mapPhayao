@@ -1,5 +1,5 @@
 const db = require("../config/database");
-const { createAppsScriptDriveBridge } = require("./appsScriptDriveBridge");
+const { createAppsScriptDriveBridge, safeWeatherRejectionReason } = require("./appsScriptDriveBridge");
 
 const OPEN_METEO_BASE_URL = "https://api.open-meteo.com/v1/forecast";
 const SOURCE = "Open-Meteo";
@@ -297,7 +297,9 @@ async function requestOpenMeteo(latitude, longitude, options = {}) {
       const category = error?.bridgeCategory;
       const stage = ["timeout", "network", "rejected"].includes(category)
         ? `apps-script-${category}` : "apps-script-invalid-response";
-      console.warn("weather-provider-unavailable", { stage });
+      const reason = category === "rejected"
+        ? safeWeatherRejectionReason(error?.weatherRejectionReason) : null;
+      console.warn("weather-provider-unavailable", { stage, ...(reason ? { reason } : {}) });
       return buildUnavailableResult();
     }
   }
