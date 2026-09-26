@@ -386,6 +386,7 @@ function createHarness(options = {}) {
     renderedParcelResults: [],
     updatedSavedPhotos: [],
     revokedImageUrls: [],
+    imageReadLogs: [],
     closeResultPanelCalls: 0,
     closedMyParcelSheets: 0,
     refreshedOpenLists: 0,
@@ -462,9 +463,9 @@ function createHarness(options = {}) {
       };
     },
     getLocationReport: async () => ({ success: true }),
-    getParcelImageBlob: async (parcelId, imageId) => {
+    getParcelImageBlob: async (parcelId, imageId, requestOptions) => {
       apiCalls.push({ method: "getParcelImageBlob", parcelId, imageId });
-      return options.imageLoadHandler ? options.imageLoadHandler(parcelId, imageId) : { imageId };
+      return options.imageLoadHandler ? options.imageLoadHandler(parcelId, imageId, requestOptions) : { imageId };
     },
   };
 
@@ -543,7 +544,7 @@ function createHarness(options = {}) {
       renderTemporaryParcelList(parcels) {
         uiState.temporaryListLengths.push(Array.isArray(parcels) ? parcels.length : 0);
       },
-      setResultPanelCloseHandler() {},
+      setResultPanelCloseHandler(handler) { uiState.resultPanelCloseHandler = handler; },
       renderSavedParcelDetail(parcel, message) {
         uiState.renderedSavedDetails.push({ parcel, message });
       },
@@ -576,6 +577,7 @@ function createHarness(options = {}) {
     setTimeout,
     clearTimeout,
     console: {
+      info(...args) { uiState.imageReadLogs.push(args); },
       warn() {},
     },
   };
@@ -835,6 +837,30 @@ test("switching saved parcels ignores stale loads and revokes prior Object URLs"
   assert.ok(harness.uiState.revokedImageUrls.includes("blob:b.webp"));
 });
 
+test("closing or switching a saved parcel aborts its pending image read", async () => {
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp" }] };
+  const parcelB = { ...parcel(PARCEL_B_ID, "Field B"), images: [{ id: "b.webp" }] };
+  const signals = [];
+  const harness = createHarness({ imageLoadHandler: (_parcelId, _imageId, requestOptions) => {
+    signals.push(requestOptions.signal);
+    return new Promise((_resolve, reject) => {
+      requestOptions.signal.addEventListener("abort", () => {
+        reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+      }, { once: true });
+    });
+  } });
+  harness.parcelHandlers.onParcelsLoaded([parcelA, parcelB]);
+  await harness.parcelHandlers.onOpenParcel(parcelA);
+  assert.equal(signals[0].aborted, false);
+  await harness.parcelHandlers.onOpenParcel(parcelB);
+  assert.equal(signals[0].aborted, true);
+  assert.equal(signals[1].aborted, false);
+  harness.uiState.resultPanelCloseHandler();
+  assert.equal(signals[1].aborted, true);
+  await nextTick();
+  assert.equal(harness.uiState.updatedSavedPhotos.length, 0);
+});
+
 test("reopening the same saved parcel reuses its protected image Object URL", async () => {
   const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp", linkImage: "https://drive.usercontent.google.com/download?id=a&export=view" }] };
   const harness = createHarness();
@@ -847,6 +873,90 @@ test("reopening the same saved parcel reuses its protected image Object URL", as
   assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.photos[0].previewUrl,
     "blob:a.webp");
   assert.equal(harness.uiState.revokedImageUrls.length, 0);
+});
+
+test("closing and reopening a parcel reuses its RAM image cache without a second GET", async () => {
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp" }] };
+  const harness = createHarness();
+  harness.parcelHandlers.onParcelsLoaded([parcelA]);
+  await harness.parcelHandlers.onOpenParcel(parcelA);
+  await nextTick();
+  harness.uiState.resultPanelCloseHandler();
+  assert.deepEqual(harness.uiState.revokedImageUrls, []);
+  await harness.parcelHandlers.onOpenParcel(parcelA);
+  assert.equal(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob").length, 1);
+  assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.photos[0].previewUrl, "blob:a.webp");
+  assert.ok(harness.uiState.imageReadLogs.some((entry) => entry[0] === "[ParcelImageRead] CACHE_HIT"));
+});
+
+test("a new saved image is fetched and an obsolete image is revoked without clearing other cached images", async () => {
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "old.webp" }] };
+  const harness = createHarness();
+  harness.parcelHandlers.onParcelsLoaded([parcelA]);
+  await harness.parcelHandlers.onOpenParcel(parcelA);
+  await nextTick();
+  harness.parcelHandlers.onParcelUpdated({ ...parcelA, images: [{ id: "old.webp" }, { id: "new.webp" }] });
+  await nextTick();
+  assert.deepEqual(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob")
+    .map((call) => call.imageId), ["old.webp", "new.webp"]);
+  harness.parcelHandlers.onParcelUpdated({ ...parcelA, images: [{ id: "new.webp" }] });
+  assert.ok(harness.uiState.revokedImageUrls.includes("blob:old.webp"));
+  assert.ok(!harness.uiState.revokedImageUrls.includes("blob:new.webp"));
+  assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.photos[0].previewUrl, "blob:new.webp");
+});
+
+test("image cache keys include parcel ID and deleting one parcel revokes only its images", async () => {
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "shared.webp" }] };
+  const parcelB = { ...parcel(PARCEL_B_ID, "Field B"), images: [{ id: "shared.webp" }] };
+  const harness = createHarness();
+  harness.parcelHandlers.onParcelsLoaded([parcelA, parcelB]);
+  await harness.parcelHandlers.onOpenParcel(parcelA);
+  await nextTick();
+  await harness.parcelHandlers.onOpenParcel(parcelB);
+  await nextTick();
+  assert.deepEqual(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob")
+    .map((call) => call.parcelId), [PARCEL_A_ID, PARCEL_B_ID]);
+  harness.parcelHandlers.onParcelDeleted(PARCEL_A_ID);
+  assert.equal(harness.uiState.revokedImageUrls.length, 1);
+  await harness.parcelHandlers.onOpenParcel(parcelB);
+  assert.equal(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob").length, 2);
+});
+
+test("pagehide revokes cached saved images even after their panels close", async () => {
+  const parcelA = { ...parcel(PARCEL_A_ID, "Field A"), images: [{ id: "a.webp" }] };
+  const parcelB = { ...parcel(PARCEL_B_ID, "Field B"), images: [{ id: "b.webp" }] };
+  const harness = createHarness();
+  harness.parcelHandlers.onParcelsLoaded([parcelA, parcelB]);
+  await harness.parcelHandlers.onOpenParcel(parcelA);
+  await nextTick();
+  await harness.parcelHandlers.onOpenParcel(parcelB);
+  await nextTick();
+  harness.uiState.resultPanelCloseHandler();
+  assert.deepEqual(harness.uiState.revokedImageUrls, []);
+  harness.triggerPagehide();
+  assert.deepEqual(harness.uiState.revokedImageUrls.sort(), ["blob:a.webp", "blob:b.webp"]);
+});
+
+test("saved image RAM cache evicts and revokes oldest unused images above 25 entries", async () => {
+  const parcels = Array.from({ length: 6 }, (_, index) => {
+    const id = `11111111-1111-4111-8111-${String(index + 1).padStart(12, "0")}`;
+    return { ...parcel(id, `Field ${index}`), images: Array.from({ length: 5 }, (_item, image) => ({
+      id: `field${index}-image${image}.webp`,
+    })) };
+  });
+  const harness = createHarness();
+  harness.parcelHandlers.onParcelsLoaded(parcels);
+  for (const item of parcels) {
+    await harness.parcelHandlers.onOpenParcel(item);
+    await nextTick();
+  }
+  assert.equal(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob").length, 30);
+  assert.deepEqual(harness.uiState.revokedImageUrls.sort(),
+    parcels[0].images.map((image) => `blob:${image.id}`).sort());
+  await harness.parcelHandlers.onOpenParcel(parcels[5]);
+  assert.equal(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob").length, 30);
+  await harness.parcelHandlers.onOpenParcel(parcels[0]);
+  assert.equal(harness.apiCalls.filter((call) => call.method === "getParcelImageBlob").length, 35);
 });
 
 test("saved re-analysis renders before protected image content finishes", async () => {

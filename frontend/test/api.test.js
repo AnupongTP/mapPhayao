@@ -26,9 +26,13 @@ function createApiHarness(responseBody = { ok: true, status: "SENT" }, harnessOp
           return harnessOptions.idToken || "test-id-token";
         },
       },
+      console: harnessOptions.console,
     },
+    setTimeout: harnessOptions.setTimeout || setTimeout,
+    clearTimeout: harnessOptions.clearTimeout || clearTimeout,
     fetch: async (url, options) => {
       calls.push({ url, options });
+      if (harnessOptions.fetchImpl) return harnessOptions.fetchImpl(url, options);
       if (responseBody instanceof Error) {
         throw responseBody;
       }
@@ -54,6 +58,41 @@ function createApiHarness(responseBody = { ok: true, status: "SENT" }, harnessOp
     tokenCalls,
     MapApi: context.window.MapApi,
   };
+}
+
+function imageReadResponse(status = 200) {
+  return {
+    ok: status === 200,
+    status,
+    headers: { get: () => "image/webp" },
+    json: async () => ({ error: "Image unavailable" }),
+    blob: async () => new Blob(["webp"], { type: "image/webp" }),
+  };
+}
+
+function imageReadHarness(outcomes, timerOptions = {}) {
+  const delays = [];
+  const logs = [];
+  let index = 0;
+  const harness = createApiHarness({}, {
+    fetchImpl: async () => {
+      const outcome = outcomes[index++];
+      if (outcome instanceof Error) throw outcome;
+      return typeof outcome === "number" ? imageReadResponse(outcome) : outcome;
+    },
+    console: {
+      info: (...args) => logs.push(args),
+      warn: (...args) => logs.push(args),
+      error: (...args) => logs.push(args),
+    },
+    setTimeout: timerOptions.setTimeout || ((callback, delay) => {
+      delays.push(delay);
+      queueMicrotask(callback);
+      return 1;
+    }),
+    clearTimeout: timerOptions.clearTimeout || (() => {}),
+  });
+  return { ...harness, delays, logs };
 }
 
 test("parcel photo upload uses authenticated multipart without client owner fields", async () => {
@@ -154,6 +193,111 @@ test("saved photo content rejects unsafe image ids and non-WebP responses", asyn
   const invalid = createApiHarness({}, { contentType: "text/html" });
   await assert.rejects(() => invalid.MapApi.getParcelImageBlob(parcelId, "photo.webp"),
     /Invalid parcel image response/);
+});
+
+test("saved image read succeeds on first attempt without retry", async () => {
+  const client = imageReadHarness([200]);
+  const blob = await client.MapApi.getParcelImageBlob("11111111-1111-4111-8111-111111111111", "photo.webp");
+  assert.equal(blob.type, "image/webp");
+  assert.equal(client.calls.length, 1);
+  assert.deepEqual(client.delays, []);
+  assert.deepEqual(client.logs.map((item) => item[0]), [
+    "[ParcelImageRead] FETCH", "[ParcelImageRead] SUCCESS",
+  ]);
+  assert.equal(client.logs[0][1].attempt, 1);
+  assert.equal(client.logs[1][1].attempts, 1);
+});
+
+test("saved image read retries 500, 404, and network failure then succeeds", async () => {
+  const parcelId = "11111111-1111-4111-8111-111111111111";
+  for (const outcome of [500, 404, new TypeError("network failed")]) {
+    const client = imageReadHarness([outcome, 200]);
+    const blob = await client.MapApi.getParcelImageBlob(parcelId, "photo.webp");
+    assert.equal(blob.type, "image/webp");
+    assert.equal(client.calls.length, 2);
+    assert.deepEqual(client.delays, [500]);
+    assert.deepEqual(client.logs.map((item) => item[0]), [
+      "[ParcelImageRead] FETCH", "[ParcelImageRead] RETRY",
+      "[ParcelImageRead] FETCH", "[ParcelImageRead] SUCCESS",
+    ]);
+    assert.equal(client.logs[1][1].attempt, 2);
+    assert.equal(client.logs[1][1].maxAttempts, 4);
+    assert.equal(client.logs[1][1].status, outcome instanceof Error ? null : outcome);
+    assert.equal(client.logs[3][1].attempts, 2);
+    assert.doesNotMatch(JSON.stringify(client.logs), /network failed|Authorization|Bearer|photo\.webp/);
+  }
+});
+
+test("saved image read stops after three retries with bounded delays", async () => {
+  const client = imageReadHarness([500, 502, 503, 504]);
+  await assert.rejects(() => client.MapApi.getParcelImageBlob(
+    "11111111-1111-4111-8111-111111111111", "photo.webp"),
+  (error) => error.statusCode === 504);
+  assert.equal(client.calls.length, 4);
+  assert.deepEqual(client.delays, [500, 1000, 2000]);
+  assert.deepEqual(client.logs.map((item) => item[0]), [
+    "[ParcelImageRead] FETCH", "[ParcelImageRead] RETRY",
+    "[ParcelImageRead] FETCH", "[ParcelImageRead] RETRY",
+    "[ParcelImageRead] FETCH", "[ParcelImageRead] RETRY",
+    "[ParcelImageRead] FETCH", "[ParcelImageRead] FAILED",
+  ]);
+  assert.equal(client.logs.at(-1)[1].attempts, 4);
+  assert.equal(client.logs.at(-1)[1].status, 504);
+});
+
+test("saved image response processing failures never retry", async () => {
+  const parcelId = "11111111-1111-4111-8111-111111111111";
+  const headerFailure = imageReadResponse();
+  headerFailure.headers.get = () => { throw new Error("internal header failure"); };
+  const invalidContentType = imageReadResponse();
+  invalidContentType.headers.get = () => "text/plain";
+  const bodyFailure = imageReadResponse();
+  bodyFailure.blob = async () => { throw new Error("internal body processing failure"); };
+  for (const [response, message] of [
+    [headerFailure, "internal header failure"],
+    [invalidContentType, "Invalid parcel image response"],
+    [bodyFailure, "internal body processing failure"],
+  ]) {
+    const client = imageReadHarness([response]);
+    await assert.rejects(() => client.MapApi.getParcelImageBlob(parcelId, "photo.webp"),
+      (error) => error.message === message);
+    assert.equal(client.calls.length, 1);
+    assert.deepEqual(client.delays, []);
+    assert.equal(client.logs.at(-1)[0], "[ParcelImageRead] FAILED");
+  }
+});
+
+test("saved image read never retries 401, 403, 400, AbortError, or invalid IDs", async () => {
+  const parcelId = "11111111-1111-4111-8111-111111111111";
+  for (const outcome of [401, 403, 400, Object.assign(new Error("aborted"), { name: "AbortError" })]) {
+    const client = imageReadHarness([outcome]);
+    await assert.rejects(() => client.MapApi.getParcelImageBlob(parcelId, "photo.webp"));
+    assert.equal(client.calls.length, 1);
+    assert.deepEqual(client.delays, []);
+  }
+  const invalid = imageReadHarness([]);
+  await assert.rejects(() => invalid.MapApi.getParcelImageBlob("bad", "photo.webp"), TypeError);
+  await assert.rejects(() => invalid.MapApi.getParcelImageBlob(parcelId, "../photo.webp"), TypeError);
+  assert.equal(invalid.calls.length, 0);
+  assert.equal(invalid.tokenCalls.length, 0);
+});
+
+test("aborting while a saved image retry waits cancels its timer and prevents another GET", async () => {
+  let timerScheduled;
+  let timerCleared = false;
+  const client = imageReadHarness([500, 200], {
+    setTimeout: (callback) => { timerScheduled = callback; return 1; },
+    clearTimeout: () => { timerCleared = true; },
+  });
+  const controller = new AbortController();
+  const pending = client.MapApi.getParcelImageBlob(
+    "11111111-1111-4111-8111-111111111111", "photo.webp", { signal: controller.signal });
+  await new Promise(setImmediate);
+  assert.equal(typeof timerScheduled, "function");
+  controller.abort();
+  await assert.rejects(pending, (error) => error.name === "AbortError");
+  assert.equal(timerCleared, true);
+  assert.equal(client.calls.length, 1);
 });
 
 test("sendLineLocationSummary posts map-click coordinates to the summary endpoint", async () => {

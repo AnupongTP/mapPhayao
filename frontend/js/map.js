@@ -28,8 +28,10 @@
   let activeSavedImageParcelId = null;
   let savedImageLoadRevision = 0;
   let savedImageController = null;
+  const MAX_CACHED_SAVED_IMAGES = 25;
   const savedImageObjectUrls = new Map();
   const pendingSavedImageLoads = new Map();
+  let activeSavedImageKeys = new Set();
   const savedParcelAnalysisById = new Map();
   const deletedSavedParcelIds = new Set();
   let ownedParcelLayerRevision = 0;
@@ -45,7 +47,7 @@
   const savedBoundaryEditLayers = new L.FeatureGroup();
   window.addEventListener("pagehide", () => {
     temporaryParcels.forEach((parcel) => parcel.photos?.forEach((photo) => URL.revokeObjectURL(photo.previewUrl)));
-    releaseSavedImages();
+    releaseSavedImages({ clearCache: true });
   });
 
   const GEOLOCATION_OPTIONS = {
@@ -775,36 +777,70 @@
     return response.parcel;
   }
 
-  function releaseSavedImages() {
+  function savedImageKey(parcelId, imageId) {
+    return `${parcelId}/${imageId}`;
+  }
+
+  function clearSavedImageCacheForParcel(parcelId, imageIds) {
+    const prefix = `${parcelId}/`;
+    for (const [key, url] of savedImageObjectUrls) {
+      if (key.startsWith(prefix) && (!imageIds || !imageIds.has(key.slice(prefix.length)))) {
+        URL.revokeObjectURL(url);
+        savedImageObjectUrls.delete(key);
+      }
+    }
+  }
+
+  function evictUnusedSavedImages() {
+    for (const [key, url] of savedImageObjectUrls) {
+      if (savedImageObjectUrls.size <= MAX_CACHED_SAVED_IMAGES) break;
+      if (activeSavedImageKeys.has(key)) continue;
+      URL.revokeObjectURL(url);
+      savedImageObjectUrls.delete(key);
+    }
+  }
+
+  function releaseSavedImages({ clearCache = false } = {}) {
     savedImageLoadRevision += 1;
     savedImageController?.abort();
     savedImageController = null;
     pendingSavedImageLoads.clear();
     if (savedImageObjectUrls.size) window.MapUi.closeParcelPhotoViewer?.();
-    savedImageObjectUrls.forEach((url) => URL.revokeObjectURL(url));
-    savedImageObjectUrls.clear();
+    activeSavedImageKeys = new Set();
     activeSavedImageParcelId = null;
+    if (clearCache) {
+      savedImageObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+      savedImageObjectUrls.clear();
+    }
   }
 
   function setInitialSavedPhotos(parcel) {
     const ids = new Set((parcel.images || []).map((image) => image.id));
     if (activeSavedImageParcelId !== parcel.id ||
-      [...savedImageObjectUrls.keys(), ...pendingSavedImageLoads.keys()].some((id) => !ids.has(id))) {
+      [...pendingSavedImageLoads.keys()].some((key) => !ids.has(key.slice(`${parcel.id}/`.length)))) {
       releaseSavedImages();
     }
+    clearSavedImageCacheForParcel(parcel.id, ids);
     activeSavedImageParcelId = parcel.id;
+    activeSavedImageKeys = new Set([...ids].map((id) => savedImageKey(parcel.id, id)));
     savedImageController ||= new AbortController();
     savedImageLoadRevision += 1;
     parcel.photosLoading = false;
-    parcel.photos = (parcel.images || []).map((image) => ({
-      ...image,
-      previewUrl: savedImageObjectUrls.get(image.id) || null,
-      loading: !savedImageObjectUrls.has(image.id),
-    }));
+    parcel.photos = (parcel.images || []).map((image) => {
+      const key = savedImageKey(parcel.id, image.id);
+      const url = savedImageObjectUrls.get(key) || null;
+      if (url) {
+        savedImageObjectUrls.delete(key);
+        savedImageObjectUrls.set(key, url);
+        window.console?.info?.("[ParcelImageRead] CACHE_HIT");
+      }
+      return { ...image, previewUrl: url, loading: !url };
+    });
   }
 
   function fetchSavedImage(parcelId, imageId) {
-    let pending = pendingSavedImageLoads.get(imageId);
+    const key = savedImageKey(parcelId, imageId);
+    let pending = pendingSavedImageLoads.get(key);
     if (pending) return pending;
     const controller = savedImageController;
     pending = window.MapApi.getParcelImageBlob(parcelId, imageId, { signal: controller.signal })
@@ -814,13 +850,14 @@
           URL.revokeObjectURL(url);
           return null;
         }
-        savedImageObjectUrls.set(imageId, url);
+        savedImageObjectUrls.set(key, url);
+        evictUnusedSavedImages();
         return url;
       })
       .finally(() => {
-        if (pendingSavedImageLoads.get(imageId) === pending) pendingSavedImageLoads.delete(imageId);
+        if (pendingSavedImageLoads.get(key) === pending) pendingSavedImageLoads.delete(key);
       });
-    pendingSavedImageLoads.set(imageId, pending);
+    pendingSavedImageLoads.set(key, pending);
     return pending;
   }
 
@@ -977,6 +1014,8 @@
   function handleSavedParcelDeleted(parcelId) {
     deletedSavedParcelIds.add(parcelId);
     savedParcelAnalysisById.delete(parcelId);
+    if (activeSavedImageParcelId === parcelId) releaseSavedImages();
+    clearSavedImageCacheForParcel(parcelId);
     if (pendingSavedParcelId === parcelId || openedSavedParcelId === parcelId) {
       savedParcelDetailRevision += 1;
       if (pendingSavedParcelId === parcelId) {

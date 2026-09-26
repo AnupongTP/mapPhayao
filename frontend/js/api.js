@@ -11,6 +11,29 @@
     "APPS_SCRIPT_INVALID_RESPONSE", "DRIVE_UPLOAD_ERROR", "SHEET_HEADER_MISMATCH",
     "SHEET_UPDATE_ERROR", "SHEET_READ_ERROR", "AUTH_REQUIRED", "PARCEL_NOT_FOUND",
     "IMAGE_TOO_LARGE", "IMAGE_UNSUPPORTED", "INVALID_UPLOAD", "UPLOAD_FAILED"]);
+  const SAVED_IMAGE_RETRY_DELAYS = [500, 1000, 2000];
+  const SAVED_IMAGE_RETRY_STATUSES = new Set([404, 500, 502, 503, 504]);
+
+  function savedImageAbortError() {
+    const error = new Error("Saved image request aborted");
+    error.name = "AbortError";
+    return error;
+  }
+
+  function waitForSavedImageRetry(delay, signal) {
+    if (signal?.aborted) return Promise.reject(savedImageAbortError());
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(savedImageAbortError());
+      };
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, delay);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
 
   function buildUrl(path) {
     return `${window.AppConfig.apiBaseUrl}${path}`;
@@ -284,18 +307,57 @@
       if (typeof imageId !== "string" || !/^[A-Za-z0-9_-]+\.webp$/.test(imageId)) {
         throw new TypeError("imageId is invalid");
       }
+      const safeParcelId = assertParcelId(parcelId);
       const idToken = await getCurrentLiffIdToken();
-      const response = await fetch(buildUrl(`/parcels/${encodeURIComponent(assertParcelId(parcelId))}` +
-        `/images/${encodeURIComponent(imageId)}/content`), {
-        ...options,
-        method: "GET",
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (!response.ok) throw createRequestError(response, await parseJsonSafely(response));
-      if (!/^image\/webp(?:;|$)/i.test(response.headers.get("Content-Type") || "")) {
-        throw new Error("Invalid parcel image response");
+      const url = buildUrl(`/parcels/${encodeURIComponent(safeParcelId)}` +
+        `/images/${encodeURIComponent(imageId)}/content`);
+      for (let attempt = 1; attempt <= SAVED_IMAGE_RETRY_DELAYS.length + 1; attempt += 1) {
+        if (options.signal?.aborted) throw savedImageAbortError();
+        window.console?.info?.("[ParcelImageRead] FETCH", { attempt });
+        try {
+          let response;
+          try {
+            response = await fetch(url, {
+              ...options,
+              method: "GET",
+              headers: { Authorization: `Bearer ${idToken}` },
+            });
+          } catch (error) {
+            if (error?.name === "AbortError") throw error;
+            const transportError = new Error("Saved image transport failed");
+            transportError.isSavedImageTransportFailure = true;
+            throw transportError;
+          }
+          if (!response.ok) {
+            const requestError = createRequestError(response, await parseJsonSafely(response));
+            requestError.isSavedImageHttpFailure = true;
+            throw requestError;
+          }
+          if (!/^image\/webp(?:;|$)/i.test(response.headers.get("Content-Type") || "")) {
+            const error = new Error("Invalid parcel image response");
+            error.nonRetryableImageRead = true;
+            throw error;
+          }
+          const blob = await response.blob();
+          if (options.signal?.aborted) throw savedImageAbortError();
+          window.console?.info?.("[ParcelImageRead] SUCCESS", { attempts: attempt });
+          return blob;
+        } catch (error) {
+          if (options.signal?.aborted || error?.name === "AbortError") throw error;
+          const status = Number.isInteger(error?.statusCode) ? error.statusCode : null;
+          const retryable = error?.isSavedImageTransportFailure === true ||
+            (error?.isSavedImageHttpFailure === true && SAVED_IMAGE_RETRY_STATUSES.has(status));
+          if (retryable && attempt <= SAVED_IMAGE_RETRY_DELAYS.length) {
+            window.console?.warn?.("[ParcelImageRead] RETRY", {
+              attempt: attempt + 1, maxAttempts: SAVED_IMAGE_RETRY_DELAYS.length + 1, status,
+            });
+            await waitForSavedImageRetry(SAVED_IMAGE_RETRY_DELAYS[attempt - 1], options.signal);
+            continue;
+          }
+          window.console?.error?.("[ParcelImageRead] FAILED", { attempts: attempt, status });
+          throw error;
+        }
       }
-      return response.blob();
     },
     listMyParcels: function (options) {
       return sendAuthenticatedParcelJson("/parcels/mine", undefined, "GET", options);
