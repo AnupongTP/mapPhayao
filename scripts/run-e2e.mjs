@@ -123,6 +123,7 @@ async function main() {
       "/migrations/20260924_add_user_display_name.sql",
       "/migrations/20260925_add_parcel_note.sql",
       "/migrations/20260925_create_cleanup_jobs.sql",
+      "/migrations/20260927_create_parcel_photo_operations.sql",
     ];
     for (const file of sqlFiles) {
       await run("docker", [...compose, "exec", "-T", "db", "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "mapphayao_e2e", "-f", file]);

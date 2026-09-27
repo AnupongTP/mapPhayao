@@ -687,7 +687,7 @@ test("closed parcel sheets are removed and cannot leave an intercepting backdrop
     /function closeSheet\(sheet\) \{[\s\S]*?\n  \}/,
   )[0];
   const createSheetSource = managementSource.match(
-    /function createSheet\(id, title\) \{[\s\S]*?return \{ backdrop, body \};\n  \}/,
+    /function createSheet\(id, title\) \{[\s\S]*?return \{ backdrop, body(?:, closeButton)? \};\n  \}/,
   )[0];
 
   assert.match(closeSheetSource, /sheet\.remove\(\)/);

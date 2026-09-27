@@ -132,6 +132,21 @@ test("worker deletes Sheet first, persists each confirmed Drive deletion, and re
   assert.equal(await restarted.runCycle(), 0);
 });
 
+test("photo_deletion never deletes the parcel Sheet row and checkpoints detached files", async () => {
+  const database = fakeQueue({ job_type: "photo_deletion", sheet_deleted: true,
+    remaining_file_ids: ["detached_1"] });
+  const calls = [];
+  const google = { enabled: true,
+    async deleteParcel() { calls.push("sheet"); },
+    async deleteImage(id) { calls.push(id); },
+  };
+  const worker = createParcelCleanupWorker({ database, google, logger: captureLogger() });
+  assert.equal(await worker.runCycle(), 1);
+  assert.deepEqual(calls, ["detached_1"]);
+  assert.deepEqual(database.job.remaining_file_ids, []);
+  assert.equal(database.job.status, "completed");
+});
+
 test("safe cleanup labels are bounded and never include raw provider text", () => {
   const label = safeErrorLabel({
     message: "SECRET_PROVIDER_BODY",

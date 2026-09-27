@@ -56,6 +56,7 @@
     requestError.statusCode = response.status;
     requestError.retryable = body?.retryable === true;
     requestError.ambiguous = body?.ambiguous === true;
+    requestError.photoSetCommitted = body?.outcome === "PHOTO_SET_COMMITTED_METADATA_PENDING";
     return requestError;
   }
 
@@ -265,6 +266,20 @@
         options,
       );
     },
+    beginSavedPhotoEdit: function (parcelId, payload) {
+      return sendAuthenticatedParcelJson(
+        `/parcels/${encodeURIComponent(assertParcelId(parcelId))}/photo-edits`, payload, "POST");
+    },
+    getSavedPhotoEdit: function (parcelId, operationId) {
+      return sendAuthenticatedParcelJson(
+        `/parcels/${encodeURIComponent(assertParcelId(parcelId))}/photo-edits/${encodeURIComponent(operationId)}`,
+        undefined, "GET");
+    },
+    finalizeSavedPhotoEdit: function (parcelId, operationId) {
+      return sendAuthenticatedParcelJson(
+        `/parcels/${encodeURIComponent(assertParcelId(parcelId))}/photo-edits/${encodeURIComponent(operationId)}/finalize`,
+        {}, "POST");
+    },
     uploadParcelImage: async function (parcelId, file, clientPhotoId, options = {}) {
       const idToken = await getCurrentLiffIdToken();
       const body = new FormData();
@@ -273,7 +288,12 @@
       let response;
       try {
         options.onRequestStart?.();
-        const request = fetch(buildUrl(`/parcels/${encodeURIComponent(assertParcelId(parcelId))}/images`), {
+        const operationId = options.photoEditOperationId;
+        const path = operationId
+          ? `/parcels/${encodeURIComponent(assertParcelId(parcelId))}/photo-edits/` +
+            `${encodeURIComponent(operationId)}/images`
+          : `/parcels/${encodeURIComponent(assertParcelId(parcelId))}/images`;
+        const request = fetch(buildUrl(path), {
           method: "POST",
           headers: { Authorization: `Bearer ${idToken}`, "X-Photo-Attempt": String(options.attempt || 0) },
           body,

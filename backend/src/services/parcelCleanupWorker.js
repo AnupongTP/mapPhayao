@@ -61,7 +61,7 @@ function retryDelaySeconds(attempts) {
 
 function createParcelCleanupWorker({ database = db, google, workerId = randomUUID(),
   pollIntervalMs = 30000, maxJobsPerCycle = 2, leaseSeconds = LEASE_SECONDS,
-  logger = console } = {}) {
+  logger = console, photoOperations } = {}) {
   if (!google) throw new Error("Parcel cleanup Google integration is required");
   let timer;
   let busy = false;
@@ -87,7 +87,7 @@ function createParcelCleanupWorker({ database = db, google, workerId = randomUUI
         locked_at = now(), locked_by = $1
       FROM due WHERE job.id = due.id
       RETURNING job.id, job.parcel_id, job.parcel_code, job.remaining_file_ids,
-        job.sheet_deleted, job.attempts, job.last_error;
+        job.sheet_deleted, job.attempts, job.last_error, job.job_type;
     `, [workerId, leaseSeconds]);
     return result.rows[0] || null;
   }
@@ -141,6 +141,7 @@ function createParcelCleanupWorker({ database = db, google, workerId = randomUUI
         throw cleanupError("stale-side-effect");
       }
       if (job.attempts > MAX_ATTEMPTS) throw cleanupError("attempt-limit");
+      if (job.job_type === "photo_deletion" && !job.sheet_deleted) throw cleanupError("internal");
       if (!google.enabled || (!job.sheet_deleted && typeof google.deleteParcel !== "function") ||
         (job.remaining_file_ids.length > 0 && typeof google.deleteImage !== "function")) {
         throw cleanupError("google-unavailable");
@@ -205,6 +206,10 @@ function createParcelCleanupWorker({ database = db, google, workerId = randomUUI
     busy = true;
     let processed = 0;
     try {
+      if (photoOperations) {
+        try { await photoOperations.sweepExpired(google, database); }
+        catch { logger.warn("parcel-photo-operation-sweep-failed"); }
+      }
       while (processed < maxJobsPerCycle && await runOne()) processed += 1;
       return processed;
     } finally {

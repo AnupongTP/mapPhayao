@@ -337,6 +337,27 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
         return image;
       }));
     },
+    replaceParcelImages(parcelCode, ownerUserId, expected, finalImages) {
+      return atGoogleStage("sheets-replace-images", () => serializeWrite(async () => {
+        await assertParcelHeaders();
+        const row = await findRow(SPREADSHEET_TABS.parcels, parcelCode);
+        if (!row || row.cells[0] !== ownerUserId) throw createHttpError(404, "Parcel not found");
+        const current = parseParcelImages(row.cells);
+        const same = (left, right) => left.length === right.length && left.every((image, index) =>
+          image.fileName === right[index]?.fileName && image.fileId === right[index]?.fileId);
+        if (same(current, finalImages)) return current;
+        if (!same(current, expected)) throw imageConflict();
+        if (finalImages.length > 5 || new Set(finalImages.map((image) => image.fileName)).size !== finalImages.length ||
+          finalImages.some((image) => typeof image.fileName !== "string" ||
+            !/^[A-Za-z0-9_-]+\.webp$/.test(image.fileName))) throw imageConflict();
+        const links = finalImages.map((image) => imageLink(image.fileId));
+        await sheets.spreadsheets.values.update({ spreadsheetId,
+          range: `parcels!L${row.number}:M${row.number}`, valueInputOption: "RAW",
+          requestBody: { values: [[JSON.stringify(finalImages.map((image) => image.fileName)),
+            JSON.stringify(links)]] } });
+        return finalImages;
+      }));
+    },
     deleteParcel(parcelCode) {
       return atGoogleStage("sheets-delete-parcel", () => serializeWrite(async () => {
         await assertParcelHeaders();

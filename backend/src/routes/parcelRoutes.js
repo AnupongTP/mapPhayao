@@ -65,7 +65,8 @@ const parseImage = multer({ storage: multer.memoryStorage(), limits: {
 } }).single("image");
 
 router.use((req, res, next) => {
-  if (req.method === "POST" && /^\/[^/]+\/images$/.test(req.path)) {
+  if (req.method === "POST" && (/^\/[^/]+\/images$/.test(req.path) ||
+    /^\/[^/]+\/photo-edits\/[^/]+\/images$/.test(req.path))) {
     req.uploadDiagnostic = { requestId: randomBytes(4).toString("hex").toUpperCase(),
       stage: "REQUEST_RECEIVED", startedAt: performance.now(), timings: {} };
     req.uploadDiagnostic.logTiming = () => logUploadTiming(req);
@@ -96,6 +97,18 @@ router.post("/", parcelController.createParcel);
 router.get("/mine", parcelController.listParcels);
 router.get("/", parcelController.listParcels);
 router.post("/:parcelId/analyze", parcelController.analyzeParcel);
+router.post("/:parcelId/photo-edits", parcelController.beginPhotoEdit);
+router.get("/:parcelId/photo-edits/:operationId", parcelController.getPhotoEdit);
+router.post("/:parcelId/photo-edits/:operationId/images", (req, res, next) => {
+  parseImage(req, res, (error) => {
+    if (!error) {
+      req.uploadDiagnostic.stage = "MULTIPART_PARSED";
+      return next();
+    }
+    return next(createHttpError(error.code === "LIMIT_FILE_SIZE" ? 413 : 400, "ข้อมูลรูปภาพไม่ถูกต้อง"));
+  });
+}, parcelController.uploadPhotoEditImage);
+router.post("/:parcelId/photo-edits/:operationId/finalize", parcelController.finalizePhotoEdit);
 router.post("/:parcelId/images", (req, res, next) => {
   parseImage(req, res, (error) => {
     if (!error) {

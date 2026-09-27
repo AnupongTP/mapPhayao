@@ -67,7 +67,7 @@ function parcelPayload(name, index) {
   };
 }
 
-test("saved parcel edit keeps metadata and supports optional notes without photo controls", async ({ page, context, request }) => {
+test("saved parcel edit keeps metadata and supports optional notes with staged photo controls", async ({ page, context, request }) => {
   test.setTimeout(120000);
   const forbidden = await prepareContext(context, { token });
   const errors = watchPageErrors(page);
@@ -113,8 +113,8 @@ test("saved parcel edit keeps metadata and supports optional notes without photo
     await expect(sheet.locator("#parcel-edit-rice-variety")).toHaveValue("TEST-RICE");
     await expect(sheet.locator("#parcel-edit-planting-date")).toHaveValue("2026-01-15");
     await expect(sheet.locator("#parcel-edit-note")).toHaveJSProperty("required", false);
-    await expect(sheet.locator("input[type=file]")).toHaveCount(0);
-    await expect(sheet.getByRole("button", { name: /รูปภาพ|อัปโหลด/ })).toHaveCount(0);
+    await expect(sheet.locator("input[type=file]")).toHaveCount(1);
+    await expect(sheet.locator(".saved-photo-edit-count")).toHaveText("0/5");
     await sheet.getByLabel("หมายเหตุ").fill("หมายเหตุใหม่");
     await saveEdit();
     expect(patchBodies[0]).toEqual({ note: "หมายเหตุใหม่" });

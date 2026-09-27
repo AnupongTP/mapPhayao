@@ -155,6 +155,8 @@
     if (!sheet) {
       return;
     }
+    if (sheet.photoEditor?.busy || (sheet.photoEditor?.operationId && !sheet.photoEditCompleted)) return;
+    sheet.photoEditor?.dispose();
     sheet.remove();
     if (lastFocusedElement && typeof lastFocusedElement.focus === "function") {
       lastFocusedElement.focus({ preventScroll: true });
@@ -194,7 +196,7 @@
     });
     document.body.appendChild(backdrop);
     closeButton.focus({ preventScroll: true });
-    return { backdrop, body };
+    return { backdrop, body, closeButton };
   }
 
   function showLineOnlyMessage() {
@@ -225,7 +227,7 @@
   }
 
   function createParcelForm({ idPrefix, title, confirmText, parcel, onSubmit }) {
-    const { backdrop, body } = createSheet(`${idPrefix}-sheet`, title);
+    const { backdrop, body, closeButton } = createSheet(`${idPrefix}-sheet`, title);
     body.classList.add("parcel-form-body");
     const form = createElement("form", "parcel-form");
     form.id = `${idPrefix}-form`;
@@ -263,6 +265,16 @@
     dateInput.value = parcel?.plantingDate || "";
     createField(fields, `${idPrefix}-planting-date`, TEXT.plantingDate, dateInput);
 
+    let cancelButton;
+    const photoEditor = idPrefix === "parcel-edit" ? window.MapSavedPhotoEdit.create(parcel, ({ busy, operationId }) => {
+      closeButton.disabled = busy || Boolean(operationId);
+      if (cancelButton) cancelButton.disabled = busy || Boolean(operationId);
+    }) : null;
+    if (photoEditor) {
+      backdrop.photoEditor = photoEditor;
+      fields.appendChild(photoEditor.element);
+    }
+
     const noteInput = document.createElement("textarea");
     noteInput.name = "note";
     noteInput.maxLength = 5000;
@@ -276,7 +288,7 @@
     status.setAttribute("role", "status");
 
     const actions = createElement("div", "parcel-sheet-actions");
-    const cancelButton = createElement("button", "panel-button secondary", TEXT.cancel);
+    cancelButton = createElement("button", "panel-button secondary", TEXT.cancel);
     uiIcons.setActionLabel(cancelButton, TEXT.cancel);
     cancelButton.type = "button";
     cancelButton.addEventListener("click", () => closeSheet(backdrop));
@@ -299,12 +311,23 @@
       setStatus(status, idPrefix === "parcel-save" ? TEXT.saving : TEXT.updating);
 
       try {
-        await onSubmit(metadata, (message) => setStatus(status, message));
+        if (photoEditor) {
+          const patch = {};
+          ["parcelName", "cropType", "riceVariety", "plantingDate", "note"].forEach((key) => {
+            if ((metadata[key] || "") !== (parcel[key] || "")) patch[key] = metadata[key] || "";
+          });
+          const updated = await photoEditor.save(patch);
+          await onSubmit(updated);
+          backdrop.photoEditCompleted = true;
+          closeButton.disabled = false;
+        } else {
+          await onSubmit(metadata, (message) => setStatus(status, message));
+        }
         setStatus(status, idPrefix === "parcel-save" ? TEXT.saved : TEXT.updated, "success");
         window.setTimeout(() => closeSheet(backdrop), 700);
       } catch (error) {
         submitButton.disabled = false;
-        cancelButton.disabled = false;
+        cancelButton.disabled = Boolean(photoEditor?.operationId);
         setStatus(
           status,
           error.partialSuccess ? error.message : idPrefix === "parcel-save" ? TEXT.saveFailed : getFriendlyError(error),
@@ -573,18 +596,7 @@
         makeButton("รายละเอียด", () => handlers.onAnalyzeParcel?.(parcel, { reuseCachedResult: true })),
         makeButton("วิเคราะห์ใหม่", () => handlers.onAnalyzeParcel?.(parcel)),
         makeButton("แก้ไขข้อมูล", () => {
-          openEditSheet(parcel, async (metadata) => {
-            const patch = {};
-            ["parcelName", "cropType", "riceVariety", "plantingDate", "note"].forEach((key) => {
-              if ((metadata[key] || "") !== (parcel[key] || "")) {
-                patch[key] = metadata[key] || "";
-              }
-            });
-            if (Object.keys(patch).length === 0) {
-              return;
-            }
-            const result = await window.MapApi.updateMyParcel(parcel.id, patch);
-            const updatedParcel = result.parcel;
+          openEditSheet(parcel, async (updatedParcel) => {
             cachedParcels = cachedParcels.map((item) =>
               item.id === updatedParcel.id ? updatedParcel : item,
             );

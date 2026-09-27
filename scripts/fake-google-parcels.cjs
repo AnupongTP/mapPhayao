@@ -6,6 +6,16 @@ function createFakeGoogleParcels() {
   const users = new Map();
   const parcels = new Map();
   let failUploads = 0;
+  let ambiguousUploads = 0;
+  let failReplacements = 0;
+  let failAfterReplacements = 0;
+  let failParcelUpserts = 0;
+  let requireIdlePool = false;
+  function assertIdlePool() {
+    if (!requireIdlePool) return;
+    const pool = require("../backend/src/config/database").pool;
+    if (pool.totalCount !== pool.idleCount) throw new Error("Provider called while a DB connection is borrowed");
+  }
   const { userCells, parcelCells, parseParcelImages, imageLink } = require("../backend/src/services/googleParcelIntegration");
   let sheetWrites = Promise.resolve();
   function serializeWrite(action) {
@@ -25,12 +35,20 @@ function createFakeGoogleParcels() {
     users,
     parcels,
     async uploadImage(bytes, fileName) {
+      assertIdlePool();
       if (failUploads > 0) {
         failUploads -= 1;
         throw new Error("Fake Drive upload failure");
       }
       const id = randomUUID();
       files.set(id, { fileName, bytes: Buffer.from(bytes) });
+      if (ambiguousUploads > 0) {
+        ambiguousUploads -= 1;
+        const error = new Error("Fake upload timeout");
+        error.googleStage = "apps-script-upload";
+        error.bridgeCategory = "timeout";
+        throw error;
+      }
       return id;
     },
     async deleteImage(id) { files.delete(id); },
@@ -41,11 +59,21 @@ function createFakeGoogleParcels() {
     },
     async upsertUser(user) { users.set(user.id, userCells(user)); },
     upsertParcel(parcel) { return serializeWrite(() => {
+      assertIdlePool();
+      if (failParcelUpserts > 0) {
+        failParcelUpserts -= 1;
+        const error = new Error("Fake parcel mirror failure");
+        error.statusCode = 503;
+        throw error;
+      }
       const existing = parcels.get(parcel.parcel_code);
       const images = existing ? ownedImages(parcel.parcel_code, parcel.owner_user_id) : [];
       parcels.set(parcel.parcel_code, parcelCells(parcel, images));
     }); },
-    getParcelImages(code, ownerId) { return serializeWrite(() => ownedImages(code, ownerId)); },
+    getParcelImages(code, ownerId) { return serializeWrite(() => {
+      assertIdlePool();
+      return ownedImages(code, ownerId);
+    }); },
     findParcelImage(code, ownerId, fileName) { return serializeWrite(() => {
       if (!parcels.has(code)) return null;
       return ownedImages(code, ownerId).find((image) => image.fileName === fileName) || null;
@@ -82,8 +110,41 @@ function createFakeGoogleParcels() {
       }
       return image;
     }); },
+    replaceParcelImages(code, ownerId, expected, finalImages) { return serializeWrite(() => {
+      assertIdlePool();
+      if (failReplacements > 0) {
+        failReplacements -= 1;
+        const error = new Error("Fake Sheet write failed");
+        error.statusCode = 503;
+        throw error;
+      }
+      const current = ownedImages(code, ownerId);
+      const same = (left, right) => left.length === right.length && left.every((image, index) =>
+        image.fileName === right[index]?.fileName && image.fileId === right[index]?.fileId);
+      if (same(current, finalImages)) return current;
+      if (!same(current, expected) || finalImages.length > 5) {
+        const error = new Error("Parcel image conflict");
+        error.statusCode = 409;
+        throw error;
+      }
+      const row = parcels.get(code);
+      row[11] = JSON.stringify(finalImages.map((image) => image.fileName));
+      row[12] = JSON.stringify(finalImages.map((image) => imageLink(image.fileId)));
+      if (failAfterReplacements > 0) {
+        failAfterReplacements -= 1;
+        const error = new Error("Fake response lost after Sheet write");
+        error.statusCode = 503;
+        throw error;
+      }
+      return finalImages;
+    }); },
     async deleteParcel(code) { parcels.delete(code); },
     failNextUpload() { failUploads += 1; },
+    failNextAmbiguousUpload() { ambiguousUploads += 1; },
+    failNextReplacement() { failReplacements += 1; },
+    failAfterNextReplacement() { failAfterReplacements += 1; },
+    failNextParcelUpsert() { failParcelUpserts += 1; },
+    requireIdlePool(value) { requireIdlePool = value === true; },
     snapshot() {
       return {
         files: [...files.entries()].map(([id, item]) => ({ id, fileName: item.fileName, byteSize: item.bytes.length })),

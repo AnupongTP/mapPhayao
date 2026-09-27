@@ -3,6 +3,7 @@ const parcelService = require("../services/parcelService");
 const appUserService = require("../services/appUserService");
 const areaAnalysisService = require("../services/areaAnalysisService");
 const parcelImageService = require("../services/parcelImageService");
+const parcelPhotoEditService = require("../services/parcelPhotoEditService");
 const parcelMirrorService = require("../services/parcelMirrorService");
 const createHttpError = require("../utils/httpError");
 const { performance } = require("node:perf_hooks");
@@ -29,16 +30,19 @@ async function resolveAppUser(req) {
   return user;
 }
 
-async function syncParcelMirror(req, parcelId, operation, appUser) {
+async function syncParcelMirror(req, parcelId, operation, appUser, lockedDatabase) {
   const google = req.googleIntegration;
   if (!google?.enabled) return;
   await parcelMirrorService.bestEffortMirror("parcel", operation, { parcelId }, async () => {
     const user = appUser || await resolveAppUser(req);
     const mirror = async (database) => {
+      if (operation === "update") await parcelPhotoEditService.assertNoSavedEdit(parcelId, database);
       await parcelMirrorService.mirrorUser(user.id, google, database);
       await parcelMirrorService.mirrorParcel(parcelId, google, database);
     };
-    if (operation === "update") {
+    if (lockedDatabase) {
+      await mirror(lockedDatabase);
+    } else if (operation === "update") {
       await parcelService.withParcelMutationLock(parcelId, mirror);
     } else {
       await mirror();
@@ -102,12 +106,12 @@ async function listParcels(req, res, next) {
 async function updateParcel(req, res, next) {
   try {
     const appUser = await resolveAppUser(req);
-    const parcel = await parcelService.updateOwnedParcel(
-      req.params.parcelId,
-      req.body || {},
-      appUser.id,
-    );
-    await syncParcelMirror(req, parcel.id, "update", appUser);
+    const parcel = await parcelService.withParcelMutationLock(req.params.parcelId, async (client) => {
+      await parcelPhotoEditService.assertNoSavedEdit(req.params.parcelId, client);
+      const updated = await parcelService.updateOwnedParcel(req.params.parcelId, req.body || {}, appUser.id);
+      await syncParcelMirror(req, updated.id, "update", appUser, client);
+      return updated;
+    });
     return res.status(200).json({
       success: true,
       parcel,
@@ -123,6 +127,7 @@ async function deleteParcel(req, res, next) {
     const google = req.googleIntegration;
     if (!google?.enabled) throw createHttpError(503, "ยังไม่ได้ตั้งค่าบริการรูปภาพแปลง");
     const { jobId, previous } = await parcelService.withParcelMutationLock(req.params.parcelId, async (client) => {
+      await parcelPhotoEditService.assertNoSavedEdit(req.params.parcelId, client);
       const previous = await parcelImageService.getOwnedImageFiles(req.params.parcelId, appUser.id, google, client);
       const jobId = await parcelService.deleteOwnedParcel(req.params.parcelId, appUser.id,
         { parcelCode: previous.parcelCode, fileIds: previous.fileIds }, client);
@@ -146,7 +151,8 @@ async function uploadImage(req, res, next) {
   try {
     const appUser = await resolveAppUser(req);
     const image = await parcelService.withParcelMutationLock(req.params.parcelId, (client) =>
-      parcelImageService.uploadOwnedImage(req.params.parcelId, appUser.id, req.file,
+      parcelPhotoEditService.assertNoSavedEdit(req.params.parcelId, client).then(() =>
+        parcelImageService.uploadOwnedImage(req.params.parcelId, appUser.id, req.file,
         req.googleIntegration, req.body?.clientPhotoId, client,
         (stage) => {
           if (["SHEET_PREFLIGHT_COMPLETE", "DRIVE_UPLOAD_COMPLETE", "SHEET_UPDATE_COMPLETE"].includes(stage)) {
@@ -161,7 +167,7 @@ async function uploadImage(req, res, next) {
             Number.isFinite(ms) && ms >= 0) {
             req.uploadDiagnostic.timings[name] = Math.round(ms * 10) / 10;
           }
-        }));
+        })));
     req.uploadDiagnostic.stage = "UPLOAD_COMPLETE";
     req.uploadDiagnostic.logTiming?.();
     req.uploadDiagnostic.logCompleted?.();
@@ -169,6 +175,50 @@ async function uploadImage(req, res, next) {
       stage: "UPLOAD_COMPLETE", requestId: req.uploadDiagnostic.requestId });
   } catch (error) {
     return next(error);
+  }
+}
+
+async function beginPhotoEdit(req, res, next) {
+  try {
+    const user = await resolveAppUser(req);
+    const operation = await parcelPhotoEditService.beginSavedEdit(req.params.parcelId,
+      user.id, req.body || {}, req.googleIntegration);
+    return res.status(201).json({ success: true, operation });
+  } catch (error) { return handleParcelError(error, next, req.params.parcelId); }
+}
+
+async function getPhotoEdit(req, res, next) {
+  try {
+    const user = await resolveAppUser(req);
+    const operation = await parcelPhotoEditService.getOwnedOperation(req.params.parcelId,
+      user.id, req.params.operationId);
+    return res.status(200).json({ success: true, operation: parcelPhotoEditService.publicOperation(operation) });
+  } catch (error) { return handleParcelError(error, next, req.params.parcelId); }
+}
+
+async function uploadPhotoEditImage(req, res, next) {
+  try {
+    const user = await resolveAppUser(req);
+    const image = await parcelPhotoEditService.uploadSavedEditImage(req.params.parcelId,
+      user.id, req.params.operationId, req.body?.clientPhotoId, req.file, req.googleIntegration);
+    return res.status(201).json({ success: true, image, stage: "UPLOAD_COMPLETE",
+      requestId: req.uploadDiagnostic.requestId });
+  } catch (error) { return next(error); }
+}
+
+async function finalizePhotoEdit(req, res, next) {
+  try {
+    const user = await resolveAppUser(req);
+    const operation = await parcelPhotoEditService.finalizeSavedEdit(req.params.parcelId,
+      user.id, req.params.operationId, req.googleIntegration);
+    return res.status(200).json({ success: true, operation });
+  } catch (error) {
+    if (error.photoSetCommitted) {
+      return res.status(503).json({ success: false,
+        error: "รูปภาพได้รับการบันทึกแล้ว แต่ข้อมูลแปลงยังบันทึกไม่สมบูรณ์ กรุณากดบันทึกอีกครั้ง",
+        outcome: "PHOTO_SET_COMMITTED_METADATA_PENDING" });
+    }
+    return handleParcelError(error, next, req.params.parcelId);
   }
 }
 
@@ -226,6 +276,10 @@ module.exports = {
   deleteParcel,
   analyzeParcel,
   uploadImage,
+  beginPhotoEdit,
+  getPhotoEdit,
+  uploadPhotoEditImage,
+  finalizePhotoEdit,
   getImageContent,
   _private: {
     getLineUserId,

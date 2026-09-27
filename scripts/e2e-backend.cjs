@@ -12,8 +12,9 @@ const { createApp } = require("../backend/src/server");
 const { createLineController } = require("../backend/src/controllers/lineController");
 const { createFakeGoogleParcels } = require("./fake-google-parcels.cjs");
 const { createParcelCleanupWorker } = require("../backend/src/services/parcelCleanupWorker");
+const photoOperations = require("../backend/src/services/parcelPhotoEditService");
 const googleIntegration = createFakeGoogleParcels();
-const cleanupWorker = createParcelCleanupWorker({ google: googleIntegration });
+const cleanupWorker = createParcelCleanupWorker({ google: googleIntegration, photoOperations });
 
 const identities = new Map([
   ["e2e-line-token-user-a", "U_E2E_USER_A"],
@@ -58,6 +59,26 @@ const app = createApp({
     });
     testApp.post("/__e2e__/google/fail-next-upload", (req, res) => {
       googleIntegration.failNextUpload();
+      res.json({ ok: true });
+    });
+    testApp.post("/__e2e__/google/fail-next-ambiguous-upload", (req, res) => {
+      googleIntegration.failNextAmbiguousUpload();
+      res.json({ ok: true });
+    });
+    testApp.post("/__e2e__/google/fail-next-replacement", (req, res) => {
+      googleIntegration.failNextReplacement();
+      res.json({ ok: true });
+    });
+    testApp.post("/__e2e__/google/fail-after-replacement", (req, res) => {
+      googleIntegration.failAfterNextReplacement();
+      res.json({ ok: true });
+    });
+    testApp.post("/__e2e__/google/fail-next-parcel-upsert", (req, res) => {
+      googleIntegration.failNextParcelUpsert();
+      res.json({ ok: true });
+    });
+    testApp.post("/__e2e__/google/require-idle-pool", (req, res) => {
+      googleIntegration.requireIdlePool(req.body?.enabled === true);
       res.json({ ok: true });
     });
   },

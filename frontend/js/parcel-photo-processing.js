@@ -64,7 +64,7 @@
       }
       try {
         photo.image = await window.MapApi.uploadParcelImage(parcelId, photo.uploadFile, photo.clientPhotoId,
-          { attempt,
+          { attempt, ...(options.photoEditOperationId ? { photoEditOperationId: options.photoEditOperationId } : {}),
             onRequestStart: () => {
               onProgress(`กำลังอัปโหลดรูป ${position}/${total}...`, { stage: "REQUEST_STARTING" });
               window.console?.info?.("[ParcelUpload] REQUEST_STARTING", { ...context, attempt });

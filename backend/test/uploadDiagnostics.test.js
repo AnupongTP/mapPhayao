@@ -120,7 +120,7 @@ test("production photo preflight allows authorization and x-photo-attempt withou
 test("upload success includes request-scoped diagnostics without changing image", async () => {
   appUserService.findOrCreateLineUser = async () => ({ id: PARCEL_ID });
   appUserService.updateVerifiedDisplayName = async () => {};
-  parcelService.withParcelMutationLock = async (_id, work) => work({});
+  parcelService.withParcelMutationLock = async (_id, work) => work({ query: async () => ({ rows: [] }) });
   parcelImageService.uploadOwnedImage = async (_id, _owner, _file, _google, _photo, _db, onStage, onTiming) => {
     onStage("PARCEL_VERIFIED");
     onTiming("sharpMs", 1.2);
@@ -183,7 +183,7 @@ test("upload auth failure stays sanitized and carries only the request diagnosti
 test("upload failures expose safe stage/code/id and retain ambiguous, retryable and conflict semantics", async () => {
   appUserService.findOrCreateLineUser = async () => ({ id: PARCEL_ID });
   appUserService.updateVerifiedDisplayName = async () => {};
-  parcelService.withParcelMutationLock = async (_id, work) => work({});
+  parcelService.withParcelMutationLock = async (_id, work) => work({ query: async () => ({ rows: [] }) });
   const failures = [
     { stage: "apps-script-upload", category: "timeout", ambiguous: true,
       status: 503, code: "APPS_SCRIPT_TIMEOUT", boundary: "DRIVE_UPLOAD" },

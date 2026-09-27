@@ -96,7 +96,8 @@ return app;
 
 if (require.main === module) {
   const { createParcelCleanupWorker } = require("./services/parcelCleanupWorker");
-  const cleanupWorker = createParcelCleanupWorker({ google: parcelRoutes.googleIntegration });
+  const photoOperations = require("./services/parcelPhotoEditService");
+  const cleanupWorker = createParcelCleanupWorker({ google: parcelRoutes.googleIntegration, photoOperations });
   const server = createApp().listen(port, () => {
     console.log(`Server is running on port ${port}`);
     cleanupWorker.start();

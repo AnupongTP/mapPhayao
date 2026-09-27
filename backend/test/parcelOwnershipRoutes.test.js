@@ -127,7 +127,7 @@ function installAuthAndUsers() {
 }
 
 function installParcelService(calls) {
-  parcelService.withParcelMutationLock = async (id, work) => work({});
+  parcelService.withParcelMutationLock = async (id, work) => work({ query: async () => ({ rows: [] }) });
   const storedGeometryA = {
     type: "Polygon",
     coordinates: [[
