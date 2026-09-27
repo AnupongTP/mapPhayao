@@ -24,6 +24,8 @@ CREATE TABLE app.parcel_photo_operations (
   completed_at timestamptz
 );
 
+ALTER TABLE app.parcel_photo_operations ENABLE ROW LEVEL SECURITY;
+
 CREATE UNIQUE INDEX parcel_photo_operations_active_idx
 ON app.parcel_photo_operations (parcel_id)
 WHERE status NOT IN ('completed', 'expired');
