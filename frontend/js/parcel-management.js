@@ -266,9 +266,12 @@
     createField(fields, `${idPrefix}-planting-date`, TEXT.plantingDate, dateInput);
 
     let cancelButton;
-    const photoEditor = idPrefix === "parcel-edit" ? window.MapSavedPhotoEdit.create(parcel, ({ busy, operationId }) => {
+    let submitButton;
+    const photoEditor = idPrefix === "parcel-edit" ? window.MapSavedPhotoEdit.create(parcel,
+      ({ busy, operationId, loading, loadFailed }) => {
       closeButton.disabled = busy || Boolean(operationId);
       if (cancelButton) cancelButton.disabled = busy || Boolean(operationId);
+      if (submitButton) submitButton.disabled = busy || loading || loadFailed;
     }) : null;
     if (photoEditor) {
       backdrop.photoEditor = photoEditor;
@@ -292,9 +295,10 @@
     uiIcons.setActionLabel(cancelButton, TEXT.cancel);
     cancelButton.type = "button";
     cancelButton.addEventListener("click", () => closeSheet(backdrop));
-    const submitButton = createElement("button", "panel-button", confirmText);
+    submitButton = createElement("button", "panel-button", confirmText);
     uiIcons.setActionLabel(submitButton, confirmText, "save");
     submitButton.type = "submit";
+    submitButton.disabled = Boolean(photoEditor);
     actions.append(cancelButton, submitButton);
 
     form.addEventListener("submit", async (event) => {
@@ -326,7 +330,7 @@
         setStatus(status, idPrefix === "parcel-save" ? TEXT.saved : TEXT.updated, "success");
         window.setTimeout(() => closeSheet(backdrop), 700);
       } catch (error) {
-        submitButton.disabled = false;
+        submitButton.disabled = Boolean(photoEditor?.loadFailed);
         cancelButton.disabled = Boolean(photoEditor?.operationId);
         setStatus(
           status,

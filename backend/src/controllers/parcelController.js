@@ -126,15 +126,24 @@ async function deleteParcel(req, res, next) {
     const appUser = await resolveAppUser(req);
     const google = req.googleIntegration;
     if (!google?.enabled) throw createHttpError(503, "ยังไม่ได้ตั้งค่าบริการรูปภาพแปลง");
-    const { jobId, previous } = await parcelService.withParcelMutationLock(req.params.parcelId, async (client) => {
+    const { jobId, fileIds } = await parcelService.withParcelMutationLock(req.params.parcelId, async (client) => {
+      const parcel = await parcelService.getOwnedParcelById(req.params.parcelId, appUser.id, client);
       await parcelPhotoEditService.assertNoSavedEdit(req.params.parcelId, client);
-      const previous = await parcelImageService.getOwnedImageFiles(req.params.parcelId, appUser.id, google, client);
+      let fileIds = [];
+      try {
+        const previous = await parcelImageService.getOwnedImageFiles(req.params.parcelId, appUser.id, google, client);
+        fileIds = previous.fileIds;
+      } catch (error) {
+        if (error?.isSheetReadFailure !== true ||
+          !["sheets-read", "sheets-header-check"].includes(error?.googleStage)) throw error;
+        logGoogleFailure("parcel-cleanup-metadata-unavailable", error, { parcelId: parcel.id });
+      }
       const jobId = await parcelService.deleteOwnedParcel(req.params.parcelId, appUser.id,
-        { parcelCode: previous.parcelCode, fileIds: previous.fileIds }, client);
-      return { jobId, previous };
+        { parcelCode: parcel.parcelCode, fileIds }, client);
+      return { jobId, fileIds };
     });
     console.info("parcel-cleanup-job-created", { parcelId: req.params.parcelId, jobId,
-      remainingFiles: previous.fileIds.length });
+      remainingFiles: fileIds.length });
     return res.status(200).json({
       success: true,
     });

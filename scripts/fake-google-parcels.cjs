@@ -10,6 +10,8 @@ function createFakeGoogleParcels() {
   let failReplacements = 0;
   let failAfterReplacements = 0;
   let failParcelUpserts = 0;
+  let failImageReads = 0;
+  let failParcelDeletes = 0;
   let requireIdlePool = false;
   function assertIdlePool() {
     if (!requireIdlePool) return;
@@ -72,6 +74,11 @@ function createFakeGoogleParcels() {
     }); },
     getParcelImages(code, ownerId) { return serializeWrite(() => {
       assertIdlePool();
+      if (failImageReads > 0) {
+        failImageReads -= 1;
+        throw Object.assign(new Error("Fake Sheet read failed"),
+          { googleStage: "sheets-read", statusCode: 503, isSheetReadFailure: true });
+      }
       return ownedImages(code, ownerId);
     }); },
     findParcelImage(code, ownerId, fileName) { return serializeWrite(() => {
@@ -138,12 +145,21 @@ function createFakeGoogleParcels() {
       }
       return finalImages;
     }); },
-    async deleteParcel(code) { parcels.delete(code); },
+    async deleteParcel(code) {
+      if (failParcelDeletes > 0) {
+        failParcelDeletes -= 1;
+        throw Object.assign(new Error("Fake Sheet delete failed"),
+          { googleStage: "sheets-delete-parcel", statusCode: 503 });
+      }
+      parcels.delete(code);
+    },
     failNextUpload() { failUploads += 1; },
     failNextAmbiguousUpload() { ambiguousUploads += 1; },
     failNextReplacement() { failReplacements += 1; },
     failAfterNextReplacement() { failAfterReplacements += 1; },
     failNextParcelUpsert() { failParcelUpserts += 1; },
+    failNextImageRead() { failImageReads += 1; },
+    failNextParcelDelete() { failParcelDeletes += 1; },
     requireIdlePool(value) { requireIdlePool = value === true; },
     snapshot() {
       return {

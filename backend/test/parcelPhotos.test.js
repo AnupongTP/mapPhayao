@@ -432,6 +432,27 @@ test("Sheet parcel cleanup removes its row once and treats an absent row as comp
   assert.deepEqual(rows.map((row) => row[2]), ["PY-2"]);
 });
 
+test("only provider GET failure is marked as safe for best-effort delete discovery", async () => {
+  const env = { GOOGLE_MIRROR_ENABLED: "true", GOOGLE_SERVICE_ACCOUNT_JSON: "{}",
+    GOOGLE_SHEETS_SPREADSHEET_ID: "fake-sheet" };
+  function integration(readRows) {
+    return createGoogleParcelIntegration(env, { auth: { GoogleAuth: class {} },
+      sheets() { return { spreadsheets: { values: { async get({ range }) {
+        if (range === "parcels!A1:P1") return { data: { values: [PARCEL_HEADERS] } };
+        return readRows();
+      } } } }; },
+    });
+  }
+  await assert.rejects(() => integration(() => {
+    throw Object.assign(new Error("private response"), { statusCode: 503 });
+  }).getParcelImages("PY-1", "owner"), (error) =>
+    error.googleStage === "sheets-read" && error.isSheetReadFailure === true);
+  await assert.rejects(() => integration(() => ({ data: {
+    values: [parcelCells({ owner_user_id: "other", parcel_code: "PY-1", geometry: {} })],
+  } })).getParcelImages("PY-1", "owner"), (error) =>
+    error.googleStage === "sheets-read" && error.isSheetReadFailure !== true);
+});
+
 test("transient Sheet retry reuses one Drive upload and never retries auth failures", async () => {
   const mirrorService = require("../src/services/parcelMirrorService");
   const originalParcelLookup = parcelService.getOwnedParcelById;
@@ -627,6 +648,27 @@ test("Google diagnostics retain only allowlisted API fields and no secrets", () 
   } finally {
     console.error = originalError;
   }
+});
+
+test("Sheet read diagnostics classify safe failures without logging provider text", () => {
+  const { googleErrorDetails } = require("../src/utils/googleError");
+  const cases = [
+    [{ code: "ETIMEDOUT" }, "timeout"],
+    [{ code: "EAI_AGAIN" }, "network"],
+    [{ response: { status: 429 } }, "rate-limit"],
+    [{ response: { status: 503 } }, "http"],
+    [{ name: "SyntaxError" }, "invalid-response"],
+  ];
+  for (const [fields, category] of cases) {
+    const details = googleErrorDetails(Object.assign(new Error("private_key=SECRET"),
+      fields, { googleStage: "sheets-read" }));
+    assert.equal(details.category, category);
+    assert.equal(JSON.stringify(details).includes("SECRET"), false);
+  }
+  const unknown = googleErrorDetails(Object.assign(new Error("Bearer SECRET"),
+    { googleStage: "sheets-read", code: "SECRET" }));
+  assert.equal(unknown.category, undefined);
+  assert.equal(JSON.stringify(unknown).includes("SECRET"), false);
 });
 
 test("malformed Google credentials fail without echoing their content", () => {

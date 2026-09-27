@@ -259,6 +259,157 @@ test("failed Sheet final-set keeps old image and retries without early cleanup",
   }
 });
 
+test("failed add-photo final set preserves original content and retries without duplicate upload", async ({ request }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium");
+  const parcel = await createParcel(request, "ADD-FAIL");
+  try {
+    expect((await request.post(`${backendUrl}/api/parcels/${parcel.id}/images`, {
+      headers: owner, multipart: { image, clientPhotoId: randomUUID() },
+    })).status()).toBe(201);
+    const before = await detail(request, parcel.id);
+    const originalId = before.images[0].id;
+    const photoId = randomUUID();
+    const started = await begin(request, before, [], [photoId]);
+    expect(started.status()).toBe(201);
+    const operationId = (await started.json()).operation.id;
+    const uploaded = await request.post(`${backendUrl}/api/parcels/${parcel.id}/photo-edits/${operationId}/images`, {
+      headers: owner, multipart: { image, clientPhotoId: photoId },
+    });
+    expect(uploaded.status()).toBe(201);
+    const newId = (await uploaded.json()).image.id;
+    const imageUrl = (id) => `${backendUrl}/api/parcels/${parcel.id}/images/${id}/content`;
+    const originalContent = await request.get(imageUrl(originalId), { headers: owner });
+    expect(originalContent.status()).toBe(200);
+    expect((await originalContent.body()).length).toBeGreaterThan(0);
+    expect((await request.get(imageUrl(newId), { headers: owner })).status()).toBe(404);
+
+    await request.post(`${backendUrl}/__e2e__/google/fail-next-replacement`);
+    const finalizeUrl = `${backendUrl}/api/parcels/${parcel.id}/photo-edits/${operationId}/finalize`;
+    expect((await request.post(finalizeUrl, { headers: owner, data: {} })).status()).toBe(503);
+    expect((await detail(request, parcel.id)).images.map((item) => item.id)).toEqual([originalId]);
+    const failedState = await (await request.get(`${backendUrl}/__e2e__/google`)).json();
+    const row = failedState.parcels.find((item) => item[2] === parcel.parcelCode);
+    expect(JSON.parse(row[11])).toEqual([originalId]);
+    expect(JSON.parse(row[12])).toHaveLength(1);
+    expect(failedState.files.map((file) => file.fileName)).toEqual(expect.arrayContaining([originalId, newId]));
+    expect((await request.get(imageUrl(originalId), { headers: owner })).status()).toBe(200);
+    expect((await db.query("SELECT status FROM app.parcel_photo_operations WHERE id = $1",
+      [operationId])).rows[0].status).toBe("finalizing");
+    expect((await db.query("SELECT id FROM app.cleanup_jobs WHERE source_operation_id = $1",
+      [operationId])).rows).toHaveLength(0);
+
+    await db.query("UPDATE app.parcel_photo_operations SET lease_until = now() - interval '1 second' WHERE id = $1",
+      [operationId]);
+    expect((await request.post(finalizeUrl, { headers: owner, data: {} })).status()).toBe(200);
+    const after = await detail(request, parcel.id);
+    expect(after.images.map((item) => item.id)).toEqual([originalId, newId]);
+    const finalState = await (await request.get(`${backendUrl}/__e2e__/google`)).json();
+    const finalRow = finalState.parcels.find((item) => item[2] === parcel.parcelCode);
+    expect(JSON.parse(finalRow[11])).toEqual([originalId, newId]);
+    expect(JSON.parse(finalRow[12])).toHaveLength(2);
+    expect(finalState.files).toHaveLength(failedState.files.length);
+    for (const id of [originalId, newId]) {
+      const content = await request.get(imageUrl(id), { headers: owner });
+      expect(content.status()).toBe(200);
+      expect((await content.body()).length).toBeGreaterThan(0);
+    }
+  } finally {
+    await request.delete(`${backendUrl}/api/parcels/${parcel.id}`, { headers: owner }).catch(() => {});
+  }
+});
+
+test("mobile saved-photo edit shows a loader, then a thumbnail or explicit image error", async ({ page, context, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium");
+  await prepareContext(context, { token: "e2e-line-token-user-a" });
+  const parcel = await createParcel(request, "PHOTO-LOADER");
+  try {
+    expect((await request.post(`${backendUrl}/api/parcels/${parcel.id}/images`, {
+      headers: owner, multipart: { image, clientPhotoId: randomUUID() },
+    })).status()).toBe(201);
+    let releaseRead;
+    const readGate = new Promise((resolve) => { releaseRead = resolve; });
+    const contentPattern = "**/api/parcels/*/images/*/content";
+    await page.route(contentPattern, async (route) => { await readGate; await route.continue(); });
+    await openMap(page, true);
+    await page.locator("#saved-parcels-control-button").click();
+    const card = page.locator(`.saved-parcel-card[data-parcel-id="${parcel.id}"]`);
+    await card.locator(".saved-parcel-header").click();
+    await card.getByRole("button", { name: "แก้ไขข้อมูล" }).click();
+    const sheet = page.locator("#parcel-edit-sheet");
+    await expect(sheet.locator(".saved-photo-edit-count")).toHaveText("1/5");
+    await expect(sheet.locator(".saved-photo-edit-placeholder .saved-photo-edit-spinner")).toBeVisible();
+    await expect(sheet.locator(".saved-photo-edit-item img")).toHaveCount(0);
+    releaseRead();
+    await expect(sheet.locator(".saved-photo-edit-item img")).toHaveAttribute("src", /^blob:/);
+    await expect(sheet.locator(".saved-photo-edit-placeholder .saved-photo-edit-spinner")).toHaveCount(0);
+    await sheet.getByRole("button", { name: "ยกเลิก" }).click();
+    await page.unroute(contentPattern);
+
+    await page.route(contentPattern, (route) => route.fulfill({ status: 401, contentType: "application/json",
+      body: JSON.stringify({ error: "Unauthorized" }) }));
+    await card.getByRole("button", { name: "แก้ไขข้อมูล" }).click();
+    await expect(sheet.locator(".saved-photo-edit-count")).toHaveText("1/5");
+    await expect(sheet.locator(".saved-photo-edit-placeholder.is-error"))
+      .toHaveText("โหลดรูปภาพไม่สำเร็จ");
+    await expect(sheet.locator(".saved-photo-edit-item img")).toHaveCount(0);
+    await expect(sheet.getByRole("button", { name: "ยกเลิก" })).toBeEnabled();
+    await sheet.getByRole("button", { name: "ยกเลิก" }).click();
+    await page.unroute(contentPattern);
+
+    await page.route(contentPattern, (route) => route.fulfill({ status: 200, contentType: "image/webp",
+      body: "not a webp image" }));
+    await card.getByRole("button", { name: "แก้ไขข้อมูล" }).click();
+    await expect(sheet.locator(".saved-photo-edit-placeholder.is-error"))
+      .toHaveText("โหลดรูปภาพไม่สำเร็จ");
+    await expect(sheet.locator(".saved-photo-edit-item img")).toHaveCount(0);
+    await sheet.getByRole("button", { name: "ยกเลิก" }).click();
+  } finally {
+    await request.delete(`${backendUrl}/api/parcels/${parcel.id}`, { headers: owner }).catch(() => {});
+  }
+});
+
+test("mobile saved-photo edit keeps the count unknown when trusted Sheet detail read fails", async ({ page, context, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium");
+  await prepareContext(context, { token: "e2e-line-token-user-a" });
+  const parcel = await createParcel(request, "PHOTO-DETAIL-FAIL");
+  try {
+    expect((await request.post(`${backendUrl}/api/parcels/${parcel.id}/images`, {
+      headers: owner, multipart: { image, clientPhotoId: randomUUID() },
+    })).status()).toBe(201);
+    await openMap(page, true);
+    await page.locator("#saved-parcels-control-button").click();
+    const card = page.locator(`.saved-parcel-card[data-parcel-id="${parcel.id}"]`);
+    await card.locator(".saved-parcel-header").click();
+    let releaseRead;
+    const gate = new Promise((resolve) => { releaseRead = resolve; });
+    const detailPattern = `**/api/parcels/${parcel.id}`;
+    await page.route(detailPattern, async (route) => {
+      await gate;
+      await route.fulfill({ status: 503, contentType: "application/json",
+        body: JSON.stringify({ error: "Sheet unavailable" }) });
+    });
+    await card.getByRole("button", { name: "แก้ไขข้อมูล" }).click();
+    const sheet = page.locator("#parcel-edit-sheet");
+    await expect(sheet.locator(".saved-photo-edit-count")).toHaveText("—/5");
+    await expect(sheet.locator(".saved-photo-edit-loading .saved-photo-edit-spinner")).toBeVisible();
+    await expect(sheet.getByRole("button", { name: "บันทึกแก้ไข" })).toBeDisabled();
+    await expect(sheet.locator(".saved-photo-edit-item img")).toHaveCount(0);
+    releaseRead();
+    await expect(sheet.locator(".saved-photo-edit-message")).toHaveText("โหลดข้อมูลรูปภาพไม่สำเร็จ");
+    await expect(sheet.locator(".saved-photo-edit-count")).toHaveText("—/5");
+    await expect(sheet.locator(".saved-photo-edit-loading")).toBeHidden();
+    await expect(sheet.getByRole("button", { name: "บันทึกแก้ไข" })).toBeDisabled();
+    await expect(sheet.getByRole("button", { name: "เพิ่มรูป" })).toBeDisabled();
+    await sheet.getByRole("button", { name: "ยกเลิก" }).click();
+    await page.unroute(detailPattern);
+    await card.getByRole("button", { name: "แก้ไขข้อมูล" }).click();
+    await expect(sheet.locator(".saved-photo-edit-count")).toHaveText("1/5");
+    await expect(sheet.locator(".saved-photo-edit-item img")).toHaveAttribute("src", /^blob:/);
+  } finally {
+    await request.delete(`${backendUrl}/api/parcels/${parcel.id}`, { headers: owner }).catch(() => {});
+  }
+});
+
 test("replacement at five images validates final count before external writes", async ({ request }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium");
   const created = await request.post(`${backendUrl}/api/parcels`, { headers: owner,

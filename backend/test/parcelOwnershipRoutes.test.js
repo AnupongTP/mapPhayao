@@ -407,7 +407,7 @@ test("parcel routes create, list, read, update, delete, and analyze only the aut
   });
 });
 
-test("delete refuses missing trusted Sheet metadata without deleting the parcel", async () => {
+test("delete keeps Sheet discovery best effort without accepting client cleanup IDs", async () => {
   const app = createApp();
   installAuthAndUsers();
   const calls = makeCalls();
@@ -428,15 +428,38 @@ test("delete refuses missing trusted Sheet metadata without deleting the parcel"
   app.locals.googleIntegration.getParcelImages = async () => {
     const error = createHttpError(403, "private_key=DO_NOT_EXPOSE");
     error.googleStage = "sheets-read";
+    error.isSheetReadFailure = true;
     throw error;
+  };
+  const originalError = console.error;
+  const events = [];
+  console.error = (...args) => events.push(args);
+  try {
+    response = await request(app, `/api/parcels/${PARCEL_A}`, {
+      method: "DELETE", authorization: "Bearer token-a",
+      body: { fileIds: ["attacker-file"], parcelCode: "attacker-code" },
+    });
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls.deleteInputs.at(-1).cleanup, { parcelCode: "PY-A", fileIds: [] });
+  assert.equal(events.some(([event, details]) => event === "parcel-cleanup-metadata-unavailable" &&
+    details.stage === "sheets-read" && details.status === 403), true);
+  assert.equal(JSON.stringify(events).includes("DO_NOT_EXPOSE"), false);
+  response = await request(app, `/api/parcels/${PARCEL_B}`, {
+    method: "DELETE", authorization: "Bearer token-a",
+  });
+  assert.equal(response.status, 404);
+  assert.equal(calls.deleteInputs.length, 1);
+  app.locals.googleIntegration.getParcelImages = async () => {
+    throw Object.assign(new Error("Parcel Sheet owner mismatch"), { googleStage: "sheets-read" });
   };
   response = await request(app, `/api/parcels/${PARCEL_A}`, {
     method: "DELETE", authorization: "Bearer token-a",
   });
   assert.equal(response.status, 503);
-  assert.deepEqual(response.body, { success: false, error: "ไม่สามารถเตรียมข้อมูลลบรูปภาพแปลงได้" });
-  assert.equal(JSON.stringify(response.body).includes("DO_NOT_EXPOSE"), false);
-  assert.deepEqual(calls.deleteInputs, []);
+  assert.equal(calls.deleteInputs.length, 1);
 });
 
 test("parcel controller converts unexpected backend failures to sanitized server errors", async () => {

@@ -77,6 +77,14 @@ const app = createApp({
       googleIntegration.failNextParcelUpsert();
       res.json({ ok: true });
     });
+    testApp.post("/__e2e__/google/fail-next-image-read", (req, res) => {
+      googleIntegration.failNextImageRead();
+      res.json({ ok: true });
+    });
+    testApp.post("/__e2e__/google/fail-next-parcel-delete", (req, res) => {
+      googleIntegration.failNextParcelDelete();
+      res.json({ ok: true });
+    });
     testApp.post("/__e2e__/google/require-idle-pool", (req, res) => {
       googleIntegration.requireIdlePool(req.body?.enabled === true);
       res.json({ ok: true });

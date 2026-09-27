@@ -27,11 +27,15 @@
     addButton.addEventListener("click", () => picker.click());
     const message = createElement("p", "saved-photo-edit-message");
     message.hidden = true;
-    section.append(heading, strip, picker, addButton, message);
+    const loadingState = createElement("div", "saved-photo-edit-loading", "กำลังโหลดรูปภาพ...");
+    loadingState.setAttribute("role", "status");
+    loadingState.prepend(createElement("span", "saved-photo-edit-spinner"));
+    section.append(heading, loadingState, strip, picker, addButton, message);
 
     const markedForDelete = new Set();
     const newPhotos = [];
     const imageUrls = new Map();
+    const failedImages = new Set();
     const controller = new AbortController();
     let existing = [];
     let detail;
@@ -40,6 +44,7 @@
     let busy = false;
     let disposed = false;
     let loading = true;
+    let loadFailed = false;
 
     function finalCount() { return existing.length - markedForDelete.size + newPhotos.length; }
     function note(text) {
@@ -48,12 +53,27 @@
     }
     function tile(photo, kind) {
       const item = createElement("div", "saved-photo-edit-item");
-      const image = document.createElement("img");
-      image.alt = kind === "existing" ? "รูปภาพแปลงที่บันทึกไว้" : "รูปภาพใหม่";
       const url = kind === "existing" ? imageUrls.get(photo.id) : photo.previewUrl;
-      if (url) image.src = url;
-      else item.appendChild(createElement("span", "saved-photo-edit-placeholder", "กำลังโหลด..."));
-      item.appendChild(image);
+      if (url) {
+        const image = document.createElement("img");
+        image.alt = kind === "existing" ? "รูปภาพแปลงที่บันทึกไว้" : "รูปภาพใหม่";
+        if (kind === "existing") image.addEventListener("error", () => {
+          if (disposed || !item.isConnected || imageUrls.get(photo.id) !== url) return;
+          imageUrls.delete(photo.id);
+          URL.revokeObjectURL(url);
+          failedImages.add(photo.id);
+          render();
+        });
+        image.src = url;
+        item.appendChild(image);
+      } else if (failedImages.has(photo.id)) {
+        item.appendChild(createElement("span", "saved-photo-edit-placeholder is-error", "โหลดรูปภาพไม่สำเร็จ"));
+      } else {
+        const placeholder = createElement("span", "saved-photo-edit-placeholder", "กำลังโหลดรูปภาพ...");
+        placeholder.setAttribute("role", "status");
+        placeholder.prepend(createElement("span", "saved-photo-edit-spinner"));
+        item.appendChild(placeholder);
+      }
       const badge = createElement("span", "saved-photo-edit-badge",
         kind === "existing" ? markedForDelete.has(photo.id) ? "รอลบ" : "" : "ใหม่");
       if (badge.textContent) item.appendChild(badge);
@@ -85,11 +105,12 @@
     }
     function render() {
       if (disposed) return;
-      count.textContent = loading ? `.../${MAX_PHOTOS}` : `${finalCount()}/${MAX_PHOTOS}`;
+      count.textContent = loading || loadFailed ? `—/${MAX_PHOTOS}` : `${finalCount()}/${MAX_PHOTOS}`;
+      loadingState.hidden = !loading;
       strip.replaceChildren(...existing.map((photo) => tile(photo, "existing")),
         ...newPhotos.map((photo) => tile(photo, "new")));
-      addButton.disabled = loading || busy || Boolean(operationId) || finalCount() >= MAX_PHOTOS;
-      onChange({ finalCount: finalCount(), busy, operationId });
+      addButton.disabled = loading || loadFailed || busy || Boolean(operationId) || finalCount() >= MAX_PHOTOS;
+      onChange({ finalCount: finalCount(), busy, operationId, loading, loadFailed });
     }
     async function loadExistingThumbnail(photo) {
       try {
@@ -99,9 +120,9 @@
         imageUrls.set(photo.id, url);
         render();
       } catch (error) {
-        if (!controller.signal.aborted) {
-          note("บางรูปโหลดไม่สำเร็จ");
-        }
+        if (disposed || controller.signal.aborted) return;
+        failedImages.add(photo.id);
+        render();
       }
     }
     const ready = window.MapApi.getMyParcel(parcel.id).then(({ parcel: loaded }) => {
@@ -112,9 +133,15 @@
       render();
       existing.forEach((photo) => { void loadExistingThumbnail(photo); });
     });
-    ready.catch(() => note("โหลดข้อมูลรูปภาพไม่สำเร็จ"));
+    ready.catch(() => {
+      if (disposed) return;
+      loading = false;
+      loadFailed = true;
+      note("โหลดข้อมูลรูปภาพไม่สำเร็จ");
+      render();
+    });
     picker.addEventListener("change", () => {
-      if (loading || busy || operationId) { picker.value = ""; return; }
+      if (loading || loadFailed || busy || operationId) { picker.value = ""; return; }
       for (const file of picker.files || []) {
         if (finalCount() >= MAX_PHOTOS) {
           note("เลือกได้สูงสุด 5 รูป");
@@ -192,10 +219,12 @@
       imageUrls.forEach((url) => URL.revokeObjectURL(url));
       newPhotos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
       imageUrls.clear();
+      failedImages.clear();
     }
 
     render();
     return { element: section, ready, save, dispose, get busy() { return busy; },
+      get loadFailed() { return loadFailed; },
       get operationId() { return operationId; } };
   }
 

@@ -212,8 +212,14 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
   let sheetWrites = Promise.resolve();
 
   async function assertParcelHeaders() {
-    const response = await atGoogleStage("sheets-header-check", () =>
-      sheets.spreadsheets.values.get({ spreadsheetId, range: "parcels!A1:P1" }));
+    let response;
+    try {
+      response = await atGoogleStage("sheets-header-check", () =>
+        sheets.spreadsheets.values.get({ spreadsheetId, range: "parcels!A1:P1" }));
+    } catch (error) {
+      error.isSheetReadFailure = true;
+      throw error;
+    }
     const headers = response.data.values?.[0] || [];
     if (headers.length !== PARCEL_HEADERS.length ||
       headers.some((header, index) => header !== PARCEL_HEADERS[index])) {
@@ -224,9 +230,15 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
   }
 
   async function findRow(tab, key) {
-    const response = await atGoogleStage("sheets-read", () => sheets.spreadsheets.values.get({
-      spreadsheetId, range: tab === SPREADSHEET_TABS.users ? "users!A2:D" : "parcels!A2:P",
-    }));
+    let response;
+    try {
+      response = await atGoogleStage("sheets-read", () => sheets.spreadsheets.values.get({
+        spreadsheetId, range: tab === SPREADSHEET_TABS.users ? "users!A2:D" : "parcels!A2:P",
+      }));
+    } catch (error) {
+      error.isSheetReadFailure = true;
+      throw error;
+    }
     const rows = response.data.values || [];
     const column = tab === SPREADSHEET_TABS.users ? 0 : 2;
     const index = rows.findIndex((row) => row[column] === key);

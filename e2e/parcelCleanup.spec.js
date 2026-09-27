@@ -1,12 +1,74 @@
 const { randomUUID } = require("node:crypto");
+const { readFileSync } = require("node:fs");
+const path = require("node:path");
 const { test, expect } = require("@playwright/test");
 const db = require("../backend/src/config/database");
 const { createParcelCleanupWorker } = require("../backend/src/services/parcelCleanupWorker");
+const { backendUrl } = require("./support");
+
+const owner = { Authorization: "Bearer e2e-line-token-user-a" };
+const image = { name: "field.png", mimeType: "image/png",
+  buffer: readFileSync(path.resolve(__dirname, "../geoserver/data_dir/styles/grass_fill.png")) };
+
+async function createParcel(request) {
+  const response = await request.post(`${backendUrl}/api/parcels`, { headers: owner,
+    data: { parcelName: `DELETE-READ-${randomUUID()}`, cropType: "rice", plantingDate: "2026-09-27",
+      geometry: { type: "Polygon", coordinates: [[
+        [99.889, 19.028], [99.890, 19.028], [99.890, 19.029], [99.889, 19.028],
+      ]] } } });
+  expect(response.status()).toBe(201);
+  return (await response.json()).parcel;
+}
 
 test.beforeAll(() => {
   if (process.env.DB_HOST !== "127.0.0.1" || process.env.DB_NAME !== "mapphayao_e2e") {
     throw new Error("Refusing non-local cleanup E2E database");
   }
+});
+
+test("Sheet image discovery failure does not block owned delete or Sheet row cleanup", async ({ request }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium");
+  const parcel = await createParcel(request);
+  expect((await request.post(`${backendUrl}/api/parcels/${parcel.id}/images`, {
+    headers: owner, multipart: { image, clientPhotoId: randomUUID() },
+  })).status()).toBe(201);
+  const before = await (await request.get(`${backendUrl}/__e2e__/google`)).json();
+  const existingFile = before.files.find((file) => file.fileName.startsWith(parcel.parcelCode));
+  expect(existingFile).toBeDefined();
+  await request.post(`${backendUrl}/__e2e__/google/fail-next-image-read`);
+  const deleted = await request.delete(`${backendUrl}/api/parcels/${parcel.id}`, { headers: owner });
+  expect(deleted.status()).toBe(200);
+  expect((await db.query("SELECT id FROM app.parcels WHERE id = $1", [parcel.id])).rows).toHaveLength(0);
+  const job = (await db.query(`SELECT id, remaining_file_ids, sheet_deleted
+    FROM app.cleanup_jobs WHERE parcel_id = $1`, [parcel.id])).rows[0];
+  expect(job).toMatchObject({ remaining_file_ids: [], sheet_deleted: false });
+  expect((await request.post(`${backendUrl}/__e2e__/cleanup/run`)).status()).toBe(200);
+  const after = await (await request.get(`${backendUrl}/__e2e__/google`)).json();
+  expect(after.parcels.some((row) => row[2] === parcel.parcelCode)).toBe(false);
+  expect(after.files.some((file) => file.id === existingFile.id)).toBe(true);
+  expect((await db.query("SELECT status, sheet_deleted FROM app.cleanup_jobs WHERE id = $1",
+    [job.id])).rows[0]).toMatchObject({ status: "completed", sheet_deleted: true });
+});
+
+test("Sheet row deletion failure stays in the cleanup job for a safe retry", async ({ request }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium");
+  const parcel = await createParcel(request);
+  await request.post(`${backendUrl}/__e2e__/google/fail-next-parcel-delete`);
+  expect((await request.delete(`${backendUrl}/api/parcels/${parcel.id}`, { headers: owner })).status()).toBe(200);
+  expect((await request.post(`${backendUrl}/__e2e__/cleanup/run`)).status()).toBe(200);
+  const job = (await db.query(`SELECT id, status, sheet_deleted, last_error
+    FROM app.cleanup_jobs WHERE parcel_id = $1`, [parcel.id])).rows[0];
+  expect(job.status).toBe("pending");
+  expect(job.sheet_deleted).toBe(false);
+  expect(job.last_error).toContain("SHEET_DELETE_STARTED");
+  expect((await (await request.get(`${backendUrl}/__e2e__/google`)).json())
+    .parcels.some((row) => row[2] === parcel.parcelCode)).toBe(true);
+  await db.query("UPDATE app.cleanup_jobs SET next_attempt_at = now() - interval '1 second' WHERE id = $1", [job.id]);
+  expect((await request.post(`${backendUrl}/__e2e__/cleanup/run`)).status()).toBe(200);
+  expect((await db.query("SELECT status, sheet_deleted FROM app.cleanup_jobs WHERE id = $1",
+    [job.id])).rows[0]).toMatchObject({ status: "completed", sheet_deleted: true });
+  expect((await (await request.get(`${backendUrl}/__e2e__/google`)).json())
+    .parcels.some((row) => row[2] === parcel.parcelCode)).toBe(false);
 });
 
 test("PostgreSQL claims distinct due jobs and reclaims an expired lease, not terminal or future jobs", async ({}, testInfo) => {

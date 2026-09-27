@@ -36,13 +36,20 @@ function safeCode(value) {
 function googleErrorDetails(error) {
   const status = Number(error?.response?.status ?? error?.statusCode ?? error?.status ?? error?.code);
   const apiError = error?.response?.data?.error;
+  const readCategory = ["sheets-read", "sheets-header-check"].includes(error?.googleStage)
+    ? status === 429 ? "rate-limit" : Number.isInteger(status) && status >= 400 && status <= 599
+      ? "http" : ["ETIMEDOUT", "ESOCKETTIMEDOUT"].includes(error?.code)
+        ? "timeout" : ["ECONNRESET", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"].includes(error?.code)
+          ? "network" : error?.name === "SyntaxError" ? "invalid-response" : undefined
+    : undefined;
   return {
     stage: SAFE_STAGES.has(error?.googleStage) ? error.googleStage : "google",
     ...(Number.isInteger(status) && status >= 400 && status <= 599 ? { status } : {}),
     ...(safeCode(apiError?.status ?? error?.code) ? { code: safeCode(apiError?.status ?? error?.code) } : {}),
     ...(error?.code === "SHEET_HEADER_MISMATCH" ? { reason: "sheet-header-mismatch" } :
       safeCode(apiError?.errors?.[0]?.reason) ? { reason: safeCode(apiError.errors[0].reason) } : {}),
-    ...(SAFE_BRIDGE_CATEGORIES.has(error?.bridgeCategory) ? { category: error.bridgeCategory } : {}),
+    ...(SAFE_BRIDGE_CATEGORIES.has(error?.bridgeCategory) ? { category: error.bridgeCategory } :
+      readCategory ? { category: readCategory } : {}),
     message: error?.googleStage === "drive-config"
       ? "Google Drive provider configuration is incomplete"
       : error?.code === "SHEET_HEADER_MISMATCH"
