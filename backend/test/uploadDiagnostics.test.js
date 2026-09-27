@@ -46,6 +46,19 @@ function upload(base) {
   });
 }
 
+async function captureTiming(action) {
+  const original = console.info;
+  const records = [];
+  records.events = [];
+  console.info = (event, details) => {
+    if (typeof event === "string" && event.startsWith("parcel-image-upload-")) {
+      records.events.push({ event, details });
+    } else original(event, details);
+    if (event === "parcel-image-upload-timing") records.push(details);
+  };
+  try { await action(records); } finally { console.info = original; }
+}
+
 test("protected image GET exposes safe Server-Timing while preserving ownership and streaming", async () => {
   appUserService.findOrCreateLineUser = async () => ({ id: PARCEL_ID });
   appUserService.updateVerifiedDisplayName = async () => {};
@@ -108,19 +121,49 @@ test("upload success includes request-scoped diagnostics without changing image"
   appUserService.findOrCreateLineUser = async () => ({ id: PARCEL_ID });
   appUserService.updateVerifiedDisplayName = async () => {};
   parcelService.withParcelMutationLock = async (_id, work) => work({});
-  parcelImageService.uploadOwnedImage = async (_id, _owner, _file, _google, _photo, _db, onStage) => {
-    onStage("PARCEL_VERIFIED"); onStage("IMAGE_PROCESSED"); onStage("DRIVE_UPLOAD");
+  parcelImageService.uploadOwnedImage = async (_id, _owner, _file, _google, _photo, _db, onStage, onTiming) => {
+    onStage("PARCEL_VERIFIED");
+    onTiming("sharpMs", 1.2);
+    onStage("IMAGE_PROCESSED");
+    onTiming("sheetPreflightMs", 2.3);
+    onStage("SHEET_PREFLIGHT_COMPLETE");
+    onStage("DRIVE_UPLOAD");
+    onTiming("appsScriptMs", 3.4);
+    onStage("DRIVE_UPLOAD_COMPLETE");
     onStage("SHEET_UPDATE");
+    onTiming("sheetUpdateMs", 4.5);
+    onStage("SHEET_UPDATE_COMPLETE");
     return { id: "photo.webp" };
   };
-  await withServer(async (base) => {
+  await captureTiming(async (records) => withServer(async (base) => {
     const response = await upload(base);
     const body = await response.json();
     assert.equal(response.status, 201);
     assert.deepEqual(body.image, { id: "photo.webp" });
     assert.equal(body.stage, "UPLOAD_COMPLETE");
     assert.match(body.requestId, /^[A-F0-9]{8}$/);
-  });
+    assert.deepEqual(records[0], {
+      requestId: body.requestId, attempt: 0, stage: "UPLOAD_COMPLETE", category: "success",
+      sharpMs: 1.2, sheetPreflightMs: 2.3, appsScriptMs: 3.4, sheetUpdateMs: 4.5,
+      totalMs: records[0].totalMs,
+    });
+    assert.ok(Number.isFinite(records[0].totalMs) && records[0].totalMs >= 0);
+    assert.deepEqual(records.events.map(({ event, details }) => [event, details.stage]), [
+      ["parcel-image-upload-start", "request-received"],
+      ["parcel-image-upload-stage", "sharp-complete"],
+      ["parcel-image-upload-stage", "sheet-preflight-complete"],
+      ["parcel-image-upload-stage", "apps-script-upload-started"],
+      ["parcel-image-upload-stage", "apps-script-upload-complete"],
+      ["parcel-image-upload-stage", "sheet-update-complete"],
+      ["parcel-image-upload-timing", "UPLOAD_COMPLETE"],
+      ["parcel-image-upload-completed", "upload-complete"],
+    ]);
+    for (const { details } of records.events) {
+      assert.equal(details.requestId, body.requestId);
+      assert.equal(details.attempt, 0);
+      assert.doesNotMatch(JSON.stringify(details), /synthetic-test-token|U_TEST|private_key|image-bytes/);
+    }
+  }));
 });
 
 test("upload auth failure stays sanitized and carries only the request diagnostic ID", async () => {
@@ -149,10 +192,15 @@ test("upload failures expose safe stage/code/id and retain ambiguous, retryable 
     { stage: "sheets-append-image", category: "", conflict: true,
       status: 409, code: "IMAGE_CONFLICT", boundary: "SHEET_UPDATE" },
   ];
-  await withServer(async (base) => {
+  await captureTiming(async (records) => withServer(async (base) => {
     for (const item of failures) {
-      parcelImageService.uploadOwnedImage = async (_id, _owner, _file, _google, _photo, _db, onStage) => {
+      parcelImageService.uploadOwnedImage = async (_id, _owner, _file, _google, _photo, _db, onStage, onTiming) => {
         onStage(item.boundary);
+        onTiming("sharpMs", 1);
+        onTiming("sheetPreflightMs", 2);
+        if (item.category === "timeout") onTiming("appsScriptMs", 30000);
+        onTiming("secret-field", "SECRET_PROVIDER_PAYLOAD");
+        onTiming("sheetUpdateMs", "SECRET_PROVIDER_PAYLOAD");
         const error = new Error("SECRET_PROVIDER_PAYLOAD");
         error.googleStage = item.stage;
         error.bridgeCategory = item.category;
@@ -170,6 +218,23 @@ test("upload failures expose safe stage/code/id and retain ambiguous, retryable 
       assert.equal(body.ambiguous === true, item.ambiguous === true);
       assert.equal(body.retryable === true, item.retryable === true);
       assert.doesNotMatch(JSON.stringify(body), /SECRET_PROVIDER_PAYLOAD|synthetic-test-token|U_TEST/);
+      const timing = records.at(-1);
+      assert.equal(timing.requestId, body.requestId);
+      assert.equal(timing.stage, item.stage);
+      assert.equal(timing.sharpMs, 1);
+      assert.equal(timing.sheetPreflightMs, 2);
+      if (item.category === "timeout") {
+        assert.equal(timing.category, "timeout");
+        assert.equal(timing.appsScriptMs, 30000);
+        assert.equal(timing.sheetUpdateMs, undefined);
+      }
+      assert.ok(Number.isFinite(timing.totalMs) && timing.totalMs >= 0);
+      assert.doesNotMatch(JSON.stringify(timing), /SECRET_PROVIDER_PAYLOAD|synthetic-test-token|U_TEST|secret-field/);
+      const uploadEvents = records.events.filter(({ details }) => details.requestId === body.requestId);
+      assert.equal(uploadEvents[0].event, "parcel-image-upload-start");
+      assert.ok(uploadEvents.some(({ event }) => event === "parcel-image-upload-timing"));
+      assert.ok(uploadEvents.length <= 9);
+      assert.doesNotMatch(JSON.stringify(uploadEvents), /SECRET_PROVIDER_PAYLOAD|synthetic-test-token|U_TEST/);
     }
-  });
+  }));
 });

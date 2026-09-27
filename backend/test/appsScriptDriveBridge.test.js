@@ -63,6 +63,53 @@ test("upload signs exact canonical fields, Base64-string digest, seconds, and UR
   assert.equal(payload.signature.includes("="), false);
 });
 
+test("upload fetch timing is reported on success without changing the 30000 ms signal", async () => {
+  const originalTimeout = AbortSignal.timeout;
+  const limits = [];
+  AbortSignal.timeout = (ms) => {
+    limits.push(ms);
+    return originalTimeout(ms);
+  };
+  const measured = [];
+  try {
+    const bridge = createAppsScriptDriveBridge({ url, secret, fetchImpl: async () => ({
+      ok: true, async json() { return { success: true, fileId: "file_1" }; },
+    }) });
+    assert.equal(await bridge.uploadImage(Buffer.from("webp"), "a.webp",
+      { onFetchTiming: (ms) => measured.push(ms) }), "file_1");
+  } finally {
+    AbortSignal.timeout = originalTimeout;
+  }
+  assert.deepEqual(limits, [30000]);
+  assert.equal(measured.length, 1);
+  assert.ok(Number.isFinite(measured[0]) && measured[0] >= 0);
+});
+
+test("an aborted Apps Script fetch records elapsed time and remains a timeout", async () => {
+  const originalTimeout = AbortSignal.timeout;
+  const limits = [];
+  AbortSignal.timeout = (ms) => {
+    limits.push(ms);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new DOMException("timed out", "TimeoutError")), 5);
+    return controller.signal;
+  };
+  const measured = [];
+  try {
+    const bridge = createAppsScriptDriveBridge({ url, secret, fetchImpl: (_url, options) =>
+      new Promise((_resolve, reject) => options.signal.addEventListener("abort", () =>
+        reject(options.signal.reason), { once: true })) });
+    await assert.rejects(() => bridge.uploadImage(Buffer.from("webp"), "a.webp",
+      { onFetchTiming: (ms) => measured.push(ms) }),
+    { googleStage: "apps-script-upload", bridgeCategory: "timeout" });
+  } finally {
+    AbortSignal.timeout = originalTimeout;
+  }
+  assert.deepEqual(limits, [30000]);
+  assert.equal(measured.length, 1);
+  assert.ok(Number.isFinite(measured[0]) && measured[0] >= 0);
+});
+
 test("default nonce generator is random and changes for consecutive requests", async () => {
   const calls = [];
   const bridge = createAppsScriptDriveBridge({ url, secret, fetchImpl: async (_target, options) => {

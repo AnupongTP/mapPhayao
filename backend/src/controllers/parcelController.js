@@ -148,8 +148,23 @@ async function uploadImage(req, res, next) {
     const image = await parcelService.withParcelMutationLock(req.params.parcelId, (client) =>
       parcelImageService.uploadOwnedImage(req.params.parcelId, appUser.id, req.file,
         req.googleIntegration, req.body?.clientPhotoId, client,
-        (stage) => { req.uploadDiagnostic.stage = stage; }));
+        (stage) => {
+          if (["SHEET_PREFLIGHT_COMPLETE", "DRIVE_UPLOAD_COMPLETE", "SHEET_UPDATE_COMPLETE"].includes(stage)) {
+            req.uploadDiagnostic.logStage?.(stage);
+          } else {
+            req.uploadDiagnostic.stage = stage;
+            req.uploadDiagnostic.logStage?.(stage);
+          }
+        },
+        (name, ms) => {
+          if (["sharpMs", "sheetPreflightMs", "appsScriptMs", "sheetUpdateMs"].includes(name) &&
+            Number.isFinite(ms) && ms >= 0) {
+            req.uploadDiagnostic.timings[name] = Math.round(ms * 10) / 10;
+          }
+        }));
     req.uploadDiagnostic.stage = "UPLOAD_COMPLETE";
+    req.uploadDiagnostic.logTiming?.();
+    req.uploadDiagnostic.logCompleted?.();
     return res.status(201).json({ success: true, image,
       stage: "UPLOAD_COMPLETE", requestId: req.uploadDiagnostic.requestId });
   } catch (error) {

@@ -1,5 +1,6 @@
 const { createHash, createHmac, randomBytes } = require("node:crypto");
 const { Readable } = require("node:stream");
+const { performance } = require("node:perf_hooks");
 const { tagGoogleError } = require("../utils/googleError");
 
 const REQUEST_TIMEOUT_MS = 30000;
@@ -30,7 +31,7 @@ function createAppsScriptDriveBridge({ url, secret, fetchImpl = fetch, now = Dat
     throw bridgeError("drive-config", "invalid-config");
   }
 
-  async function request(op, { filename = "", mimeType = "", fileId = "", bytes } = {}) {
+  async function request(op, { filename = "", mimeType = "", fileId = "", bytes, onFetchTiming } = {}) {
     const contentBase64 = op === "upload" ? bytes.toString("base64") : undefined;
     const payload = {
       v: "1", op, ts: Math.floor(now() / 1000), nonce: randomBytesImpl(18).toString("base64url"),
@@ -44,6 +45,7 @@ function createAppsScriptDriveBridge({ url, secret, fetchImpl = fetch, now = Dat
     if (contentBase64 !== undefined) payload.contentBase64 = contentBase64;
 
     let response;
+    const fetchStarted = performance.now();
     try {
       response = await fetchImpl(endpoint.href, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -51,6 +53,8 @@ function createAppsScriptDriveBridge({ url, secret, fetchImpl = fetch, now = Dat
       });
     } catch (error) {
       throw bridgeError(`apps-script-${op}`, error?.name === "TimeoutError" ? "timeout" : "network");
+    } finally {
+      try { onFetchTiming?.(performance.now() - fetchStarted); } catch { /* Diagnostics cannot change upload outcome. */ }
     }
     if (!response.ok) throw bridgeError("apps-script-http", "http", response.status);
     let data;
@@ -108,8 +112,9 @@ function createAppsScriptDriveBridge({ url, secret, fetchImpl = fetch, now = Dat
 
   return {
     getWeather: requestWeather,
-    async uploadImage(bytes, filename) {
-      const data = await request("upload", { filename, mimeType: "image/webp", bytes });
+    async uploadImage(bytes, filename, options = {}) {
+      const data = await request("upload", { filename, mimeType: "image/webp", bytes,
+        onFetchTiming: options.onFetchTiming });
       if (typeof data.fileId !== "string" || !FILE_ID.test(data.fileId)) {
         throw bridgeError("apps-script-invalid-response", "invalid-file-id");
       }

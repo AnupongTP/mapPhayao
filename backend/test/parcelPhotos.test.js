@@ -85,13 +85,15 @@ test("an ambiguous Apps Script upload is not replayed or cleaned up", async () =
   const ownerId = "22222222-2222-4222-8222-222222222222";
   const parcelId = "33333333-3333-4333-8333-333333333333";
   const calls = [];
+  const timings = {};
   parcelService.getOwnedParcelById = async () => ({ id: parcelId, parcelCode: "PY-1" });
   mirrorService.getParcelMirrorRecord = async () => ({ owner_user_id: ownerId, parcel_code: "PY-1" });
   try {
     const google = { enabled: true,
       async findParcelImage() { calls.push("sheet-read"); return null; },
-      async uploadImage() {
+      async uploadImage(_bytes, _fileName, options) {
         calls.push("drive-create");
+        options.onFetchTiming(30000);
         throw Object.assign(new Error("private provider detail"), {
           googleStage: "apps-script-upload", bridgeCategory: "timeout",
         });
@@ -100,8 +102,55 @@ test("an ambiguous Apps Script upload is not replayed or cleaned up", async () =
       async deleteImage() { calls.push("drive-delete"); },
     };
     await assert.rejects(() => parcelImageService.uploadOwnedImage(parcelId, ownerId,
-      { buffer: bytes }, google, PHOTO_ID), (error) => error.photoAmbiguous === true);
+      { buffer: bytes }, google, PHOTO_ID, undefined, undefined,
+      (name, ms) => { timings[name] = ms; }), (error) => error.photoAmbiguous === true);
     assert.deepEqual(calls, ["sheet-read", "drive-create"]);
+    assert.ok(timings.sharpMs >= 0);
+    assert.ok(timings.sheetPreflightMs >= 0);
+    assert.equal(timings.appsScriptMs, 30000);
+    assert.equal(timings.sheetUpdateMs, undefined);
+  } finally {
+    parcelService.getOwnedParcelById = originalParcelLookup;
+    mirrorService.getParcelMirrorRecord = originalMirrorLookup;
+  }
+});
+
+test("successful upload records Sharp, Sheet preflight, bridge fetch, and Sheet update timings", async () => {
+  const mirrorService = require("../src/services/parcelMirrorService");
+  const originalParcelLookup = parcelService.getOwnedParcelById;
+  const originalMirrorLookup = mirrorService.getParcelMirrorRecord;
+  const bytes = await sharp({ create: { width: 4, height: 4, channels: 3,
+    background: "green" } }).png().toBuffer();
+  const ownerId = "22222222-2222-4222-8222-222222222222";
+  const parcelId = "33333333-3333-4333-8333-333333333333";
+  const timings = {};
+  const calls = [];
+  parcelService.getOwnedParcelById = async () => ({ id: parcelId, parcelCode: "PY-1" });
+  mirrorService.getParcelMirrorRecord = async () => ({ owner_user_id: ownerId, parcel_code: "PY-1" });
+  try {
+    const google = { enabled: true,
+      async findParcelImage() { calls.push("sheet-read"); return null; },
+      async getParcelImageCount() { calls.push("sheet-count"); return 0; },
+      async uploadImage(_bytes, _fileName, options) {
+        calls.push("drive-create");
+        options.onFetchTiming(12.5);
+        return "file_1";
+      },
+      async appendParcelImage() {
+        calls.push("sheet-append");
+        return { id: "PY-1_photo.webp", fileId: "file_1" };
+      },
+    };
+    const image = await parcelImageService.uploadOwnedImage(parcelId, ownerId,
+      { buffer: bytes }, google, PHOTO_ID, undefined, undefined,
+      (name, ms) => { timings[name] = ms; });
+    assert.equal(image.id, "PY-1_photo.webp");
+    assert.equal(image.fileId, undefined);
+    assert.deepEqual(calls, ["sheet-read", "sheet-count", "drive-create", "sheet-append"]);
+    assert.equal(timings.appsScriptMs, 12.5);
+    for (const key of ["sharpMs", "sheetPreflightMs", "sheetUpdateMs"]) {
+      assert.ok(Number.isFinite(timings[key]) && timings[key] >= 0, key);
+    }
   } finally {
     parcelService.getOwnedParcelById = originalParcelLookup;
     mirrorService.getParcelMirrorRecord = originalMirrorLookup;

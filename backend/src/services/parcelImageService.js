@@ -1,4 +1,5 @@
 const sharp = require("sharp");
+const { performance } = require("node:perf_hooks");
 const parcelService = require("./parcelService");
 const parcelMirrorService = require("./parcelMirrorService");
 const createHttpError = require("../utils/httpError");
@@ -67,14 +68,22 @@ async function normalizeImage(file) {
   }
 }
 
-async function uploadOwnedImage(parcelId, ownerUserId, file, google, clientPhotoId, database, onStage = () => {}) {
+async function uploadOwnedImage(parcelId, ownerUserId, file, google, clientPhotoId, database,
+  onStage = () => {}, onTiming = () => {}) {
+  const recordTiming = (name, started) => {
+    try { onTiming(name, performance.now() - started); } catch { /* Diagnostics cannot change upload outcome. */ }
+  };
   const photoId = validateClientPhotoId(clientPhotoId);
   if (!google?.enabled) throw createHttpError(503, "ยังไม่ได้ตั้งค่าบริการรูปภาพแปลง");
   onStage("PARCEL_LOOKUP");
   const parcel = await parcelService.getOwnedParcelById(parcelId, ownerUserId, database);
   onStage("PARCEL_VERIFIED");
   onStage("IMAGE_VALIDATION");
-  const normalized = await normalizeImage(file);
+  const sharpStarted = performance.now();
+  let normalized;
+  try { normalized = await normalizeImage(file); } finally {
+    recordTiming("sharpMs", sharpStarted);
+  }
   onStage("IMAGE_PROCESSED");
   const mirrorRecord = await parcelMirrorService.getParcelMirrorRecord(parcel.id, database);
   if (!mirrorRecord || mirrorRecord.owner_user_id !== ownerUserId || mirrorRecord.parcel_code !== parcel.parcelCode) {
@@ -83,43 +92,58 @@ async function uploadOwnedImage(parcelId, ownerUserId, file, google, clientPhoto
   const fileName = `${parcel.parcelCode}_${photoId}.webp`;
   let existing;
   onStage("SHEET_CHECK");
+  const sheetPreflightStarted = performance.now();
   try {
-    existing = await google.findParcelImage?.(parcel.parcelCode, ownerUserId, fileName);
-  } catch (error) {
-    if (safeSheetRetry(error)) error.photoRetryable = true;
-    throw error;
-  }
-  if (existing) {
-    console.info("parcel-image-idempotent-match", { parcelId: parcel.id, stage: "sheets-read" });
-    const { fileId, ...image } = existing;
-    return image;
-  }
-  try {
-    if (await google.getParcelImageCount?.(parcel.parcelCode, ownerUserId) >= 5) {
-      throw createHttpError(400, "เลือกได้สูงสุด 5 รูป");
+    try {
+      existing = await google.findParcelImage?.(parcel.parcelCode, ownerUserId, fileName);
+    } catch (error) {
+      if (safeSheetRetry(error)) error.photoRetryable = true;
+      throw error;
     }
-  } catch (error) {
-    if (safeSheetRetry(error)) error.photoRetryable = true;
-    throw error;
+    if (existing) {
+      console.info("parcel-image-idempotent-match", { parcelId: parcel.id, stage: "sheets-read" });
+      const { fileId, ...image } = existing;
+      return image;
+    }
+    try {
+      if (await google.getParcelImageCount?.(parcel.parcelCode, ownerUserId) >= 5) {
+        throw createHttpError(400, "เลือกได้สูงสุด 5 รูป");
+      }
+    } catch (error) {
+      if (safeSheetRetry(error)) error.photoRetryable = true;
+      throw error;
+    }
+  } finally {
+    recordTiming("sheetPreflightMs", sheetPreflightStarted);
   }
+  onStage("SHEET_PREFLIGHT_COMPLETE");
   let driveFileId;
   onStage("DRIVE_UPLOAD");
   try {
-    driveFileId = await google.uploadImage(normalized.bytes, fileName);
+    driveFileId = await google.uploadImage(normalized.bytes, fileName, {
+      onFetchTiming: (ms) => onTiming("appsScriptMs", ms),
+    });
   } catch (error) {
     if (ambiguousDriveWrite(error)) error.photoAmbiguous = true;
     throw error;
   }
+  onStage("DRIVE_UPLOAD_COMPLETE");
   try {
     onStage("SHEET_UPDATE");
+    const sheetUpdateStarted = performance.now();
     let stored;
     try {
-      stored = await google.appendParcelImage(parcel.parcelCode, ownerUserId, fileName, driveFileId, mirrorRecord);
-    } catch (error) {
-      if (!safeSheetRetry(error)) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      stored = await google.appendParcelImage(parcel.parcelCode, ownerUserId, fileName, driveFileId, mirrorRecord);
+      try {
+        stored = await google.appendParcelImage(parcel.parcelCode, ownerUserId, fileName, driveFileId, mirrorRecord);
+      } catch (error) {
+        if (!safeSheetRetry(error)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        stored = await google.appendParcelImage(parcel.parcelCode, ownerUserId, fileName, driveFileId, mirrorRecord);
+      }
+    } finally {
+      recordTiming("sheetUpdateMs", sheetUpdateStarted);
     }
+    onStage("SHEET_UPDATE_COMPLETE");
     const { fileId, ...image } = stored;
     return image;
   } catch (error) {

@@ -261,7 +261,7 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
 
   return {
     enabled: true,
-    async uploadImage(bytes, fileName) { return requireDrive().uploadImage(bytes, fileName); },
+    async uploadImage(bytes, fileName, options) { return requireDrive().uploadImage(bytes, fileName, options); },
     async deleteImage(fileId) { return requireDrive().deleteImage(fileId); },
     async getImage(fileId) { return requireReadDrive().getImage(fileId); },
     upsertUser(user) { return upsert(SPREADSHEET_TABS.users, user.id, userCells(user)); },
