@@ -42,6 +42,7 @@ test("Sheet image discovery failure does not block owned delete or Sheet row cle
   const job = (await db.query(`SELECT id, remaining_file_ids, sheet_deleted
     FROM app.cleanup_jobs WHERE parcel_id = $1`, [parcel.id])).rows[0];
   expect(job).toMatchObject({ remaining_file_ids: [], sheet_deleted: false });
+  await db.query("UPDATE app.cleanup_jobs SET next_attempt_at = '-infinity'::timestamptz WHERE id = $1", [job.id]);
   expect((await request.post(`${backendUrl}/__e2e__/cleanup/run`)).status()).toBe(200);
   const after = await (await request.get(`${backendUrl}/__e2e__/google`)).json();
   expect(after.parcels.some((row) => row[2] === parcel.parcelCode)).toBe(false);
@@ -55,6 +56,8 @@ test("Sheet row deletion failure stays in the cleanup job for a safe retry", asy
   const parcel = await createParcel(request);
   await request.post(`${backendUrl}/__e2e__/google/fail-next-parcel-delete`);
   expect((await request.delete(`${backendUrl}/api/parcels/${parcel.id}`, { headers: owner })).status()).toBe(200);
+  const jobId = (await db.query("SELECT id FROM app.cleanup_jobs WHERE parcel_id = $1", [parcel.id])).rows[0].id;
+  await db.query("UPDATE app.cleanup_jobs SET next_attempt_at = '-infinity'::timestamptz WHERE id = $1", [jobId]);
   expect((await request.post(`${backendUrl}/__e2e__/cleanup/run`)).status()).toBe(200);
   const job = (await db.query(`SELECT id, status, sheet_deleted, last_error
     FROM app.cleanup_jobs WHERE parcel_id = $1`, [parcel.id])).rows[0];
@@ -63,7 +66,7 @@ test("Sheet row deletion failure stays in the cleanup job for a safe retry", asy
   expect(job.last_error).toContain("SHEET_DELETE_STARTED");
   expect((await (await request.get(`${backendUrl}/__e2e__/google`)).json())
     .parcels.some((row) => row[2] === parcel.parcelCode)).toBe(true);
-  await db.query("UPDATE app.cleanup_jobs SET next_attempt_at = now() - interval '1 second' WHERE id = $1", [job.id]);
+  await db.query("UPDATE app.cleanup_jobs SET next_attempt_at = '-infinity'::timestamptz WHERE id = $1", [job.id]);
   expect((await request.post(`${backendUrl}/__e2e__/cleanup/run`)).status()).toBe(200);
   expect((await db.query("SELECT status, sheet_deleted FROM app.cleanup_jobs WHERE id = $1",
     [job.id])).rows[0]).toMatchObject({ status: "completed", sheet_deleted: true });

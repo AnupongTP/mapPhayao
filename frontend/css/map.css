@@ -2100,6 +2100,11 @@ button.panel-icon-action[hidden] {
   font-weight: 700;
 }
 
+.parcel-sheet-status.is-warning {
+  color: #92400e;
+  font-weight: 700;
+}
+
 .parcel-sheet-actions,
 .saved-parcel-actions {
   display: grid;

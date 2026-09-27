@@ -10,6 +10,25 @@ const token = "e2e-line-token-user-a";
 const auth = { Authorization: `Bearer ${token}` };
 const directPhotoId = "11111111-1111-4111-8111-111111111111";
 
+async function drawParcelWithPhotos(page, name, count = 2) {
+  await page.locator(".parcel-draw-button").click();
+  const hud = page.locator("#mobile-parcel-draw-hud");
+  await hud.locator(".mobile-parcel-draw-add").click();
+  await panMap(page, 90, 0);
+  await hud.locator(".mobile-parcel-draw-add").click();
+  await panMap(page, 0, 90);
+  await hud.locator(".mobile-parcel-draw-add").click();
+  await hud.locator(".mobile-parcel-draw-finish").click();
+  const modal = page.locator(".parcel-modal");
+  if (count) await modal.locator('input[type="file"][multiple]').setInputFiles(Array(count).fill(fixture));
+  await modal.locator('input[name="parcelName"]').fill(name);
+  const analyze = page.waitForResponse((response) => response.url().includes("/api/area-analysis/polygon"));
+  await modal.getByRole("button", { name: "เริ่มวิเคราะห์" }).click();
+  expect((await analyze).status()).toBe(200);
+  await page.locator(".leaflet-popup").getByRole("button", { name: "เปิดรายละเอียด" }).click();
+  await page.locator("#mobile-parcel-save-button").click();
+}
+
 test.beforeAll(() => {
   if (process.env.DB_HOST !== "127.0.0.1" || process.env.DB_NAME !== "mapphayao_e2e") {
     throw new Error("Refusing non-local parcel photo E2E database");
@@ -212,6 +231,8 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   expect(parcel.riceVariety).toBe("KDML105");
   expect(parcel.representativePoint).not.toBeNull();
   await expect(sheet).toHaveCount(0);
+  await expect(page.locator("#mobile-parcel-save-button")).toHaveCount(0);
+  await expect(page.locator("#temporary-parcel-list .parcel-item")).toHaveCount(0);
   expect(uploadProgress).toHaveLength(2);
   expect(await page.evaluate(() => window.__revokedPhotoUrls.length)).toBe(7);
   const detail = await request.get(`${backendUrl}/api/parcels/${parcel.id}`, { headers: auth });
@@ -239,13 +260,14 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   expect(sheetRow[7]).not.toBe(`${firstVertex[1].toFixed(6)}, ${firstVertex[0].toFixed(6)}`);
   expect(JSON.parse(sheetRow[11])).toHaveLength(2);
   expect(JSON.parse(sheetRow[12])).toHaveLength(2);
-  expect(JSON.parse(sheetRow[11])).toEqual(google.files.map((file) => file.fileName));
-  expect(JSON.parse(sheetRow[12])).toEqual(google.files.map((file) =>
+  const parcelFiles = google.files.filter((file) => file.fileName.startsWith(`${parcel.parcelCode}_`));
+  expect(parcelFiles).toHaveLength(2);
+  expect(JSON.parse(sheetRow[11])).toEqual(parcelFiles.map((file) => file.fileName));
+  expect(JSON.parse(sheetRow[12])).toEqual(parcelFiles.map((file) =>
     `https://drive.usercontent.google.com/download?id=${file.id}&export=view`));
   expect(sheetRow[13]).toBe("ทดสอบหมายเหตุแปลง");
   expect(sheetRow[14]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
   expect(sheetRow[15]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
-  expect(google.files).toHaveLength(2);
   const denied = await request.post(`${backendUrl}/api/parcels/${parcel.id}/images`, {
     headers: { Authorization: "Bearer e2e-line-token-user-b" },
     multipart: { image: { name: "test.png", mimeType: "image/png", buffer: readFileSync(fixture) },
@@ -271,7 +293,7 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   expect((await request.get(`${backendUrl}/api/parcels/${parcel.id}/images/${(await detail.json()).parcel.images[0].id}/content`, {
     headers: { Authorization: "Bearer e2e-line-token-user-b" },
   })).status()).toBe(404);
-  expect((await request.get(`${backendUrl}/api/parcels/${parcel.id}/images/${google.files[1].id}/content`, {
+  expect((await request.get(`${backendUrl}/api/parcels/${parcel.id}/images/${parcelFiles[1].id}/content`, {
     headers: auth,
   })).status()).toBe(404);
   const imageId = (await detail.json()).parcel.images[0].id;
@@ -331,12 +353,13 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   expect(queued.remaining_file_ids).toHaveLength(2);
   expect(queued.sheet_deleted).toBe(false);
   const beforeCleanup = (await (await request.get(`${backendUrl}/__e2e__/google`)).json());
-  expect(beforeCleanup.files).toHaveLength(2);
+  expect(beforeCleanup.files.filter((file) => file.fileName.startsWith(`${parcel.parcelCode}_`))).toHaveLength(2);
   expect(beforeCleanup.parcels.some((row) => row[2] === parcel.parcelCode)).toBe(true);
   expect((await db.query("SELECT COUNT(*)::int AS count FROM app.parcels WHERE id = $1", [parcel.id])).rows[0].count).toBe(0);
-  expect((await (await request.post(`${backendUrl}/__e2e__/cleanup/run`)).json()).processed).toBe(1);
+  await db.query("UPDATE app.cleanup_jobs SET next_attempt_at = '-infinity'::timestamptz WHERE parcel_id = $1", [parcel.id]);
+  expect((await (await request.post(`${backendUrl}/__e2e__/cleanup/run`)).json()).processed).toBeGreaterThanOrEqual(1);
   const afterDelete = (await (await request.get(`${backendUrl}/__e2e__/google`)).json());
-  expect(afterDelete.files).toHaveLength(0);
+  expect(afterDelete.files.some((file) => file.fileName.startsWith(`${parcel.parcelCode}_`))).toBe(false);
   expect(afterDelete.parcels.find((row) => row[2] === parcel.parcelCode)).toBeUndefined();
   const completed = (await db.query(`SELECT status, remaining_file_ids, sheet_deleted, completed_at
     FROM app.cleanup_jobs WHERE parcel_id = $1`, [parcel.id])).rows[0];
@@ -363,6 +386,8 @@ test("parcel without photos still analyzes, saves, and mirrors empty arrays", as
   await page.locator("#parcel-save-sheet").getByRole("button", { name: "บันทึกแปลง" }).click();
   const parcel = (await (await created).json()).parcel;
   await expect(page.locator("#parcel-save-sheet")).toHaveCount(0);
+  await expect(page.locator("#mobile-parcel-save-button")).toHaveCount(0);
+  await expect(page.locator("#temporary-parcel-list .parcel-item")).toHaveCount(0);
   const google = (await (await request.get(`${backendUrl}/__e2e__/google`)).json());
   const row = google.parcels.find((item) => item[2] === parcel.parcelCode);
   expect(row).toHaveLength(16);
@@ -374,65 +399,115 @@ test("parcel without photos still analyzes, saves, and mirrors empty arrays", as
   expect((await request.delete(`${backendUrl}/api/parcels/${parcel.id}`, { headers: auth })).status()).toBe(200);
 });
 
-test("failed photo upload keeps saved parcel and retries without duplicate creation", async ({ page, context, request }, testInfo) => {
+test("failed photo upload clears temporary parcel and opens saved parcel with warning", async ({ page, context, request }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium");
   test.setTimeout(120000);
   const forbidden = await prepareContext(context, { token });
   const errors = watchPageErrors(page);
   await openMap(page, true);
   await expect.poll(() => page.evaluate(() => window.MapLiffMode.isReady())).toBe(true);
-  await page.locator(".parcel-draw-button").click();
-  const hud = page.locator("#mobile-parcel-draw-hud");
-  await hud.locator(".mobile-parcel-draw-add").click();
-  await panMap(page, 90, 0);
-  await hud.locator(".mobile-parcel-draw-add").click();
-  await panMap(page, 0, 90);
-  await hud.locator(".mobile-parcel-draw-add").click();
-  await hud.locator(".mobile-parcel-draw-finish").click();
-  const modal = page.locator(".parcel-modal");
-  await modal.locator('input[type="file"][multiple]').setInputFiles([fixture, fixture]);
-  await modal.locator('input[name="parcelName"]').fill("PHOTO-RETRY-E2E");
-  const analyze = page.waitForResponse((response) => response.url().includes("/api/area-analysis/polygon"));
-  await modal.getByRole("button", { name: "เริ่มวิเคราะห์" }).click();
-  expect((await analyze).status()).toBe(200);
-  await page.locator(".leaflet-popup").getByRole("button", { name: "เปิดรายละเอียด" }).click();
   expect((await request.post(`${backendUrl}/__e2e__/google/fail-next-upload`)).status()).toBe(200);
-  await page.locator("#mobile-parcel-save-button").click();
+  await drawParcelWithPhotos(page, "PHOTO-RETRY-E2E");
   const sheet = page.locator("#parcel-save-sheet");
   let imageAttempts = 0;
+  let createAttempts = 0;
   page.on("request", (item) => {
     if (/\/api\/parcels\/[^/]+\/images$/.test(item.url()) && item.method() === "POST") imageAttempts += 1;
+    if (item.url().endsWith("/api/parcels") && item.method() === "POST") createAttempts += 1;
   });
   const createResponse = page.waitForResponse((response) => response.url().endsWith("/api/parcels") && response.request().method() === "POST");
   await sheet.getByRole("button", { name: "บันทึกแปลง" }).click();
   const parcel = (await (await createResponse).json()).parcel;
-  await expect(sheet.locator("#parcel-save-status")).toContainText("บันทึกแปลงแล้ว แต่มีรูปภาพ 1 รูปอัปโหลดไม่สำเร็จ");
+  await expect(sheet).toHaveCount(0);
+  await expect(page.locator("#my-parcels-sheet .is-warning")).toContainText("บันทึกแปลงเรียบร้อยแล้ว");
+  await expect(page.locator("#my-parcels-sheet .is-warning")).toContainText("เมนูแก้ไขข้อมูลแปลง");
+  await expect(page.locator("#my-parcels-sheet .saved-parcel-card").filter({ hasText: "PHOTO-RETRY-E2E" })).toHaveCount(1);
+  await expect(page.locator("#temporary-parcel-list .parcel-item")).toHaveCount(0);
+  await expect(page.locator("#mobile-parcel-save-button")).toHaveCount(0);
   const beforeRetry = await db.query("SELECT COUNT(*)::int AS count FROM app.parcels WHERE id = $1", [parcel.id]);
   expect(beforeRetry.rows[0].count).toBe(1);
   const failedGoogle = await (await request.get(`${backendUrl}/__e2e__/google`)).json();
   expect(imageAttempts).toBe(2);
+  expect(createAttempts).toBe(1);
   expect(failedGoogle.files.filter((file) => file.fileName.startsWith(`${parcel.parcelCode}_`))).toHaveLength(1);
   const failedRow = failedGoogle.parcels.find((row) => row[2] === parcel.parcelCode);
   expect(JSON.parse(failedRow[11])).toHaveLength(1);
   expect(JSON.parse(failedRow[12])).toHaveLength(1);
-  let createAttempts = 0;
-  page.on("request", (item) => {
-    if (item.url().endsWith("/api/parcels") && item.method() === "POST") createAttempts += 1;
-  });
-  await sheet.getByRole("button", { name: "บันทึกแปลง" }).click();
-  await expect(sheet).toHaveCount(0);
-  expect(createAttempts).toBe(0);
-  expect(imageAttempts).toBe(3);
-  expect((await (await request.get(`${backendUrl}/__e2e__/google`)).json()).files
-    .filter((file) => file.fileName.startsWith(`${parcel.parcelCode}_`))).toHaveLength(2);
+  await page.locator("#my-parcels-sheet .panel-close").first().click();
+  await page.locator("#saved-parcels-control-button").click();
+  await expect(page.locator("#my-parcels-sheet .saved-parcel-card").filter({ hasText: "PHOTO-RETRY-E2E" })).toHaveCount(1);
+  expect(imageAttempts).toBe(2);
+  expect((await db.query("SELECT COUNT(*)::int AS count FROM app.parcels WHERE parcel_name = $1", ["PHOTO-RETRY-E2E"])).rows[0].count).toBe(1);
   const detail = await request.get(`${backendUrl}/api/parcels/${parcel.id}`, { headers: auth });
-  expect((await detail.json()).parcel.images).toHaveLength(2);
+  expect((await detail.json()).parcel.images).toHaveLength(1);
   expect(forbidden).toEqual([]);
   expect(errors).toEqual([
     "Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
     expect.stringMatching(/^\[ParcelUpload\] BACKEND_HTTP_ERROR \{photoIndex: 1, totalPhotos: 2, status: 500, stage: DRIVE_UPLOAD, code: UPLOAD_FAILED\}$/),
   ]);
   expect((await request.delete(`${backendUrl}/api/parcels/${parcel.id}`, { headers: auth })).status()).toBe(200);
+});
+
+test("ambiguous photo leaves only confirmed Sheet reference and does not replay", async ({ page, context, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium");
+  test.setTimeout(120000);
+  const forbidden = await prepareContext(context, { token });
+  await openMap(page, true);
+  await expect.poll(() => page.evaluate(() => window.MapLiffMode.isReady())).toBe(true);
+  expect((await request.post(`${backendUrl}/__e2e__/google/fail-next-ambiguous-upload`)).status()).toBe(200);
+  await drawParcelWithPhotos(page, "PHOTO-AMBIGUOUS-E2E");
+  let uploads = 0;
+  page.on("request", (item) => {
+    if (/\/api\/parcels\/[^/]+\/images$/.test(item.url()) && item.method() === "POST") uploads += 1;
+  });
+  const created = page.waitForResponse((response) => response.url().endsWith("/api/parcels") &&
+    response.request().method() === "POST");
+  await page.locator("#parcel-save-sheet").getByRole("button", { name: "บันทึกแปลง" }).click();
+  const parcel = (await (await created).json()).parcel;
+  await expect(page.locator("#my-parcels-sheet .is-warning")).toContainText("ไม่ทราบผล");
+  await expect(page.locator("#parcel-save-sheet")).toHaveCount(0);
+  await expect(page.locator("#temporary-parcel-list .parcel-item")).toHaveCount(0);
+  expect(uploads).toBe(2);
+  const google = await (await request.get(`${backendUrl}/__e2e__/google`)).json();
+  const row = google.parcels.find((item) => item[2] === parcel.parcelCode);
+  expect(JSON.parse(row[11])).toHaveLength(1);
+  expect(JSON.parse(row[12])).toHaveLength(1);
+  expect((await (await request.get(`${backendUrl}/api/parcels/${parcel.id}`, { headers: auth })).json()).parcel.images)
+    .toHaveLength(1);
+  expect(google.files.filter((file) => file.fileName.startsWith(`${parcel.parcelCode}_`))).toHaveLength(2);
+  await page.locator("#my-parcels-sheet .panel-close").first().click();
+  await page.locator("#saved-parcels-control-button").click();
+  await expect(page.locator("#my-parcels-sheet .saved-parcel-card").filter({ hasText: "PHOTO-AMBIGUOUS-E2E" })).toHaveCount(1);
+  expect(uploads).toBe(2);
+  expect(forbidden).toEqual([]);
+});
+
+test("core create failure keeps temporary parcel and allows one successful retry", async ({ page, context, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium");
+  test.setTimeout(120000);
+  const forbidden = await prepareContext(context, { token });
+  await openMap(page, true);
+  await expect.poll(() => page.evaluate(() => window.MapLiffMode.isReady())).toBe(true);
+  await drawParcelWithPhotos(page, "PHOTO-CORE-RETRY-E2E", 0);
+  let createAttempts = 0;
+  await page.route("**/api/parcels", (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    createAttempts += 1;
+    if (createAttempts === 1) return route.fulfill({ status: 503, contentType: "application/json",
+      body: JSON.stringify({ error: "Temporary" }) });
+    return route.continue();
+  });
+  const sheet = page.locator("#parcel-save-sheet");
+  await sheet.getByRole("button", { name: "บันทึกแปลง" }).click();
+  await expect(sheet.locator("#parcel-save-status")).toContainText("ไม่สามารถบันทึกแปลงได้");
+  await expect(page.locator("#temporary-parcel-list .parcel-item")).toHaveCount(1);
+  expect((await db.query("SELECT COUNT(*)::int AS count FROM app.parcels WHERE parcel_name = $1", ["PHOTO-CORE-RETRY-E2E"])).rows[0].count).toBe(0);
+  await sheet.getByRole("button", { name: "บันทึกแปลง" }).click();
+  await expect(sheet).toHaveCount(0);
+  await expect(page.locator("#temporary-parcel-list .parcel-item")).toHaveCount(0);
+  expect(createAttempts).toBe(2);
+  expect((await db.query("SELECT COUNT(*)::int AS count FROM app.parcels WHERE parcel_name = $1", ["PHOTO-CORE-RETRY-E2E"])).rows[0].count).toBe(1);
+  expect(forbidden).toEqual([]);
 });
 
 test("mobile save retries one safe transient photo with its original ID before the next photo", async ({ page, context, request }, testInfo) => {

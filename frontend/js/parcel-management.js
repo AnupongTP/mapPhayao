@@ -421,10 +421,15 @@
       confirm.disabled = true;
       setStatus(status, TEXT.saving);
       try {
-        await onSubmit((message, event) => {
+        const result = await onSubmit((message, event) => {
           setStatus(status, message);
           renderDiagnostic(event);
         });
+        if (result?.partialSuccess) {
+          closeSheet(backdrop);
+          openMyParcelsSheet({ focusParcelId: result.parcel.id, notice: result.message });
+          return;
+        }
         setStatus(status, TEXT.saved, "success");
         window.setTimeout(() => closeSheet(backdrop), 700);
       } catch (error) {
@@ -487,7 +492,7 @@
       }
       openSaveSheet(parcel, async (onProgress) => {
         if (typeof options.onSave === "function") {
-          await options.onSave(onProgress);
+          return options.onSave(onProgress);
         }
       });
     });
@@ -739,6 +744,11 @@
       list.scrollTop = 0;
       searchInput.focus({ preventScroll: true });
     });
+    if (options.notice) {
+      const notice = createElement("p", "parcel-sheet-status is-warning", options.notice);
+      notice.setAttribute("role", "status");
+      body.appendChild(notice);
+    }
     body.append(status, searchRow, list);
     loadMyParcels(list, status);
   }

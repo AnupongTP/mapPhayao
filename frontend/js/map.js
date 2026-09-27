@@ -1361,7 +1361,6 @@
     window.console?.info?.("[ParcelUpload] PARCEL_SAVED");
     let failed = 0;
     let ambiguous = 0;
-    let firstFailure;
     for (const [index, photo] of pendingPhotos.entries()) {
       const count = index + 1;
       try {
@@ -1380,28 +1379,26 @@
         await window.MapParcelPhotoProcessing.uploadWithRetry(photo, parcel.savedParcelId,
           count, pendingPhotos.length, onProgress);
       } catch (error) {
-        firstFailure ||= error;
         failed += 1;
         if (error.ambiguous) ambiguous += 1;
         onProgress(error.ambiguous
-          ? `รูปที่ ${count} ไม่ทราบผลการอัปโหลด กรุณาติดต่อผู้ดูแล`
-          : `รูปที่ ${count} อัปโหลดไม่สำเร็จ กรุณาลองบันทึกอีกครั้ง`);
+          ? `รูปที่ ${count} ไม่ทราบผลการอัปโหลด`
+          : `รูปที่ ${count} อัปโหลดไม่สำเร็จ`);
       }
-    }
-    if (failed) {
-      renderTemporaryParcelSaveAction(parcel);
-      const error = new Error(ambiguous
-        ? `บันทึกแปลงแล้ว แต่มีรูปภาพ ${ambiguous} รูปไม่ทราบผลการอัปโหลด กรุณาตรวจสอบและติดต่อผู้ดูแล ห้ามอัปโหลดรูปเดิมซ้ำ`
-        : `บันทึกแปลงแล้ว แต่มีรูปภาพ ${failed} รูปอัปโหลดไม่สำเร็จ กดบันทึกอีกครั้งเพื่อลองใหม่`);
-      error.partialSuccess = true;
-      error.diagnostic = firstFailure;
-      throw error;
     }
 
     const savedParcel = parcel.savedParcelRecord;
     if (window.MapParcelManagement.upsertCachedParcel) {
       window.MapParcelManagement.upsertCachedParcel(savedParcel);
     }
+    parcel.photos?.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
+    parcel.photos = [];
+    temporaryParcelLayers.removeLayer(parcel.layer);
+    temporaryParcels.delete(parcel.id);
+    if (selectedTemporaryParcelId === parcel.id) selectedTemporaryParcelId = null;
+    if (currentDetailParcelId === parcel.id) window.MapUi.closeCurrentResultPanel();
+    refreshTemporaryParcelList();
+    renderTemporaryParcelSaveAction(null);
     if (!window.MapParcelManagement.refreshMyParcelsIfOpen()) {
       if (window.MapParcelManagement.refreshSavedParcelsState) {
         await window.MapParcelManagement.refreshSavedParcelsState();
@@ -1409,14 +1406,14 @@
         await refreshOwnedParcelLayersFromApi();
       }
     }
-    parcel.photos?.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
-    temporaryParcelLayers.removeLayer(parcel.layer);
-    temporaryParcels.delete(parcel.id);
-    if (selectedTemporaryParcelId === parcel.id) selectedTemporaryParcelId = null;
-    if (currentDetailParcelId === parcel.id) window.MapUi.closeCurrentResultPanel();
-    refreshTemporaryParcelList();
-    renderTemporaryParcelSaveAction(parcel);
-    return savedParcel;
+    if (!failed) return savedParcel;
+    return {
+      parcel: savedParcel,
+      partialSuccess: true,
+      message: ambiguous
+        ? `บันทึกแปลงเรียบร้อยแล้ว แต่มีรูปภาพ ${failed} รูปที่อัปโหลดไม่สำเร็จหรือไม่ทราบผล กรุณาตรวจสอบรูปที่บันทึกแล้วก่อนเพิ่มรูปจากเมนูแก้ไขข้อมูลแปลง`
+        : `บันทึกแปลงเรียบร้อยแล้ว แต่มีรูปภาพ ${failed} รูปที่อัปโหลดไม่สำเร็จ สามารถเพิ่มรูปภาพภายหลังได้จากเมนูแก้ไขข้อมูลแปลง`,
+    };
   }
 
   function getCompletedTemporaryParcels() {
