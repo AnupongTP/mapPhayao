@@ -2,6 +2,7 @@ const { Readable } = require("node:stream");
 const createHttpError = require("../utils/httpError");
 const { atGoogleStage, tagGoogleError } = require("../utils/googleError");
 const { createAppsScriptDriveBridge } = require("./appsScriptDriveBridge");
+const { createServiceAccountDriveRead } = require("./serviceAccountDriveRead");
 
 const SPREADSHEET_TABS = Object.freeze({ users: "users", parcels: "parcels" });
 const PARCEL_HEADERS = Object.freeze([
@@ -169,6 +170,8 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
         });
       } catch { /* A missing bridge is reported by getImage without changing writes. */ }
     }
+  } else if (readProvider === "service-account") {
+    readDrive = createServiceAccountDriveRead({ google, credentials, folderId });
   } else if (readProvider === "oauth") {
     const clientId = env.GOOGLE_DRIVE_OAUTH_CLIENT_ID;
     const clientSecret = env.GOOGLE_DRIVE_OAUTH_CLIENT_SECRET;
@@ -202,7 +205,7 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
   }
   function requireReadDrive() {
     if (!readDrive) {
-      const message = readProvider === "apps-script" || readProvider === "oauth"
+      const message = ["apps-script", "oauth", "service-account"].includes(readProvider)
         ? "บริการอ่านรูปภาพแปลงยังไม่พร้อมใช้งาน"
         : "Invalid Google Drive read provider configuration";
       throw tagGoogleError(createHttpError(503, message), "drive-config");
@@ -273,9 +276,22 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
 
   return {
     enabled: true,
+    readProvider,
+    async readDashboardRows() {
+      const response = await atGoogleStage("sheets-read", () => sheets.spreadsheets.values.get({
+        spreadsheetId, range: "parcels!A1:P",
+      }));
+      const [headers = [], ...rows] = response.data.values || [];
+      if (headers.length !== PARCEL_HEADERS.length ||
+        headers.some((header, index) => header !== PARCEL_HEADERS[index])) {
+        throw tagGoogleError(new Error("Google parcels sheet headers do not match the expected A-P contract"),
+          "sheets-header-check");
+      }
+      return rows;
+    },
     async uploadImage(bytes, fileName, options) { return requireDrive().uploadImage(bytes, fileName, options); },
     async deleteImage(fileId) { return requireDrive().deleteImage(fileId); },
-    async getImage(fileId) { return requireReadDrive().getImage(fileId); },
+    async getImage(fileId, diagnostic) { return requireReadDrive().getImage(fileId, diagnostic); },
     upsertUser(user) { return upsert(SPREADSHEET_TABS.users, user.id, userCells(user)); },
     upsertParcel(parcel) {
       return atGoogleStage("sheets-upsert-parcel", () => serializeWrite(async () => {

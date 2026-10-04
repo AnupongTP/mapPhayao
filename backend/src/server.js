@@ -15,6 +15,7 @@ const locationReportRoutes = require("./routes/locationReportRoutes");
 const areaAnalysisRoutes = require("./routes/areaAnalysisRoutes");
 const lineRoutes = require("./routes/lineRoutes");
 const hazardLayerRoutes = require("./routes/hazardLayerRoutes");
+const dashboardRoutes = require("./routes/dashboardRoutes");
 
 const port = process.env.PORT || 3000;
 function createApp(dependencies = {}) {
@@ -64,16 +65,24 @@ app.use("/api/pgconnect", pgConnectRoutes);
 app.use("/api/rice-suitability", riceSuitabilityRoutes);
 app.use("/api/location-report", locationReportRoutes);
 app.use("/api/area-analysis", areaAnalysisRoutes);
-app.use("/api/parcels", dependencies.lineTokenService || dependencies.googleIntegration
+const activeParcelRoutes = dependencies.lineTokenService || dependencies.googleIntegration
   ? parcelRoutes.createParcelRoutes({
     lineTokenService: dependencies.lineTokenService,
     googleIntegration: dependencies.googleIntegration,
   })
-  : parcelRoutes);
+  : parcelRoutes;
+app.use("/api/parcels", activeParcelRoutes);
 app.use("/api/line", dependencies.lineController
   ? lineRoutes.createLineRoutes(dependencies.lineController)
   : lineRoutes);
 app.use("/api/hazard-layers", hazardLayerRoutes);
+const activeDashboardRoutes = dashboardRoutes.createDashboardRoutes({
+  googleIntegration: activeParcelRoutes.googleIntegration,
+  database: dependencies.dashboardDatabase,
+  now: dependencies.dashboardNow,
+});
+app.locals.dashboardService = activeDashboardRoutes.dashboardService;
+app.use("/api/public/dashboard", activeDashboardRoutes);
 
 if (typeof dependencies.registerRoutes === "function") {
   dependencies.registerRoutes(app);

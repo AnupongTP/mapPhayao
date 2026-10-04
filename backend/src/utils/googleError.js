@@ -17,6 +17,11 @@ const SAFE_BRIDGE_CATEGORIES = new Set([
   "invalid-config", "timeout", "network", "http", "invalid-json", "rejected",
   "invalid-file-id", "invalid-content",
 ]);
+const SAFE_DRIVE_READ_CATEGORIES = new Set([
+  "service-account-auth-failed", "service-account-permission-denied", "drive-file-not-found",
+  "drive-file-invalid", "drive-parent-mismatch", "drive-mime-invalid", "drive-read-timeout",
+  "drive-network-error", "drive-stream-error", "drive-api-error",
+]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function tagGoogleError(error, stage) {
@@ -48,7 +53,8 @@ function googleErrorDetails(error) {
     ...(safeCode(apiError?.status ?? error?.code) ? { code: safeCode(apiError?.status ?? error?.code) } : {}),
     ...(error?.code === "SHEET_HEADER_MISMATCH" ? { reason: "sheet-header-mismatch" } :
       safeCode(apiError?.errors?.[0]?.reason) ? { reason: safeCode(apiError.errors[0].reason) } : {}),
-    ...(SAFE_BRIDGE_CATEGORIES.has(error?.bridgeCategory) ? { category: error.bridgeCategory } :
+    ...(SAFE_DRIVE_READ_CATEGORIES.has(error?.driveReadCategory) ? { category: error.driveReadCategory } :
+      SAFE_BRIDGE_CATEGORIES.has(error?.bridgeCategory) ? { category: error.bridgeCategory } :
       readCategory ? { category: readCategory } : {}),
     message: error?.googleStage === "drive-config"
       ? "Google Drive provider configuration is incomplete"

@@ -15,7 +15,7 @@ const env = {
   GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN: "fake-refresh",
 };
 
-function fakeGoogle() {
+function fakeGoogle(headers = PARCEL_HEADERS) {
   const calls = [];
   class GoogleAuth {
     constructor(options) { this.options = options; }
@@ -31,7 +31,8 @@ function fakeGoogle() {
       return { spreadsheets: { values: {
         async get({ range }) {
           calls.push({ operation: "sheets-get", range });
-          return { data: { values: range === "parcels!A1:P1" ? [PARCEL_HEADERS] : [] } };
+          return { data: { values: range === "parcels!A1:P1" ? [PARCEL_HEADERS]
+            : range === "parcels!A1:P" ? [headers, ["private", "", "PY-1", "Example"]] : [] } };
         },
         async append(args) { calls.push({ operation: "sheets-append", args }); },
       } } };
@@ -50,6 +51,17 @@ function fakeGoogle() {
   };
   return { google, calls, GoogleAuth, OAuth2 };
 }
+
+test("Dashboard Sheet read validates A:P header and performs no write", async () => {
+  const fake = fakeGoogle();
+  const integration = createGoogleParcelIntegration(env, fake.google);
+  assert.deepEqual(await integration.readDashboardRows(), [["private", "", "PY-1", "Example"]]);
+  assert.deepEqual(fake.calls.filter((call) => call.operation.startsWith("sheets-") &&
+    call.operation !== "sheets-client"), [{ operation: "sheets-get", range: "parcels!A1:P" }]);
+  const bad = fakeGoogle([...PARCEL_HEADERS.slice(0, 15), "unexpected"]);
+  await assert.rejects(() => createGoogleParcelIntegration(env, bad.google).readDashboardRows(),
+    { googleStage: "sheets-header-check" });
+});
 
 test("Sheets uses service account while Drive create/read/delete use OAuth2", async () => {
   const fake = fakeGoogle();
