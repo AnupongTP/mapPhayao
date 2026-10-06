@@ -1990,21 +1990,71 @@ button.panel-icon-action[hidden] {
 
 .saved-photo-edit-action {
   position: absolute;
-  top: 4px;
-  right: 4px;
-  min-width: 36px;
-  min-height: 36px;
-  border: 1px solid #cbd5e1;
+  top: 2px;
+  right: 2px;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
   border-radius: 4px;
-  background: #ffffff;
-  color: #0f172a;
-  font-size: 12px;
+  background: transparent;
+  color: #ffffff;
+  font-size: 17px;
+  text-shadow: 0 1px 3px #0f172a, 0 0 5px #0f172a;
+  cursor: pointer;
 }
+
+.saved-photo-edit-action:focus-visible { outline: 2px solid #0f766e; }
 
 .saved-photo-edit-placeholder,
 .saved-photo-edit-message {
   color: #475569;
   font-size: 12px;
+}
+
+.parcel-modal-error.is-progress {
+  color: #374151;
+}
+
+.parcel-confirm-message {
+  margin: 0;
+  color: #374151;
+  line-height: 1.5;
+}
+
+.parcel-confirm-destructive {
+  background: #b91c1c;
+  border-color: #b91c1c;
+  color: #ffffff;
+}
+
+.parcel-confirm-destructive:hover,
+.parcel-confirm-destructive:focus-visible {
+  background: #991b1b;
+  border-color: #991b1b;
+}
+
+.map-action-notice {
+  position: fixed;
+  top: calc(68px + env(safe-area-inset-top));
+  left: 50%;
+  z-index: 1450;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 11px 14px;
+  border-radius: 6px;
+  background: #155e46;
+  color: #ffffff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.2);
+  line-height: 1.45;
+  transform: translateX(-50%);
+}
+
+.map-action-notice[hidden] {
+  display: none;
 }
 
 .saved-photo-edit-placeholder {
@@ -2441,6 +2491,10 @@ button.panel-icon-action[hidden] {
     line-height: 1.35;
     text-align: center;
     transform: translateX(-50%);
+  }
+
+  .mobile-parcel-drawing .map-action-notice {
+    top: calc(152px + env(safe-area-inset-top));
   }
 
   .mobile-parcel-draw-reticle {

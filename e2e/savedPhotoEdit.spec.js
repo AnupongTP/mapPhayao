@@ -153,6 +153,14 @@ test("mobile edit stages photos locally, Undo and Cancel do not mutate Google, t
     const sheet = page.locator("#parcel-edit-sheet");
     await expect(sheet.locator(".saved-photo-edit-count")).toHaveText("1/5");
     await expect(sheet.locator(".saved-photo-edit-item img")).toHaveAttribute("src", /^blob:/);
+    const removeButton = sheet.getByRole("button", { name: "ทำเครื่องหมายลบรูปภาพ" });
+    await expect(removeButton.locator("i.fa-xmark")).toBeVisible();
+    const removeStyle = await removeButton.evaluate((button) => ({
+      background: getComputedStyle(button).backgroundColor,
+      width: button.getBoundingClientRect().width,
+    }));
+    expect(removeStyle.background).toBe("rgba(0, 0, 0, 0)");
+    expect(removeStyle.width).toBeGreaterThanOrEqual(40);
     await sheet.getByRole("button", { name: "ทำเครื่องหมายลบรูปภาพ" }).click();
     await expect(sheet.locator(".saved-photo-edit-item")).toContainText("รอลบ");
     await sheet.getByRole("button", { name: "ยกเลิกการลบรูปภาพ" }).click();

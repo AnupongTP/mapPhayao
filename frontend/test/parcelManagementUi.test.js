@@ -19,6 +19,20 @@ const generatedUiCss = fs.readFileSync(
   "utf8",
 );
 
+test("saved parcel header action uses the overflow icon without changing its return action", () => {
+  assert.match(uiSource, /returnButton\.replaceChildren\(uiIcons\.create\("ellipsis-vertical"\)\)/);
+  assert.match(uiSource, /savedParcelPanelActions\.onReturn\(savedParcelPanelParcel\)/);
+  assert.match(uiSource, /setResultPanelTitle\(panel, "ข้อมูลแปลงที่บันทึกไว้"\)/);
+  assert.match(uiSource, /if \(parcelState\?\.savedParcel\) showSavedParcelAction\(panel, parcelState\.savedParcel\)/);
+  assert.match(mapSource, /savedParcel: detail,/);
+});
+
+test("saved photo remove control uses the close icon and retains a mobile tap target", () => {
+  const photoSource = fs.readFileSync(path.join(frontendRoot, "js/saved-photo-edit.js"), "utf8");
+  assert.match(photoSource, /markedForDelete\.has\(photo\.id\)\s*\? "undo" : "close"/);
+  assert.match(cssSource, /\.saved-photo-edit-action\s*\{[^}]*width: 40px;[^}]*height: 40px;[^}]*background: transparent;/s);
+});
+
 function createDeferred() {
   let resolve;
   let reject;
@@ -225,10 +239,12 @@ test("parcel name dialog is reused and becomes a mobile bottom sheet only", () =
   assert.match(uiSource, /const cancelButton = createElement\("button", "panel-button secondary", "ยกเลิก"\)/);
   assert.match(uiSource, /options\?\.confirmText \|\| "บันทึก"/);
   assert.match(uiSource, /error\.textContent = TEXT\.parcelNameRequired/);
-  assert.match(uiSource, /cancelButton\.addEventListener\("click", \(\) => close\(null\)\)/);
+  assert.match(uiSource, /cancelButton\.addEventListener\("click", cancel\)/);
   assert.match(uiSource, /confirmButton\.addEventListener\("click", submit\)/);
   assert.match(mapSource, /title: "รายละเอียดแปลง"/);
-  assert.match(mapSource, /confirmText: "เริ่มวิเคราะห์"/);
+  assert.match(mapSource, /confirmText: "บันทึกแปลง"/);
+  assert.match(uiSource, /function confirmAction/);
+  assert.doesNotMatch(mapSource, /window\.confirm\(/);
 
   assert.match(desktopCss, /\.parcel-modal-backdrop \{[\s\S]*align-items: center;[\s\S]*justify-content: center;/);
   assert.match(desktopCss, /\.parcel-modal \{[\s\S]*width: min\(420px, calc\(100vw - 32px\)\);/);

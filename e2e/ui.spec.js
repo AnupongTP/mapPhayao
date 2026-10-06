@@ -415,7 +415,91 @@ test("mobile drawing HUD supports add, undo, cancellation, and centered reticle"
   await expect(hud).toBeHidden();
   await page.locator(".parcel-draw-button").click();
   await expect(hud).toBeVisible();
+  await hud.locator(".mobile-parcel-draw-add").click();
   await hud.locator(".mobile-parcel-draw-cancel").click();
+  const dialog = page.getByRole("dialog", { name: "ยกเลิกการวาดแปลง?" });
+  await expect(dialog).toContainText("จุดที่วาดไว้ทั้งหมดจะถูกลบ");
+  await expect(dialog).not.toContainText("mapphayaoliff.netlify.app");
+  await page.setViewportSize({ width: 393, height: 844 });
+  const dialogFit = await dialog.evaluate((element) => ({
+    width: element.getBoundingClientRect().width,
+    right: element.getBoundingClientRect().right,
+    overflow: document.documentElement.scrollWidth - innerWidth,
+  }));
+  expect(dialogFit.width).toBeLessThanOrEqual(393);
+  expect(dialogFit.right).toBeLessThanOrEqual(393);
+  expect(dialogFit.overflow).toBe(0);
+  await dialog.getByRole("button", { name: "วาดต่อ" }).click();
+  await expect(hud.locator(".mobile-parcel-draw-undo")).toBeEnabled();
+  await hud.locator(".mobile-parcel-draw-cancel").click();
+  await dialog.getByRole("button", { name: "ยกเลิกการวาด" }).click();
+  await expect(hud).toBeHidden();
+  expect(forbidden).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("desktop zero-area polygon keeps its vertices until corrected", async ({ page, context }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const forbidden = await prepareContext(context);
+  const errors = watchPageErrors(page);
+  await openMap(page);
+  await page.locator(".parcel-draw-button").click();
+  const map = await page.locator("#map").boundingBox();
+  const centerX = map.x + map.width / 2;
+  const centerY = map.y + map.height / 2;
+  const vertices = page.locator(".leaflet-marker-pane .leaflet-editing-icon");
+  for (const [index, dx] of [-90, 0, 90].entries()) {
+    await page.mouse.click(centerX + dx, centerY);
+    await expect(vertices).toHaveCount(index + 1);
+    await page.waitForTimeout(70);
+  }
+  await vertices.first().click();
+  await expect(page.locator(".parcel-modal")).toBeHidden();
+  await expect(vertices).toHaveCount(3);
+  await expect(page.locator(".parcel-draw-button")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("ขอบเขตแปลงไม่ถูกต้อง กรุณาเพิ่มหรือปรับจุดก่อนเสร็จสิ้น")).toBeVisible();
+  await page.waitForTimeout(70);
+  await page.mouse.click(centerX + 90, centerY + 80);
+  await expect(vertices).toHaveCount(4);
+  await vertices.first().click();
+  await expect(page.locator(".parcel-modal")).toBeVisible();
+  expect(forbidden).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("mobile zero-area finish keeps points until a corrected polygon is complete", async ({ page, context }, testInfo) => {
+  test.skip(!testInfo.project.name.startsWith("mobile"));
+  const forbidden = await prepareContext(context);
+  const errors = watchPageErrors(page);
+  await openMap(page);
+  await page.locator(".parcel-draw-button").click();
+  const hud = page.locator("#mobile-parcel-draw-hud");
+  await hud.locator(".mobile-parcel-draw-add").click();
+  await panMap(page, 90, 0);
+  await hud.locator(".mobile-parcel-draw-add").click();
+  await panMap(page, 0, 90);
+  await hud.locator(".mobile-parcel-draw-add").click();
+  await page.evaluate(() => {
+    window.originalDrawArea = L.GeometryUtil.geodesicArea;
+    L.GeometryUtil.geodesicArea = () => 0;
+  });
+  await hud.locator(".mobile-parcel-draw-finish").click();
+  await expect(hud).toBeVisible();
+  await expect(hud.locator(".mobile-parcel-draw-hint")).toContainText("3 จุด");
+  await expect(page.getByText("ขอบเขตแปลงไม่ถูกต้อง กรุณาเพิ่มหรือปรับจุดก่อนเสร็จสิ้น")).toBeVisible();
+  const hintBounds = await hud.locator(".mobile-parcel-draw-hint").boundingBox();
+  const noticeBounds = await page.locator("#map-action-notice").boundingBox();
+  expect(noticeBounds.y).toBeGreaterThanOrEqual(hintBounds.y + hintBounds.height + 4);
+  await expect(page.locator(".parcel-modal")).toBeHidden();
+  await page.evaluate(() => {
+    L.GeometryUtil.geodesicArea = window.originalDrawArea;
+    delete window.originalDrawArea;
+  });
+  await panMap(page, -50, 0);
+  await hud.locator(".mobile-parcel-draw-add").click();
+  await expect(hud.locator(".mobile-parcel-draw-hint")).toContainText("4 จุด");
+  await hud.locator(".mobile-parcel-draw-finish").click();
+  await expect(page.locator(".parcel-modal")).toBeVisible();
   expect(forbidden).toEqual([]);
   expect(errors).toEqual([]);
 });

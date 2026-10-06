@@ -83,12 +83,8 @@ async function drawMobileParcel(page, name) {
   await hud.locator(".mobile-parcel-draw-finish").click();
   const modal = page.locator(".parcel-modal");
   await expect(modal).toBeVisible();
-    await modal.locator('input[name="parcelName"]').fill(name);
-  const analysis = page.waitForResponse((response) => response.url().includes("/api/area-analysis/polygon"));
-  await modal.getByRole("button", { name: "เริ่มวิเคราะห์" }).click();
-  expect((await analysis).status()).toBe(200);
-  await page.locator(".leaflet-popup").getByRole("button", { name: "เปิดรายละเอียด" }).click();
-  await expect(page.locator("#mobile-parcel-save-button")).toBeVisible();
+  await modal.locator('input[name="parcelName"]').fill(name);
+  await expect(modal.getByRole("button", { name: "บันทึกแปลง" })).toBeVisible();
 }
 
 module.exports = {

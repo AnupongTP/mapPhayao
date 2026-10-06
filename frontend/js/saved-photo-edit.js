@@ -81,8 +81,8 @@
       const actionLabel = kind === "existing"
         ? markedForDelete.has(photo.id) ? "ยกเลิกการลบรูปภาพ" : "ทำเครื่องหมายลบรูปภาพ"
         : "นำรูปภาพใหม่ออก";
-      button.appendChild(window.MapUiIcons.create(kind === "existing"
-        ? markedForDelete.has(photo.id) ? "undo" : "trash-can" : "close"));
+      button.appendChild(window.MapUiIcons.create(kind === "existing" && markedForDelete.has(photo.id)
+        ? "undo" : "close"));
       button.type = "button";
       button.disabled = busy || Boolean(operationId);
       button.setAttribute("aria-label", actionLabel);

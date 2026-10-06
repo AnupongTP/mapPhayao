@@ -14,6 +14,7 @@ async function expectHeaderIconAction(page, selector, iconClass, label, checkHov
   const button = page.locator(selector);
   await expect(button).toHaveAttribute("aria-label", label);
   await expect(button.locator(`i.fa-solid.${iconClass}`)).toBeVisible();
+  if (checkHover) await page.mouse.move(0, 0);
   const layout = await button.evaluate((element) => {
     const style = getComputedStyle(element);
     const bounds = element.getBoundingClientRect();
@@ -35,7 +36,9 @@ async function expectHeaderIconAction(page, selector, iconClass, label, checkHov
   });
   expect(layout.width).toBeGreaterThanOrEqual(44);
   expect(layout.height).toBeGreaterThanOrEqual(44);
-  expect(layout.background).toBe("rgba(0, 0, 0, 0)");
+  const background = layout.background.match(/^rgba?\(\d+,\s*\d+,\s*\d+(?:,\s*([\d.]+))?\)$/);
+  expect(background).not.toBeNull();
+  expect(Number(background[1] ?? 1)).toBeLessThan(0.2);
   expect(layout.border).toBe("0px");
   expect(layout.shadow).toBe("none");
   expect(layout.titleRight).toBeLessThanOrEqual(layout.left);
@@ -256,6 +259,8 @@ test("saved parcels share a scrollable list, show stored details, and survive a 
     await expect(detailPanel).toBeVisible();
     await expect(detailPanel.locator(".panel-header h2")).toHaveText("ผลการตรวจสอบพื้นที่แปลง");
     await expect(detailPanel).toContainText("ข้อมูลพื้นที่แปลง");
+    await expectHeaderIconAction(page, "#result-panel-return-button", "fa-ellipsis-vertical", "กลับไปแปลงของฉัน", testInfo.project.name === "desktop-chromium");
+    await expect(detailPanel.locator(".result-panel-close")).toHaveCount(1);
     await expect(detailPanel).toContainText(`${prefix}-0`);
     await expect(detailPanel).not.toContainText("อัปเดตล่าสุด");
     expect(analysisRequests).toHaveLength(1);
@@ -279,11 +284,17 @@ test("saved parcels share a scrollable list, show stored details, and survive a 
     await expect(detailPanel.locator(".panel-header h2")).toHaveText("ข้อมูลแปลงที่บันทึกไว้");
     await expect(detailPanel.locator("#saved-parcel-open-details")).toBeVisible();
     await expect(detailPanel.locator("#result-panel-return-button")).toBeVisible();
-    await expectHeaderIconAction(page, "#result-panel-return-button", "fa-map", "กลับไปแปลงของฉัน", testInfo.project.name === "desktop-chromium");
+    await expectHeaderIconAction(page, "#result-panel-return-button", "fa-ellipsis-vertical", "กลับไปแปลงของฉัน", testInfo.project.name === "desktop-chromium");
+    await expect(detailPanel.locator("#result-panel-return-button")).toHaveCount(1);
+    await expect(detailPanel.locator(".result-panel-close")).toHaveCount(1);
     await detailPanel.locator("#saved-parcel-open-details").click();
     await expect(detailPanel.locator(".panel-header h2")).toHaveText("ผลการตรวจสอบพื้นที่แปลง");
+    await expectHeaderIconAction(page, "#result-panel-return-button", "fa-ellipsis-vertical", "กลับไปแปลงของฉัน", testInfo.project.name === "desktop-chromium");
     expect(analysisRequests).toHaveLength(1);
-    await page.getByRole("button", { name: "ปิดหน้าต่างผลการตรวจสอบ" }).click();
+    await detailPanel.locator("#result-panel-return-button").click();
+    await expect(detailPanel).toBeHidden();
+    await expect(sheet).toBeVisible();
+    await sheet.getByRole("button", { name: "ปิด" }).click();
     await page.locator("#saved-parcels-control-button").click();
     if (await storedCard.locator(".saved-parcel-header").getAttribute("aria-expanded") === "false") {
       await storedCard.locator(".saved-parcel-header").click();
@@ -407,9 +418,8 @@ test("a UI-drawn saved parcel deletes once without stale follow-up requests", as
 
   const name = "E2E-UI-DELETE";
   await drawMobileParcel(page, name);
-  await page.locator("#mobile-parcel-save-button").click();
-  const saveSheet = page.locator("#parcel-save-sheet");
-  await expect(saveSheet).toContainText(name);
+  const saveSheet = page.locator(".parcel-modal");
+  await expect(saveSheet.locator('input[name="parcelName"]')).toHaveValue(name);
   const createdResponse = page.waitForResponse((response) =>
     response.url().endsWith("/api/parcels") && response.request().method() === "POST");
   await saveSheet.getByRole("button", { name: "บันทึกแปลง" }).click();
@@ -479,7 +489,7 @@ test("a UI-drawn saved parcel deletes once without stale follow-up requests", as
   ]);
 });
 
-test("short mobile save sheet keeps controls reachable after drawing", async ({ page, context }, testInfo) => {
+test("short mobile create form keeps controls reachable after drawing", async ({ page, context }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium");
   await page.setViewportSize({ width: 360, height: 560 });
   const forbidden = await prepareContext(context, { token });
@@ -487,33 +497,28 @@ test("short mobile save sheet keeps controls reachable after drawing", async ({ 
   await openMap(page, true);
   await expect.poll(() => page.evaluate(() => window.MapLiffMode.isReady())).toBe(true);
   await drawMobileParcel(page, "UX-SAVE-FORM");
-  await expect(page.locator("#result-panel .panel-header #mobile-parcel-save-button")).toBeVisible();
-  await expectHeaderIconAction(page, "#mobile-parcel-save-button", "fa-floppy-disk", "บันทึกแปลง");
-  await expect(page.locator("#result-panel-content #mobile-parcel-save-button")).toHaveCount(0);
-  await expect(page.locator("#mobile-temporary-parcels-button")).toBeVisible();
-  await page.locator("#mobile-parcel-save-button").click();
-  const sheet = page.locator("#parcel-save-sheet");
+  await expect(page.locator("#mobile-parcel-save-button")).toHaveCount(0);
+  const sheet = page.locator(".parcel-modal");
   await expect(sheet).toBeVisible();
   const layout = await sheet.evaluate((element) => {
-    const sheetRect = element.querySelector(".parcel-sheet").getBoundingClientRect();
-    const summary = element.querySelector(".parcel-save-summary");
-    const summaryRect = summary.getBoundingClientRect();
-    const actions = element.querySelector(".parcel-sheet-actions").getBoundingClientRect();
+    const sheetRect = element.getBoundingClientRect();
+    const actions = element.querySelector(".parcel-modal-actions").getBoundingClientRect();
     return {
       sheetBottom: sheetRect.bottom,
-      summaryRight: summaryRect.right,
+      contentRight: element.scrollWidth + sheetRect.left,
       sheetRight: sheetRect.right,
       actionsBottom: actions.bottom,
       hasEditableFields: Boolean(element.querySelector("input, select, textarea")),
     };
   });
-  expect(layout.summaryRight).toBeLessThanOrEqual(layout.sheetRight + 1);
-  expect(layout.hasEditableFields).toBe(false);
-  expect(layout.actionsBottom).toBeLessThanOrEqual(layout.sheetBottom + 1);
+  expect(layout.contentRight).toBeLessThanOrEqual(layout.sheetRight + 1);
+  expect(layout.hasEditableFields).toBe(true);
   expect(layout.sheetBottom).toBeLessThanOrEqual(page.viewportSize().height + 1);
-  await expect(sheet).toContainText("UX-SAVE-FORM");
+  await expect(sheet.locator('input[name="parcelName"]')).toHaveValue("UX-SAVE-FORM");
+  await expect(sheet.getByRole("button", { name: "บันทึกแปลง" })).toBeVisible();
   await sheet.getByRole("button", { name: "ยกเลิก" }).click();
   await expect(sheet).toBeHidden();
+  await expect(page.locator("#temporary-parcel-list .parcel-item")).toHaveCount(1);
   expect(forbidden).toEqual([]);
   expect(errors).toEqual([]);
 });

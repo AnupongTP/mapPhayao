@@ -221,6 +221,7 @@ function createLeafletStub(state) {
           this._latLngs.pop();
         }
         completeShape() {
+          if (this._shapeIsValid && !this._shapeIsValid()) return;
           state.completedShapeCount = (state.completedShapeCount || 0) + 1;
         }
         _vertexChanged() {}
@@ -232,7 +233,7 @@ function createLeafletStub(state) {
     },
     GeometryUtil: {
       geodesicArea(latLngs) {
-        return latLngs.length >= 3 ? 3200 : 0;
+        return latLngs.length >= 3 && !state.invalidDrawArea ? 3200 : 0;
       },
     },
     DomEvent: {
@@ -273,6 +274,7 @@ function createMapHarness(options = {}) {
   const windowEvents = createEventTarget();
   const documentEvents = createEventTarget();
   const leafletState = {};
+  leafletState.invalidDrawArea = Boolean(options.invalidDrawArea);
   const apiCalls = [];
   const pendingReports = [];
   const uiState = {
@@ -371,6 +373,9 @@ function createMapHarness(options = {}) {
     showLocationMessage(message) {
       uiState.messages.push(message);
     },
+    showMapNotice(message) {
+      uiState.messages.push(message);
+    },
     getGeolocationErrorMessage() {
       return "geolocation error";
     },
@@ -385,7 +390,7 @@ function createMapHarness(options = {}) {
     setResultPanelCloseHandler() {},
     clearLineSummaryStatus() {},
     isMobileLayout() {
-      return true;
+      return options.mobileLayout !== false;
     },
     createPopupContent() {
       return "popup";
@@ -397,6 +402,10 @@ function createMapHarness(options = {}) {
     },
     setParcelControlState(state) {
       uiState.parcelControlStates.push({ ...state });
+    },
+    confirmAction({ title, message }) {
+      uiState.confirmMessages.push({ title, message });
+      return Promise.resolve(options.confirmResult !== false);
     },
   };
 
@@ -492,10 +501,6 @@ function createMapHarness(options = {}) {
     dispatchEvent: windowEvents.dispatchEvent,
     setTimeout,
     clearTimeout,
-    confirm(message) {
-      uiState.confirmMessages.push(String(message));
-      return options.confirmResult !== false;
-    },
     console: {
       warn(message) {
         uiState.warnings.push(String(message));
@@ -756,6 +761,40 @@ test("mobile parcel drawing supports first-point undo, area preview, and three-p
   assert.equal(harness.completedShapeCount, 1);
 });
 
+test("invalid mobile polygon area keeps all drawing points", async () => {
+  const harness = createMapHarness({ invalidDrawArea: true });
+  await nextTick();
+  const handlers = harness.uiState.parcelDrawHandlers;
+  handlers.onDraw();
+  [[19.1, 99.1], [19.2, 99.2], [19.3, 99.3]].forEach(([lat, lng]) => {
+    harness.map.setCenter(lat, lng);
+    handlers.onMobileAddVertex();
+  });
+  handlers.onMobileFinish();
+  assert.equal(harness.completedShapeCount, 0);
+  assert.equal(harness.drawHandler._markers.length, 3);
+  assert.equal(last(harness.uiState.parcelControlStates).isDrawing, true);
+  assert.match(last(harness.uiState.messages), /ขอบเขตแปลงไม่ถูกต้อง/);
+});
+
+test("desktop zero-area completion keeps editable drawing points", async () => {
+  const harness = createMapHarness({ invalidDrawArea: true, mobileLayout: false });
+  await nextTick();
+  harness.uiState.parcelDrawHandlers.onDraw();
+  [[19.1, 99.1], [19.2, 99.2], [19.3, 99.3]].forEach(([lat, lng]) => {
+    harness.drawHandler.addVertex({ lat, lng });
+  });
+  harness.drawHandler.completeShape();
+  assert.equal(harness.completedShapeCount, 0);
+  assert.equal(harness.drawHandler.enabled, true);
+  assert.equal(harness.drawHandler._markers.length, 3);
+  assert.equal(last(harness.uiState.parcelControlStates).isDrawing, true);
+  assert.match(last(harness.uiState.messages), /ขอบเขตแปลงไม่ถูกต้อง/);
+  harness.drawHandler.deleteLastVertex();
+  harness.drawHandler.addVertex({ lat: 19.4, lng: 99.3 });
+  assert.equal(harness.drawHandler._markers.length, 3);
+});
+
 test("mobile parcel cancel returns point controls without making an analysis request", async () => {
   const harness = createMapHarness();
   await nextTick();
@@ -763,10 +802,13 @@ test("mobile parcel cancel returns point controls without making an analysis req
 
   handlers.onDraw();
   handlers.onMobileAddVertex();
-  handlers.onCancelDraw();
+  const firstCancel = handlers.onCancelDraw();
+  const repeatedCancel = handlers.onCancelDraw();
+  await Promise.all([firstCancel, repeatedCancel]);
 
   assert.equal(harness.drawHandler.enabled, false);
   assert.equal(last(harness.uiState.parcelControlStates).isDrawing, false);
+  assert.equal(harness.uiState.confirmMessages.length, 1);
   assert.equal(harness.apiCalls.length, 0);
 });
 
@@ -777,11 +819,12 @@ test("mobile parcel cancel keeps the draft when confirmation is declined", async
 
   handlers.onDraw();
   handlers.onMobileAddVertex();
-  handlers.onCancelDraw();
+  await handlers.onCancelDraw();
 
   assert.equal(harness.drawHandler.enabled, true);
   assert.equal(last(harness.uiState.parcelControlStates).isDrawing, true);
   assert.equal(harness.uiState.confirmMessages.length, 1);
+  assert.equal(harness.uiState.confirmMessages[0].title, "ยกเลิกการวาดแปลง?");
   assert.equal(harness.apiCalls.length, 0);
 });
 

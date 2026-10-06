@@ -15,6 +15,8 @@
   let appMap = null;
   let parcelDrawHandler = null;
   let isParcelDrawingActive = false;
+  let drawingCancelPending = false;
+  let currentDraftFormParcelId = null;
   let mobileParcelDrawingVertexCount = 0;
   let editingTemporaryParcelId = null;
   let selectedTemporaryParcelId = null;
@@ -41,6 +43,7 @@
 
   const temporaryParcelLayers = new L.FeatureGroup();
   const temporaryParcels = new Map();
+  const pendingTemporaryDeletes = new Set();
   const savedParcelLayers = new L.FeatureGroup();
   const savedParcelLayerById = new Map();
   const savedParcelRecordById = new Map();
@@ -952,6 +955,7 @@
       window.MapUi.renderParcelResult({
         id: detail.id,
         name: detail.parcelName || detail.parcelCode,
+        savedParcel: detail,
         analysisStatus: "loading",
       });
 
@@ -969,6 +973,7 @@
       window.MapUi.renderParcelResult({
         id: detail.id,
         name: detail.parcelName || detail.parcelCode,
+        savedParcel: detail,
         analysisStatus: "success",
         analysis,
         photos: detail.photos,
@@ -1399,12 +1404,16 @@
     if (currentDetailParcelId === parcel.id) window.MapUi.closeCurrentResultPanel();
     refreshTemporaryParcelList();
     renderTemporaryParcelSaveAction(null);
-    if (!window.MapParcelManagement.refreshMyParcelsIfOpen()) {
-      if (window.MapParcelManagement.refreshSavedParcelsState) {
-        await window.MapParcelManagement.refreshSavedParcelsState();
-      } else {
-        await refreshOwnedParcelLayersFromApi();
+    try {
+      if (!window.MapParcelManagement.refreshMyParcelsIfOpen()) {
+        if (window.MapParcelManagement.refreshSavedParcelsState) {
+          await window.MapParcelManagement.refreshSavedParcelsState();
+        } else {
+          await refreshOwnedParcelLayersFromApi();
+        }
       }
+    } catch {
+      window.MapUi.showLocationMessage("บันทึกแปลงแล้ว แต่โหลดรายการแปลงไม่สำเร็จ กรุณาเปิดรายการอีกครั้ง");
     }
     if (!failed) return savedParcel;
     return {
@@ -1589,21 +1598,9 @@
 
   function openTemporaryParcelDetails(parcelId) {
     const parcel = temporaryParcels.get(parcelId);
-    if (!parcel) {
-      return;
-    }
-
-    currentDetailParcelId = parcelId;
-    parcelDetailPanelOpen = true;
-    clearSavedParcelHighlight();
-    selectedTemporaryParcelId = parcelId;
-    refreshParcelStyles();
-    refreshTemporaryParcelList();
-    window.MapUi.renderParcelResult(parcel);
-    renderTemporaryParcelSaveAction(parcel);
-    if (parcel.layer && parcel.layer.closePopup) {
-      parcel.layer.closePopup();
-    }
+    if (!parcel || currentDraftFormParcelId) return;
+    parcel.layer?.closePopup?.();
+    openTemporaryParcelForm(parcelId);
   }
 
   function focusTemporaryParcel(parcelId) {
@@ -1643,13 +1640,51 @@
     refreshTemporaryParcelList();
   }
 
-  async function requestParcelName(defaultName) {
-    return window.MapUi.promptParcelName({
+  async function openTemporaryParcelForm(parcelId) {
+    const parcel = temporaryParcels.get(parcelId);
+    if (!parcel || currentDraftFormParcelId) return;
+    currentDraftFormParcelId = parcelId;
+    try {
+      await window.MapUi.promptParcelName({
       title: "รายละเอียดแปลง",
-      initialValue: defaultName,
-      confirmText: "เริ่มวิเคราะห์",
+      initialValue: parcel.name,
+      initialDetails: parcel,
+      confirmText: "บันทึกแปลง",
       allowPhotos: true,
+      onCancel: (details) => {
+        Object.assign(parcel, { ...details, name: details.name || parcel.name });
+        updateTemporaryParcelPopup(parcel, false);
+        refreshTemporaryParcelList();
+      },
+      onSubmit: async (details, onProgress) => {
+        if (!isLiffModeEnabled() || !window.MapLiffMode.isReady()) {
+          throw new Error(getLiffUnavailableMessage());
+        }
+        Object.assign(parcel, details);
+        refreshTemporaryParcelList();
+        if (parcel.analysisStatus !== "success") {
+          onProgress("กำลังตรวจสอบขอบเขตแปลง...");
+          await analyzeTemporaryParcel(parcelId);
+        }
+        if (parcel.analysisStatus !== "success") {
+          throw new Error(parcel.analysisError || "ตรวจสอบขอบเขตแปลงไม่สำเร็จ กรุณาลองใหม่");
+        }
+        let result;
+        try {
+          result = await saveTemporaryParcel(parcelId, onProgress);
+        } catch {
+          throw new Error("ไม่สามารถบันทึกแปลงได้ กรุณาลองใหม่");
+        }
+        window.MapUi.showMapNotice(result?.message || "บันทึกแปลงเรียบร้อยแล้ว");
+        if (result?.partialSuccess) {
+          window.MapParcelManagement.openMyParcelsSheet({ focusParcelId: result.parcel.id, notice: result.message });
+        }
+        return result;
+      },
     });
+    } finally {
+      currentDraftFormParcelId = null;
+    }
   }
 
   async function editTemporaryParcelDetails(parcelId) {
@@ -1743,7 +1778,7 @@
     }
   }
 
-  async function registerTemporaryParcel(layer, details) {
+  function registerTemporaryParcel(layer, details) {
     const parcelId = createFrontendId();
     const parcel = {
       id: parcelId,
@@ -1769,8 +1804,9 @@
     bindTemporaryParcelEvents(parcel);
     updateTemporaryParcelPopup(parcel, false);
     refreshTemporaryParcelList();
-    selectTemporaryParcel(parcelId);
-    await analyzeTemporaryParcel(parcelId);
+    selectedTemporaryParcelId = parcelId;
+    refreshParcelStyles();
+    return parcel;
   }
 
   function startTemporaryParcelEdit(parcelId) {
@@ -1869,16 +1905,28 @@
     await analyzeTemporaryParcel(parcelId);
   }
 
-  function deleteTemporaryParcel(parcelId) {
+  async function deleteTemporaryParcel(parcelId) {
     const parcel = temporaryParcels.get(parcelId);
-    if (!parcel) {
+    if (!parcel || pendingTemporaryDeletes.has(parcelId)) {
       return;
     }
 
-    const shouldDelete = window.confirm(`ลบ ${parcel.name} ใช่หรือไม่`);
+    pendingTemporaryDeletes.add(parcelId);
+    let shouldDelete;
+    try {
+      shouldDelete = await window.MapUi.confirmAction({
+        title: "ลบร่างแปลง?",
+        message: `ลบ ${parcel.name} และข้อมูลที่ยังไม่บันทึกใช่หรือไม่`,
+        continueText: "เก็บร่างไว้",
+        confirmText: "ลบร่างแปลง",
+      });
+    } finally {
+      pendingTemporaryDeletes.delete(parcelId);
+    }
     if (!shouldDelete) {
       return;
     }
+    if (currentDraftFormParcelId === parcelId || !temporaryParcels.has(parcelId)) return;
 
     if (parcel.requestController) {
       parcel.requestController.abort();
@@ -2093,25 +2141,38 @@
     if (
       !isParcelDrawingActive
       || !window.MapUi.isMobileLayout()
-      || getActiveParcelDrawVertexCount() < 3
       || !parcelDrawHandler
       || typeof parcelDrawHandler.completeShape !== "function"
     ) {
       return;
     }
+    if (!isActiveParcelShapeValid()) return;
     parcelDrawHandler.completeShape();
   }
 
-  function confirmCancelMobileParcelDrawing() {
-    if (!isParcelDrawingActive) {
+  function isActiveParcelShapeValid() {
+    if (getActiveParcelDrawVertexCount() >= 3 && getActiveParcelDrawAreaRai() > 0) return true;
+    window.MapUi.showMapNotice("ขอบเขตแปลงไม่ถูกต้อง กรุณาเพิ่มหรือปรับจุดก่อนเสร็จสิ้น");
+    return false;
+  }
+
+  async function confirmCancelMobileParcelDrawing() {
+    if (!isParcelDrawingActive || drawingCancelPending) {
       return;
     }
-    if (
-      getActiveParcelDrawVertexCount() > 0
-      && typeof window.confirm === "function"
-      && !window.confirm("ยกเลิกการวาดและทิ้งจุดที่เพิ่มไว้ทั้งหมดใช่หรือไม่")
-    ) {
-      return;
+    if (getActiveParcelDrawVertexCount() > 0) {
+      drawingCancelPending = true;
+      try {
+        const confirmed = await window.MapUi.confirmAction({
+          title: "ยกเลิกการวาดแปลง?",
+          message: "จุดที่วาดไว้ทั้งหมดจะถูกลบ",
+          continueText: "วาดต่อ",
+          confirmText: "ยกเลิกการวาด",
+        });
+        if (!confirmed) return;
+      } finally {
+        drawingCancelPending = false;
+      }
     }
     cancelParcelDrawing();
   }
@@ -2131,23 +2192,29 @@
     }
 
     event.preventDefault();
-    cancelParcelDrawing();
+    confirmCancelMobileParcelDrawing();
   }
 
   async function handleDrawCreated(event) {
+    if (!isParcelDrawingActive) return;
     resetParcelDrawingState();
 
     const layer = event.layer;
     layer.setStyle(TEMPORARY_PARCEL_STYLE);
 
-    const defaultName = getNextAvailableParcelName();
-    const selection = await requestParcelName(defaultName);
-
-    if (!selection) {
+    const area = calculateParcelAreaSquareMeters(layer);
+    if (!Number.isFinite(area) || area <= 0) {
+      window.MapUi.showMapNotice("ขอบเขตแปลงไม่ถูกต้อง กรุณาวาดใหม่");
       return;
     }
-
-    await registerTemporaryParcel(layer, selection);
+    const parcel = registerTemporaryParcel(layer, {
+      name: getNextAvailableParcelName(), photos: [], cropType: "rice", riceVariety: "", note: "",
+      plantingDate: (() => {
+        const today = new Date();
+        return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      })(),
+    });
+    await openTemporaryParcelForm(parcel.id);
   }
 
   function startParcelDrawing() {
@@ -2156,7 +2223,7 @@
     }
 
     if (isParcelDrawingActive) {
-      cancelParcelDrawing();
+      confirmCancelMobileParcelDrawing();
       return;
     }
 
@@ -2183,7 +2250,10 @@
       allowIntersection: false,
       repeatMode: false,
       shapeOptions: TEMPORARY_PARCEL_STYLE,
+      drawError: { message: "ขอบเขตแปลงไม่ถูกต้อง กรุณาเพิ่มหรือปรับจุด" },
     });
+    // Leaflet Draw checks vertex count, then disables drawing after draw:created.
+    parcelDrawHandler._shapeIsValid = isActiveParcelShapeValid;
 
     map.on(L.Draw.Event.CREATED, handleDrawCreated);
     map.on(L.Draw.Event.DRAWSTOP, () => {

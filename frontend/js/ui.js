@@ -982,7 +982,7 @@
     returnButton.hidden = true;
     returnButton.setAttribute("aria-label", "กลับไปแปลงของฉัน");
     returnButton.title = "กลับไปแปลงของฉัน";
-    returnButton.replaceChildren(uiIcons.create("parcels"));
+    returnButton.replaceChildren(uiIcons.create("ellipsis-vertical"));
     returnButton.addEventListener("click", () => {
       if (savedParcelPanelActions.onReturn && savedParcelPanelParcel) {
         savedParcelPanelActions.onReturn(savedParcelPanelParcel);
@@ -1193,6 +1193,27 @@
   function showLocationMessage(message) {
     setMobileLocationLauncherLoading(false);
     setLocationStatus(message);
+  }
+
+  function showSavedParcelAction(panel, parcel) {
+    savedParcelPanelParcel = parcel;
+    panel.querySelector("#result-panel-return-button").hidden = !parcel;
+  }
+
+  let mapNoticeTimer = null;
+  function showMapNotice(message) {
+    let notice = document.getElementById("map-action-notice");
+    if (!notice) {
+      notice = createElement("div", "map-action-notice");
+      notice.id = "map-action-notice";
+      notice.setAttribute("role", "status");
+      notice.setAttribute("aria-live", "polite");
+      document.body.appendChild(notice);
+    }
+    window.clearTimeout(mapNoticeTimer);
+    notice.textContent = message;
+    notice.hidden = false;
+    mapNoticeTimer = window.setTimeout(() => { notice.hidden = true; }, 5000);
   }
 
   function getGeolocationErrorMessage(error) {
@@ -1556,9 +1577,14 @@
 
   function promptParcelName(options) {
     return new Promise((resolve) => {
+      const previousFocus = document.activeElement;
       const backdrop = createElement("div", "parcel-modal-backdrop");
       const modal = createElement("div", "parcel-modal");
       const title = createElement("h3", null, options?.title || TEXT.parcelNameField);
+      title.id = `parcel-modal-title-${Date.now()}`;
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+      modal.setAttribute("aria-labelledby", title.id);
       const label = createElement("label");
       label.appendChild(createElement("span", null, options?.allowPhotos ? "ชื่อแปลง" : TEXT.parcelNameField));
       const input = document.createElement("input");
@@ -1704,6 +1730,8 @@
       }
       renderPendingPhotos();
       const error = createElement("p", "parcel-modal-error", "");
+      error.setAttribute("role", "status");
+      error.setAttribute("aria-live", "polite");
       const actions = createElement("div", "parcel-modal-actions");
       const cancelButton = createElement("button", "panel-button secondary", "ยกเลิก");
       uiIcons.setActionLabel(cancelButton, "ยกเลิก");
@@ -1716,30 +1744,73 @@
       uiIcons.setActionLabel(confirmButton, options?.confirmText || "บันทึก", "save");
       confirmButton.type = "button";
 
-      const close = (result) => {
+      let submitting = false;
+      let closed = false;
+      const currentDetails = () => ({
+        name: input.value.trim(), photos,
+        cropType: detailInputs.cropType.value,
+        riceVariety: detailInputs.riceVariety.value.trim(),
+        plantingDate: detailInputs.plantingDate.value,
+        note: detailInputs.note.value.trim(),
+      });
+      const close = (result, photoHandling = "normal") => {
+        if (closed) return;
+        closed = true;
         backdrop.remove();
-        if (!result) addedPhotos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
-        else [...initialPhotos, ...addedPhotos].filter((photo) => !photos.includes(photo)).forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
-        resolve(result && options?.allowPhotos ? {
-          name: result, photos,
-          cropType: detailInputs.cropType.value,
-          riceVariety: detailInputs.riceVariety.value.trim(),
-          plantingDate: detailInputs.plantingDate.value,
-          note: detailInputs.note.value.trim(),
-        } : result);
+        if (photoHandling === "normal") {
+          if (!result) addedPhotos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
+          else [...initialPhotos, ...addedPhotos].filter((photo) => !photos.includes(photo)).forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
+        } else if (photoHandling === "preserve") {
+          [...initialPhotos, ...addedPhotos].filter((photo) => !photos.includes(photo))
+            .forEach((photo) => URL.revokeObjectURL(photo.previewUrl));
+        }
+        previousFocus?.focus?.();
+        resolve(result && options?.allowPhotos ? currentDetails() : result);
       };
 
-      const submit = () => {
+      const submit = async () => {
+        if (submitting) return;
         const value = input.value.trim();
         if (!value) {
           error.textContent = TEXT.parcelNameRequired;
           input.focus();
           return;
         }
+        if (details && !detailInputs.plantingDate.value) {
+          error.textContent = "กรุณาเลือกวันที่ปลูก";
+          detailInputs.plantingDate.focus();
+          return;
+        }
+        if (options?.onSubmit) {
+          submitting = true;
+          confirmButton.disabled = true;
+          cancelButton.disabled = true;
+          error.classList.add("is-progress");
+          error.textContent = "กำลังบันทึกแปลง...";
+          try {
+            const result = await options.onSubmit(currentDetails(), (message) => {
+              error.textContent = message;
+            });
+            close(result, "released");
+          } catch (submitError) {
+            error.classList.remove("is-progress");
+            error.textContent = submitError?.message || "บันทึกแปลงไม่สำเร็จ กรุณาลองใหม่";
+            submitting = false;
+            confirmButton.disabled = false;
+            cancelButton.disabled = false;
+            input.focus();
+          }
+          return;
+        }
         close(value);
       };
 
-      cancelButton.addEventListener("click", () => close(null));
+      const cancel = () => {
+        if (submitting) return;
+        if (options?.onCancel) options.onCancel(currentDetails());
+        close(null, options?.onCancel ? "preserve" : "normal");
+      };
+      cancelButton.addEventListener("click", cancel);
       confirmButton.addEventListener("click", submit);
       input.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
@@ -1748,7 +1819,26 @@
         }
         if (event.key === "Escape") {
           event.preventDefault();
-          close(null);
+          event.stopPropagation();
+          cancel();
+        }
+      });
+      modal.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          cancel();
+        } else if (event.key === "Tab") {
+          const focusable = [...modal.querySelectorAll("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)")];
+          const first = focusable[0];
+          const last = focusable[focusable.length - 1];
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
         }
       });
 
@@ -2485,6 +2575,57 @@
     photoViewer.close.focus();
   }
 
+  function confirmAction({ title, message, continueText, confirmText }) {
+    return new Promise((resolve) => {
+      const previousFocus = document.activeElement;
+      const backdrop = createElement("div", "parcel-modal-backdrop");
+      const modal = createElement("div", "parcel-modal parcel-confirm-modal");
+      const heading = createElement("h3", null, title);
+      const description = createElement("p", "parcel-confirm-message", message);
+      const actions = createElement("div", "parcel-modal-actions");
+      const keep = createElement("button", "panel-button secondary", continueText);
+      const proceed = createElement("button", "panel-button parcel-confirm-destructive", confirmText);
+      const id = `parcel-confirm-${Date.now()}`;
+      heading.id = `${id}-title`;
+      description.id = `${id}-description`;
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+      modal.setAttribute("aria-labelledby", heading.id);
+      modal.setAttribute("aria-describedby", description.id);
+      keep.type = "button";
+      proceed.type = "button";
+      let closed = false;
+      const finish = (confirmed) => {
+        if (closed) return;
+        closed = true;
+        backdrop.remove();
+        previousFocus?.focus?.();
+        resolve(confirmed);
+      };
+      keep.addEventListener("click", () => finish(false));
+      proceed.addEventListener("click", () => finish(true));
+      modal.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          finish(false);
+        } else if (event.key === "Tab") {
+          if (event.shiftKey && document.activeElement === keep) {
+            event.preventDefault();
+            proceed.focus();
+          } else if (!event.shiftKey && document.activeElement === proceed) {
+            event.preventDefault();
+            keep.focus();
+          }
+        }
+      });
+      actions.append(keep, proceed);
+      modal.append(heading, description, actions);
+      backdrop.appendChild(modal);
+      document.body.appendChild(backdrop);
+      keep.focus();
+    });
+  }
+
   function closeParcelPhotoViewer() {
     if (!photoViewer || photoViewer.overlay.hidden) return;
     photoViewer.overlay.hidden = true;
@@ -2554,6 +2695,7 @@
   function renderParcelResult(parcelState) {
     const panel = ensureResultPanel();
     setResultPanelTitle(panel, TEXT.parcelResultTitle);
+    if (parcelState?.savedParcel) showSavedParcelAction(panel, parcelState.savedParcel);
     const content = panel.querySelector("#result-panel-content");
     content.replaceChildren();
     content.scrollTop = 0;
@@ -2697,8 +2839,7 @@
     }));
 
     if (parcel?.id && !message) {
-      savedParcelPanelParcel = parcel;
-      panel.querySelector("#result-panel-return-button").hidden = false;
+      showSavedParcelAction(panel, parcel);
       const detailsButton = createElement("button", "panel-button", "เปิดรายละเอียด");
       detailsButton.id = "saved-parcel-open-details";
       detailsButton.type = "button";
@@ -3026,11 +3167,13 @@
     },
     renderTemporaryParcelList,
     promptParcelName,
+    confirmAction,
     showGpsLoading,
     showGpsReady,
     showMapSelectionReady,
     showDragSelectionReady,
     showLocationMessage,
+    showMapNotice,
     getGeolocationErrorMessage,
     showAnalysisLoading,
     showApiError,
