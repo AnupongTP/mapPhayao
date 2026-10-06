@@ -105,10 +105,14 @@ test("saved photo edit publishes one final set, preserves ownership, and durably
     const after = await detail(request, parcel.id);
     expect(after.note).toBe("Photo edit");
     expect(after.images.map((item) => item.id)).toEqual([before.images[1].id, newImageId]);
-    const job = (await db.query(`SELECT job_type, sheet_deleted, remaining_file_ids, status
+    const job = (await db.query(`SELECT id, job_type, sheet_deleted, remaining_file_ids, status
       FROM app.cleanup_jobs WHERE source_operation_id = $1`, [operationId])).rows[0];
     expect(job).toMatchObject({ job_type: "photo_deletion", sheet_deleted: true, status: "pending" });
     expect(job.remaining_file_ids).toHaveLength(1);
+    const prioritized = await db.query(`UPDATE app.cleanup_jobs
+      SET next_attempt_at = '-infinity'::timestamptz
+      WHERE id = $1 AND status = 'pending'`, [job.id]);
+    expect(prioritized.rowCount).toBe(1);
     await expect.poll(async () => {
       await request.post(`${backendUrl}/__e2e__/cleanup/run`);
       return (await db.query("SELECT status FROM app.cleanup_jobs WHERE source_operation_id = $1",
@@ -480,6 +484,17 @@ test("expired unfinalized edit cleans confirmed orphan without changing Sheet", 
       return (await db.query("SELECT status FROM app.parcel_photo_operations WHERE id = $1",
         [operationId])).rows[0]?.status;
     }).toBe("expired");
+    const cleanupJob = (await db.query(`SELECT id, status FROM app.cleanup_jobs
+      WHERE source_operation_id = $1`, [operationId])).rows[0];
+    expect(cleanupJob).toBeDefined();
+    if (cleanupJob.status === "pending") {
+      const prioritized = await db.query(`UPDATE app.cleanup_jobs
+        SET next_attempt_at = '-infinity'::timestamptz
+        WHERE id = $1 AND status = 'pending'`, [cleanupJob.id]);
+      expect(prioritized.rowCount).toBe(1);
+    } else {
+      expect(cleanupJob.status).toBe("completed");
+    }
     await expect.poll(async () => {
       await request.post(`${backendUrl}/__e2e__/cleanup/run`);
       return (await db.query("SELECT status FROM app.cleanup_jobs WHERE source_operation_id = $1",
@@ -619,6 +634,17 @@ test("overlapping begin and whole-parcel delete cannot resurrect the Sheet row",
   if (operationId) {
     expect((await request.post(`${backendUrl}/api/parcels/${parcel.id}/photo-edits/${operationId}/finalize`,
       { headers: owner, data: {} })).status()).toBe(409);
+  }
+  const deletionJob = (await db.query(`SELECT id, status FROM app.cleanup_jobs
+    WHERE parcel_id = $1 AND job_type = 'parcel_deletion'`, [parcel.id])).rows[0];
+  expect(deletionJob).toBeDefined();
+  if (deletionJob.status === "pending") {
+    const prioritized = await db.query(`UPDATE app.cleanup_jobs
+      SET next_attempt_at = '-infinity'::timestamptz
+      WHERE id = $1 AND status = 'pending'`, [deletionJob.id]);
+    expect(prioritized.rowCount).toBe(1);
+  } else {
+    expect(deletionJob.status).toBe("completed");
   }
   const snapshot = await (await request.get(`${backendUrl}/__e2e__/google`)).json();
   // Whole-parcel Sheet cleanup is asynchronous; a photo edit must not recreate the row after DELETE.

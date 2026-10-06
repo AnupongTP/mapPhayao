@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FarmTeach Dashboard</title>
+  <link rel="stylesheet" href="vendor/sarabun/sarabun.css">
+  <link rel="stylesheet" href="vendor/fontawesome/css/fontawesome.min.css">
+  <link rel="stylesheet" href="vendor/fontawesome/css/solid.min.css">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="vendor/leaflet-markercluster/MarkerCluster.css">
+  <link rel="stylesheet" href="css/dashboard.css">
+  <script defer src="vendor/leaflet/leaflet.js"></script>
+  <script defer src="vendor/leaflet-markercluster/leaflet.markercluster.js"></script>
+  <script defer src="vendor/chartjs/chart.umd.min.js"></script>
+  <script defer src="js/config.js"></script>
+  <script defer src="js/formatters.js"></script>
+  <script defer src="js/dashboard.js"></script>
+</head>
+<body>
+  <header class="dashboard-header">
+    <div class="dashboard-shell header-inner">
+      <div class="brand"><span class="brand-mark"><i class="fa-solid fa-seedling" aria-hidden="true"></i></span><h1>FarmTeach Dashboard</h1></div>
+      <div class="header-actions"><span id="updated-time" aria-live="polite">ยังไม่มีข้อมูลล่าสุด</span><button id="refresh" type="button" title="รีเฟรชข้อมูล" aria-label="รีเฟรชข้อมูล"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i><span>รีเฟรช</span></button></div>
+    </div>
+  </header>
+  <main class="dashboard-shell">
+    <div class="section-head"><div><p class="eyebrow">ภาพรวมแปลงที่บันทึกแล้ว</p><h2>สรุปผลการลงพื้นที่</h2></div><div class="filters"><label>ตำบล<select id="tambon-filter"><option value="">ตำบลทั้งหมด</option></select></label><label>ชนิดพืช<select id="crop-filter"><option value="">พืชทั้งหมด</option></select></label></div></div>
+    <div id="dashboard-error" class="error-banner" role="alert" hidden></div>
+    <section class="kpis" aria-label="ตัวชี้วัด"><article class="kpi"><span>แปลงทั้งหมด</span><strong id="total-value">กำลังโหลด...</strong><small>แปลงที่บันทึกแล้ว</small></article><article class="kpi"><span>เก็บวันนี้</span><strong id="today-value">กำลังโหลด...</strong><small>ตามเวลาไทย</small></article><article class="kpi"><span>เพิ่ม/ลดจากเมื่อวาน</span><strong id="difference-value">กำลังโหลด...</strong><small id="difference-detail">ตามเวลาไทย</small></article></section>
+    <section class="charts" aria-label="สถิติแปลง"><div class="panel crop-panel"><div class="panel-title"><h2>ประเภทพืช</h2><span id="crop-total"></span></div><div id="crop-loading" class="loading-state">กำลังโหลดข้อมูล...</div><div class="crop-content" hidden><div class="donut-wrap"><canvas id="crop-chart" aria-label="สัดส่วนประเภทพืช" role="img"></canvas></div><ul id="crop-legend" class="crop-legend"></ul></div></div><div class="panel progress-panel"><div class="panel-title"><h2>ความคืบหน้ารายวัน</h2><div class="periods" role="group" aria-label="ช่วงเวลา"><button type="button" data-days="7" aria-pressed="true">7 วัน</button><button type="button" data-days="14" aria-pressed="false">14 วัน</button><button type="button" data-days="30" aria-pressed="false">30 วัน</button></div></div><div id="daily-loading" class="loading-state">กำลังโหลดข้อมูล...</div><div id="daily-content" class="daily-content" hidden><canvas id="daily-chart" aria-label="จำนวนแปลงรายวัน" role="img"></canvas><div id="daily-tooltip" class="daily-tooltip" role="status" hidden></div></div></div></section>
+    <section class="map-section"><div class="map-heading"><div><h2>แผนที่แปลงที่เก็บข้อมูลแล้ว</h2><p>ซูมเข้าเพื่อดูขอบเขตแปลง</p></div><span id="map-count">กำลังโหลดแผนที่...</span></div><div class="map-search"><label for="parcel-search"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><span class="sr-only">ค้นหาแปลง</span></label><input id="parcel-search" type="search" autocomplete="off" placeholder="ค้นหาชื่อแปลง พันธุ์พืช หรือชนิดพืช" aria-controls="parcel-search-results" aria-expanded="false"><div id="parcel-search-results" class="map-search-results" role="listbox" hidden></div></div><div class="map-frame"><div id="dashboard-map" aria-label="แผนที่แปลง"></div><div id="map-state" class="map-state" hidden></div></div></section>
+  </main>
+</body>
+</html>

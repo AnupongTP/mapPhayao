@@ -79,8 +79,8 @@ test("PostgreSQL claims distinct due jobs and reclaims an expired lease, not ter
   const ids = [randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()];
   const parcelIds = ids.map(() => randomUUID());
   const rows = [
-    [ids[0], parcelIds[0], "E2E-DUE", "pending", -60, null, null],
-    [ids[1], parcelIds[1], "E2E-STALE", "processing", -60, -660, randomUUID()],
+    [ids[0], parcelIds[0], "E2E-DUE", "pending", -86400, null, null],
+    [ids[1], parcelIds[1], "E2E-STALE", "processing", -86400, -86400, randomUUID()],
     [ids[2], parcelIds[2], "E2E-FUTURE", "pending", 3600, null, null],
     [ids[3], parcelIds[3], "E2E-COMPLETED", "completed", -60, null, null],
     [ids[4], parcelIds[4], "E2E-FAILED", "failed", -60, null, null],

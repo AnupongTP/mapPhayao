@@ -1,4 +1,4 @@
-import { copyFile, mkdir } from "node:fs/promises";
+import { copyFile, mkdir, readdir } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -58,3 +58,24 @@ await Promise.all([
     path.join(iconVendorDir, "LICENSE.txt"),
   ),
 ]);
+
+const vendorRoot = path.join(projectRoot, "frontend", "vendor");
+const assetCopies = [
+  ["leaflet/dist/leaflet.js", "leaflet/leaflet.js"],
+  ["leaflet/dist/leaflet.css", "leaflet/leaflet.css"],
+  ["leaflet/LICENSE", "leaflet/LICENSE"],
+  ["chart.js/dist/chart.umd.min.js", "chartjs/chart.umd.min.js"],
+  ["chart.js/LICENSE.md", "chartjs/LICENSE.md"],
+  ["leaflet.markercluster/dist/leaflet.markercluster.js", "leaflet-markercluster/leaflet.markercluster.js"],
+  ["leaflet.markercluster/dist/MarkerCluster.css", "leaflet-markercluster/MarkerCluster.css"],
+  ["leaflet.markercluster/dist/MarkerCluster.Default.css", "leaflet-markercluster/MarkerCluster.Default.css"],
+  ["leaflet.markercluster/MIT-LICENCE.txt", "leaflet-markercluster/MIT-LICENCE.txt"],
+];
+for (const image of await readdir(path.join(projectRoot, "node_modules", "leaflet", "dist", "images"))) {
+  assetCopies.push([`leaflet/dist/images/${image}`, `leaflet/images/${image}`]);
+}
+await Promise.all(assetCopies.map(async ([source, destination]) => {
+  const target = path.join(vendorRoot, destination);
+  await mkdir(path.dirname(target), { recursive: true });
+  await copyFile(path.join(projectRoot, "node_modules", source), target);
+}));

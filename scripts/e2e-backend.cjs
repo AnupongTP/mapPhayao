@@ -54,6 +54,44 @@ const app = createApp({
   registerRoutes(testApp) {
     testApp.get("/__e2e__/messages", (req, res) => res.json(sentMessages));
     testApp.get("/__e2e__/google", (req, res) => res.json(googleIntegration.snapshot()));
+    testApp.post("/__e2e__/dashboard/invalidate", (req, res) => {
+      testApp.locals.dashboardService.invalidate();
+      res.json({ ok: true });
+    });
+    testApp.post("/__e2e__/dashboard/prune", async (req, res) => {
+      const { rows } = await require("../backend/src/config/database").query(
+        "SELECT parcel_code FROM app.parcels",
+      );
+      googleIntegration.pruneDashboardRows(new Set(rows.map((row) => row.parcel_code)));
+      testApp.locals.dashboardService.invalidate();
+      res.json({ ok: true });
+    });
+    testApp.post("/__e2e__/dashboard/parcel-cells", (req, res) => {
+      const changed = googleIntegration.setDashboardParcelCells(req.body?.code, req.body);
+      if (changed) testApp.locals.dashboardService.invalidate();
+      res.status(changed ? 200 : 404).json({ ok: changed });
+    });
+    testApp.post("/__e2e__/dashboard/photo", async (req, res) => {
+      const count = req.body?.count ?? 1;
+      const failIndex = req.body?.failIndex ?? null;
+      if (!Number.isInteger(count) || count < 1 || count > 5 ||
+        (failIndex !== null && (!Number.isInteger(failIndex) || failIndex < 0 || failIndex >= count))) {
+        return res.status(400).json({ ok: false });
+      }
+      const changed = await googleIntegration.seedDashboardPhoto(req.body?.code, count, failIndex);
+      if (changed) testApp.locals.dashboardService.invalidate();
+      res.status(changed ? 200 : 404).json({ ok: changed });
+    });
+    testApp.post("/__e2e__/dashboard/seed", (req, res) => {
+      const { suffix, crop, count } = req.body || {};
+      if (!/^[a-f0-9]{8}$/.test(suffix) || typeof crop !== "string" ||
+        !/^dashboard-perf-[a-f0-9]{8}$/.test(crop) || !Number.isInteger(count) || count < 1 || count > 120) {
+        return res.status(400).json({ ok: false });
+      }
+      googleIntegration.seedDashboardRows({ suffix, crop, count });
+      testApp.locals.dashboardService.invalidate();
+      return res.json({ ok: true });
+    });
     testApp.post("/__e2e__/cleanup/run", async (req, res, next) => {
       try { res.json({ processed: await cleanupWorker.runCycle() }); } catch (error) { next(error); }
     });

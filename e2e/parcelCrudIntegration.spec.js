@@ -20,6 +20,10 @@ function payload(name) {
 }
 
 async function runCleanupForParcel(request, parcelId) {
+  const prioritized = await db.query(`UPDATE app.cleanup_jobs
+    SET next_attempt_at = '-infinity'::timestamptz
+    WHERE parcel_id = $1 AND status = 'pending'`, [parcelId]);
+  expect(prioritized.rowCount).toBe(1);
   await expect.poll(async () => {
     await request.post(`${backendUrl}/__e2e__/cleanup/run`);
     return (await db.query("SELECT status FROM app.cleanup_jobs WHERE parcel_id = $1", [parcelId])).rows[0]?.status;

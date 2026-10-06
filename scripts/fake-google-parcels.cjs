@@ -13,6 +13,7 @@ function createFakeGoogleParcels() {
   let failImageReads = 0;
   let failParcelDeletes = 0;
   let requireIdlePool = false;
+  let dashboardReads = 0;
   function assertIdlePool() {
     if (!requireIdlePool) return;
     const pool = require("../backend/src/config/database").pool;
@@ -36,6 +37,54 @@ function createFakeGoogleParcels() {
     files,
     users,
     parcels,
+    async readDashboardRows() {
+      dashboardReads += 1;
+      return [...parcels.values()].map((row) => [...row]);
+    },
+    setDashboardParcelCells(code, { createdAt, coordinate, geometry } = {}) {
+      const cells = parcels.get(code);
+      if (!cells) return false;
+      if (createdAt !== undefined) cells[14] = createdAt;
+      if (coordinate !== undefined) cells[7] = coordinate;
+      if (geometry !== undefined) cells[8] = geometry;
+      return true;
+    },
+    pruneDashboardRows(liveCodes) {
+      for (const code of parcels.keys()) if (!liveCodes.has(code)) parcels.delete(code);
+    },
+    seedDashboardRows({ suffix, crop, count }) {
+      for (let index = 1; index <= count; index += 1) {
+        const lat = 19 + Math.floor(index / 10) * 0.002;
+        const lng = 99.86 + (index % 10) * 0.002;
+        const geometry = { type: "MultiPolygon", coordinates: [[[
+          [lng, lat], [lng + 0.0005, lat], [lng + 0.0005, lat + 0.0005], [lng, lat],
+        ]]] };
+        const code = `DASH-${suffix}-${index}`;
+        parcels.set(code, parcelCells({ owner_user_id: "synthetic-test-owner", parcel_code: code,
+          parcel_name: `Dashboard fixture ${index}`, crop_type: crop, rice_variety: "",
+          planting_date: "", representative_lat: lat, representative_lng: lng,
+          geometry, area_sqm: 100, area_rai: 0.0625, created_at: new Date(),
+          updated_at: new Date() }));
+      }
+    },
+    async seedDashboardPhoto(code, count = 1, failIndex = null) {
+      const cells = parcels.get(code);
+      if (!cells) return false;
+      const bytes = await require("../backend/node_modules/sharp")({ create: { width: 4, height: 4, channels: 3,
+        background: "#14866d" } }).webp().toBuffer();
+      const names = [];
+      const links = [];
+      for (let index = 0; index < count; index += 1) {
+        const id = randomUUID();
+        const fileName = `e2e-dashboard-photo-${index}.webp`;
+        if (index !== failIndex) files.set(id, { fileName, bytes });
+        names.push(fileName);
+        links.push(imageLink(id));
+      }
+      cells[11] = JSON.stringify(names);
+      cells[12] = JSON.stringify(links);
+      return true;
+    },
     async uploadImage(bytes, fileName) {
       assertIdlePool();
       if (failUploads > 0) {
@@ -163,6 +212,7 @@ function createFakeGoogleParcels() {
     requireIdlePool(value) { requireIdlePool = value === true; },
     snapshot() {
       return {
+        dashboardReads,
         files: [...files.entries()].map(([id, item]) => ({ id, fileName: item.fileName, byteSize: item.bytes.length })),
         users: [...users.values()],
         parcels: [...parcels.values()],
