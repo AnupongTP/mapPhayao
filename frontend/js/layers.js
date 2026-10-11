@@ -703,13 +703,49 @@
   }
 
   function createHazardLegendControl(map, activeLayers) {
-    const control = L.control({ position: "bottomright" });
+    const control = L.control({ position: "topright" });
     let container = null;
     let content = null;
     let toggleButton = null;
+    let tabs = null;
+    let sections = null;
+    let selectedHazardKey = null;
+    const tabButtons = new Map();
+    const sectionNodes = new Map();
 
-    function addSection(title, items, note) {
-      const section = L.DomUtil.create("div", "hazard-legend-section", content);
+    function close() {
+      container?.classList.remove("is-mobile-expanded");
+      toggleButton?.setAttribute?.("aria-expanded", "false");
+    }
+
+    function selectTab(key) {
+      selectedHazardKey = key;
+      tabButtons.forEach((button, tabKey) => {
+        button.setAttribute("aria-selected", tabKey === key ? "true" : "false");
+        button.tabIndex = tabKey === key ? 0 : -1;
+      });
+      sectionNodes.forEach((section, sectionKey) => {
+        if (sectionKey === key) section.classList.add("is-selected");
+        else section.classList.remove("is-selected");
+      });
+    }
+
+    function addTab(key, label) {
+      const button = L.DomUtil.create("button", "hazard-legend-tab", tabs);
+      button.type = "button";
+      button.textContent = label;
+      button.id = `hazard-legend-tab-${key}`;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-controls", `hazard-legend-section-${key}`);
+      button.addEventListener?.("click", () => selectTab(key));
+      tabButtons.set(key, button);
+    }
+
+    function addSection(key, title, items, note) {
+      const section = L.DomUtil.create("div", "hazard-legend-section", sections);
+      section.id = `hazard-legend-section-${key}`;
+      section.setAttribute?.("role", "tabpanel");
+      section.setAttribute?.("aria-labelledby", `hazard-legend-tab-${key}`);
       const heading = L.DomUtil.create("h4", "", section);
       heading.textContent = title;
       items.forEach((item) => section.appendChild(createLegendItem(item.color, item.label)));
@@ -717,16 +753,25 @@
         const noteEl = L.DomUtil.create("p", "hazard-legend-note", section);
         noteEl.textContent = note;
       }
+      sectionNodes.set(key, section);
     }
 
     function update() {
       if (!container) {
         return;
       }
-      content.replaceChildren();
+      sections.replaceChildren();
+      tabs.replaceChildren();
+      tabButtons.clear();
+      sectionNodes.clear();
       const showFlood = activeLayers.has(HAZARD_LAYER_KEYS.flood);
       const showDrought = activeLayers.has(HAZARD_LAYER_KEYS.drought);
       container.hidden = !showFlood && !showDrought;
+      if (container.hidden) {
+        selectedHazardKey = null;
+        close();
+      }
+      tabs.hidden = !(showFlood && showDrought);
       if (toggleButton) {
         const activeCount = Number(showFlood) + Number(showDrought);
         const toggleText = activeCount > 1
@@ -735,6 +780,7 @@
         uiIcons.setLabel(toggleButton, "palette", toggleText);
       }
       if (showFlood) {
+        addTab(HAZARD_LAYER_KEYS.flood, "น้ำท่วมซ้ำซาก");
         const floodMetadata = activeLayers
           .get(HAZARD_LAYER_KEYS.flood)
           ?.getMetadata?.();
@@ -745,6 +791,7 @@
           ? `ช่วงข้อมูล: ${formatPeriod(floodMetadata.startYear, floodMetadata.endYear)}`
           : null;
         addSection(
+          HAZARD_LAYER_KEYS.flood,
           floodTitle,
           FLOOD_RECURRENCE_CLASSES.map((item) => ({
             color: item.fillColor,
@@ -754,13 +801,18 @@
         );
       }
       if (showDrought) {
-        addSection("จำนวนปีที่พบประวัติภัยแล้ง", [
+        addTab(HAZARD_LAYER_KEYS.drought, "ภัยแล้งซ้ำซาก");
+        addSection(HAZARD_LAYER_KEYS.drought, "จำนวนปีที่พบประวัติภัยแล้ง", [
           { color: "#f1f5f9", label: "ไม่พบในชุดข้อมูล" },
           { color: "#fbbf24", label: "1 ปี" },
           { color: "#d97706", label: "2 ปี" },
           { color: "#a16207", label: "3 ปีขึ้นไป" },
         ], "ภัยแล้งเป็นผลสรุประดับตำบล ไม่ใช่ขอบเขตพื้นที่ภัยแล้งภายในตำบล");
       }
+      if (!activeLayers.has(selectedHazardKey)) {
+        selectedHazardKey = showFlood ? HAZARD_LAYER_KEYS.flood : HAZARD_LAYER_KEYS.drought;
+      }
+      if (!container.hidden) selectTab(selectedHazardKey);
     }
 
     control.onAdd = function () {
@@ -775,7 +827,24 @@
       uiIcons.setLabel(toggleButton, "palette", "คำอธิบายสี");
       toggleButton.setAttribute?.("aria-expanded", "false");
       toggleButton.setAttribute?.("aria-label", "แสดงหรือซ่อนคำอธิบายสีภัยพิบัติ");
+      toggleButton.setAttribute?.("aria-controls", "hazard-legend-sheet");
       content = L.DomUtil.create("div", "hazard-legend-content", container);
+      content.id = "hazard-legend-sheet";
+      content.setAttribute?.("role", "region");
+      content.setAttribute?.("aria-label", "คำอธิบายสีภัยพิบัติ");
+      const header = L.DomUtil.create("div", "hazard-legend-sheet-header", content);
+      const heading = L.DomUtil.create("h3", "", header);
+      heading.textContent = "คำอธิบายสี";
+      const closeButton = L.DomUtil.create("button", "hazard-legend-sheet-close", header);
+      closeButton.type = "button";
+      uiIcons.setLabel(closeButton, "close", "");
+      if (!window.MapUiIcons) closeButton.textContent = "×";
+      closeButton.setAttribute?.("aria-label", "ปิดคำอธิบายสี");
+      closeButton.setAttribute?.("title", "ปิดคำอธิบายสี");
+      closeButton.addEventListener?.("click", close);
+      tabs = L.DomUtil.create("div", "hazard-legend-tabs", content);
+      tabs.setAttribute?.("role", "tablist");
+      sections = L.DomUtil.create("div", "hazard-legend-sections", content);
       if (typeof toggleButton.addEventListener === "function") {
         toggleButton.addEventListener("click", () => {
           const isExpanded = container.classList.toggle("is-mobile-expanded");
@@ -789,7 +858,7 @@
     };
 
     control.addTo(map);
-    return { update };
+    return { update, close };
   }
 
   function bindLazyLayerEvents(map, registry) {
@@ -805,6 +874,7 @@
       const hazardKey = event.layer?.options?.hazardLayerKey;
       if (hazardKey) {
         activeHazardLayers.set(hazardKey, controller || null);
+        hazardLegend.close();
         hazardLegend.update();
       }
       if (loadPromise && typeof loadPromise.finally === "function") {

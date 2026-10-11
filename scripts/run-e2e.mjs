@@ -124,6 +124,9 @@ async function main() {
       "/migrations/20260925_add_parcel_note.sql",
       "/migrations/20260925_create_cleanup_jobs.sql",
       "/migrations/20260927_create_parcel_photo_operations.sql",
+      "/e2e/auto_parcel_name_seed.sql",
+      "/migrations/20261011_add_auto_parcel_name_counter.sql",
+      "/e2e/auto_parcel_name_verify.sql",
     ];
     for (const file of sqlFiles) {
       await run("docker", [...compose, "exec", "-T", "db", "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "mapphayao_e2e", "-f", file]);

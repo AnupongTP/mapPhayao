@@ -507,7 +507,8 @@
 
     if (launcher) {
       const actions = panel?.querySelector(".location-actions");
-      const parent = isMobile && !isLocationOpen ? document.body : actions;
+      const isDesktopLocationOpen = !isMobile && panel?.classList.contains("is-open");
+      const parent = (isMobile ? !isLocationOpen : !isDesktopLocationOpen) ? document.body : actions;
       if (parent && launcher.parentElement !== parent) {
         parent.prepend(launcher);
       }
@@ -524,6 +525,7 @@
     const panel = document.getElementById("location-panel");
     const resultPanel = document.getElementById("result-panel");
     if (!isMobileLayout() || !panel) {
+      panel?.classList.add("is-open");
       syncMobilePanelState();
       return;
     }
@@ -539,7 +541,14 @@
     const panel = document.getElementById("location-panel");
     if (panel) {
       panel.classList.remove("is-mobile-open");
+      panel.classList.remove("is-open");
     }
+    syncMobilePanelState();
+  }
+
+  function openDesktopLocationPanel() {
+    if (isMobileLayout()) return;
+    ensureLocationPanel().classList.add("is-open");
     syncMobilePanelState();
   }
 
@@ -567,6 +576,37 @@
     const panel = document.getElementById("result-panel");
     if (panel) {
       closeResultPanel(panel);
+    }
+  }
+
+  function showSavedParcelSelectionStatus(state, onRetry) {
+    let chip = document.getElementById("saved-parcel-selection-status");
+    if (!state && !chip) return;
+    if (!chip) {
+      chip = createElement("div", "saved-parcel-selection-status");
+      chip.id = "saved-parcel-selection-status";
+      chip.setAttribute("role", "status");
+      chip.setAttribute("aria-live", "polite");
+      document.getElementById("map").appendChild(chip);
+    }
+    chip.replaceChildren();
+    if (!state) {
+      chip.hidden = true;
+      return;
+    }
+    chip.hidden = false;
+    if (state === "loading") {
+      const spinner = createElement("span", "saved-parcel-selection-spinner");
+      spinner.setAttribute("aria-hidden", "true");
+      chip.appendChild(spinner);
+    }
+    chip.appendChild(createElement("span", null, state === "loading"
+      ? "กำลังโหลดข้อมูลแปลง..." : "โหลดข้อมูลแปลงไม่สำเร็จ"));
+    if (state === "error" && typeof onRetry === "function") {
+      const retry = createElement("button", "saved-parcel-selection-retry", "ลองอีกครั้ง");
+      retry.type = "button";
+      retry.addEventListener("click", onRetry);
+      chip.appendChild(retry);
     }
   }
 
@@ -915,12 +955,15 @@
     }
 
     const sidebar = ensureSidebar();
-    panel = createPanel("location-panel", "location-panel is-open", TEXT.locationTitle);
+    panel = createPanel("location-panel", "location-panel", TEXT.locationTitle);
     const header = panel.querySelector(".panel-header");
     const closeButton = createElement("button", "panel-close panel-icon-action panel-close-icon location-panel-close");
     closeButton.type = "button";
     setCloseIcon(closeButton, "ปิดหน้าต่างเลือกตำแหน่ง");
-    closeButton.addEventListener("click", closeMobileLocationPanel);
+    closeButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeMobileLocationPanel();
+    });
     header.appendChild(closeButton);
     const content = panel.querySelector("#location-panel-content");
     const status = createElement("p", "location-status", TEXT.noSelection);
@@ -1176,18 +1219,21 @@
     updateLocationValues(location);
     setLocationStatus(TEXT.gpsReady);
     setConfirmEnabled(true);
+    openDesktopLocationPanel();
   }
 
   function showMapSelectionReady(location) {
     updateLocationValues(location);
     setLocationStatus(TEXT.mapReady);
     setConfirmEnabled(true);
+    openDesktopLocationPanel();
   }
 
   function showDragSelectionReady(location) {
     updateLocationValues(location);
     setLocationStatus(TEXT.dragReady);
     setConfirmEnabled(true);
+    openDesktopLocationPanel();
   }
 
   function showLocationMessage(message) {
@@ -1517,11 +1563,10 @@
       expandedTemporaryParcelId = null;
     }
 
-    parcels.forEach((parcel, index) => {
+    parcels.forEach((parcel) => {
       const isExpanded = parcel.id === expandedTemporaryParcelId;
-      const automaticName = `แปลงที่ ${index + 1}`;
+      const temporaryLabel = "แปลงใหม่";
       const parcelName = typeof parcel.name === "string" ? parcel.name.trim() : "";
-      const hasCustomName = parcelName && parcelName !== automaticName;
       const item = createElement(
         "article",
         `parcel-item${parcel.isSelected ? " is-selected" : ""}${isExpanded ? " is-expanded" : ""}`,
@@ -1539,8 +1584,8 @@
         expandedTemporaryParcelId = isExpanded ? null : parcel.id;
         renderTemporaryParcelList(parcels, handlers);
       });
-      titleLine.appendChild(createElement("span", "parcel-item-index", automaticName));
-      if (hasCustomName) {
+      titleLine.appendChild(createElement("span", "parcel-item-index", temporaryLabel));
+      if (parcelName) {
         titleLine.appendChild(createElement("span", "parcel-item-name", parcelName));
       }
       titleWrap.append(titleLine, createElement("span", "parcel-item-status", parcel.statusText));
@@ -1593,6 +1638,9 @@
       input.value = options?.initialValue || "";
       input.maxLength = 120;
       label.appendChild(input);
+      if (options?.allowPhotos) {
+        label.appendChild(createElement("span", "parcel-name-help", "ไม่ระบุชื่อ ระบบจะตั้งชื่อแปลงให้อัตโนมัติ"));
+      }
       const initialPhotos = options?.initialDetails?.photos || [];
       const photos = [...initialPhotos];
       const addedPhotos = [];
@@ -1771,7 +1819,7 @@
       const submit = async () => {
         if (submitting) return;
         const value = input.value.trim();
-        if (!value) {
+        if (!value && !options?.allowPhotos) {
           error.textContent = TEXT.parcelNameRequired;
           input.focus();
           return;
@@ -3161,6 +3209,7 @@
     clearLineSummaryStatus,
     syncMobilePointConfirmButton,
     closeCurrentResultPanel,
+    showSavedParcelSelectionStatus,
     closeTemporaryParcelPanel,
     setResultPanelCloseHandler: function (handler) {
       resultPanelCloseHandler = typeof handler === "function" ? handler : null;

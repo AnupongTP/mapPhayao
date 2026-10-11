@@ -83,7 +83,7 @@ async function drawMobileParcel(page, name) {
   await hud.locator(".mobile-parcel-draw-finish").click();
   const modal = page.locator(".parcel-modal");
   await expect(modal).toBeVisible();
-  await modal.locator('input[name="parcelName"]').fill(name);
+  if (name !== undefined) await modal.locator('input[name="parcelName"]').fill(name);
   await expect(modal.getByRole("button", { name: "บันทึกแปลง" })).toBeVisible();
 }
 

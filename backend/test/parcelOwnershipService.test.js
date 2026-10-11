@@ -108,6 +108,9 @@ test("createParcel requires an authenticated LINE user before opening a transact
 test("createParcel writes owner_user_id from the resolved app user and ignores client owner fields", async () => {
   let findOrCreateInput = null;
   const client = createTransactionalClient(async (text, params) => {
+    if (/SELECT next_auto_parcel_name_number[\s\S]*FOR UPDATE/i.test(text)) {
+      return { rows: [{ next_auto_parcel_name_number: "1" }] };
+    }
     assert.match(text, /INSERT INTO app\.parcels/is);
     return { rows: [sampleRow] };
   });
@@ -213,6 +216,11 @@ test("owned parcel read, update, and analysis queries include id and owner predi
     }
     return { rows: [sampleRow] };
   });
+  const client = createTransactionalClient(async (text, params) => {
+    if (/SELECT id FROM app\.users[\s\S]*FOR UPDATE/i.test(text)) return { rows: [{ id: OWNER_USER_ID }] };
+    return db.query(text, params);
+  });
+  db.pool.connect = async () => client;
 
   await parcelService.getOwnedParcelById(PARCEL_ID, OWNER_USER_ID);
   await parcelService.updateOwnedParcel(PARCEL_ID, { parcelName: "Parcel B" }, OWNER_USER_ID);
@@ -231,10 +239,15 @@ test("owned parcel read, update, and analysis queries include id and owner predi
     name: "Parcel A",
     geometry: sampleGeometry,
   });
+  assert.equal(client.calls.some((call) => call.text === "COMMIT"), true);
 });
 
 test("owned parcel operations use the same not-found response for missing and other-user parcels", async () => {
   installDbQuery(async () => ({ rows: [] }));
+  db.pool.connect = async () => createTransactionalClient(async (text, params) => {
+    if (/SELECT id FROM app\.users[\s\S]*FOR UPDATE/i.test(text)) return { rows: [{ id: OWNER_USER_ID }] };
+    return db.query(text, params);
+  });
 
   await assert.rejects(
     () => parcelService.getOwnedParcelById(OTHER_PARCEL_ID, OWNER_USER_ID),
