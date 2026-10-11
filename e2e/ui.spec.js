@@ -199,6 +199,7 @@ test("responsive location and semantic Close controls", async ({ page, context }
   await expect(page.locator("#map")).toBeVisible();
   await page.waitForFunction(() => Boolean(window.appMap && window.appMap._loaded));
   await expect.poll(() => page.evaluate(() => window.MapLiffMode.isReady())).toBe(true);
+  await expect(page.locator("#location-panel")).toBeHidden();
 
   const location = page.locator("#mobile-location-launcher");
   await expect(location).toHaveCount(1);
@@ -229,6 +230,13 @@ test("responsive location and semantic Close controls", async ({ page, context }
   await location.click();
   await expect(page.locator("#location-status")).toContainText("พบตำแหน่งปัจจุบัน");
   if (!mobile) {
+    const desktopClose = page.getByRole("button", { name: "ปิดหน้าต่างเลือกตำแหน่ง" });
+    await expect(desktopClose).toBeVisible();
+    await desktopClose.click();
+    await expect(page.locator("#location-panel")).toBeHidden();
+    await expect(location).toBeVisible();
+    await location.click();
+    await expect(page.locator("#location-panel")).toBeVisible();
     await page.setViewportSize({ width: 360, height: 560 });
     await expect(location.locator(".mobile-location-launcher-text")).toBeHidden();
     await expect.poll(() => location.evaluate((element) => element.parentElement === document.body)).toBe(true);

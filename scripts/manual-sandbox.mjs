@@ -38,6 +38,7 @@ const migrations = [
   "/migrations/20260925_add_parcel_note.sql",
   "/migrations/20260925_create_cleanup_jobs.sql",
   "/migrations/20260927_create_parcel_photo_operations.sql",
+  "/migrations/20261011_add_auto_parcel_name_counter.sql",
 ];
 
 let frontend;

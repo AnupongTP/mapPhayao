@@ -219,11 +219,11 @@ test("mobile parcel photos stay local until save, then persist through fake Goog
   expect((await detail.json()).parcel.images).toHaveLength(2);
   expect((await db.query("SELECT to_regclass('app.parcel_images') AS image_table")).rows[0].image_table).toBeNull();
   const google = (await (await request.get(`${backendUrl}/__e2e__/google`)).json());
-  expect(google.users).toHaveLength(1);
-  expect(google.users[0][1]).toBe("ผู้ใช้ทดสอบ A");
   const sheetRow = google.parcels.find((row) => row[2] === parcel.parcelCode);
   expect(sheetRow).toHaveLength(16);
   const owner = await db.query("SELECT owner_user_id FROM app.parcels WHERE id = $1", [parcel.id]);
+  expect(google.users.filter((row) => row[0] === owner.rows[0].owner_user_id))
+    .toEqual([expect.arrayContaining([owner.rows[0].owner_user_id, "ผู้ใช้ทดสอบ A"])]);
   expect(sheetRow[0]).toBe(owner.rows[0].owner_user_id);
   expect(sheetRow[1]).toBe("ผู้ใช้ทดสอบ A");
   const representative = (await db.query(`
@@ -389,11 +389,9 @@ test("create validation preserves the draft and double submit creates only one p
     if (item.url().endsWith("/api/parcels") && item.method() === "POST") creates += 1;
   });
   await modal.locator('input[name="parcelName"]').fill("");
-  await modal.getByRole("button", { name: "บันทึกแปลง" }).click();
-  await expect(modal.locator(".parcel-modal-error")).toContainText("ชื่อพื้นที่แปลงต้องไม่เป็นค่าว่าง");
+  await expect(modal).toContainText("ไม่ระบุชื่อ ระบบจะตั้งชื่อแปลงให้อัตโนมัติ");
   await expect(page.locator("#temporary-parcel-list .parcel-item")).toHaveCount(1);
   expect(creates).toBe(0);
-  await modal.locator('input[name="parcelName"]').fill("VALIDATION-E2E");
   await modal.locator('input[name="plantingDate"]').fill("");
   await modal.getByRole("button", { name: "บันทึกแปลง" }).click();
   await expect(modal.locator(".parcel-modal-error")).toContainText("วันที่ปลูก");
@@ -406,6 +404,7 @@ test("create validation preserves the draft and double submit creates only one p
     button.click();
   });
   const parcel = (await (await created).json()).parcel;
+  expect(parcel.parcelName).toMatch(/^แปลงที่ [1-9]\d*$/);
   await expect(modal).toHaveCount(0);
   await expect(page.locator("#map-action-notice")).toContainText("บันทึกแปลงเรียบร้อยแล้ว");
   await expect(page.locator("#temporary-parcel-list .parcel-item")).toHaveCount(0);

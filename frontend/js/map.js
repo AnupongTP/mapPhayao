@@ -516,7 +516,7 @@
   function clearParcelDetailPanelState() {
     currentDetailParcelId = null;
     parcelDetailPanelOpen = false;
-    releaseSavedImages();
+    clearSavedParcelHighlight();
   }
 
   function isParcelDetailPanelOpenFor(parcelId) {
@@ -550,6 +550,10 @@
   }
 
   function clearSavedParcelHighlight(options = {}) {
+    savedParcelDetailRevision += 1;
+    pendingSavedParcelController?.abort();
+    pendingSavedParcelController = null;
+    window.MapUi.showSavedParcelSelectionStatus?.(null);
     releaseSavedImages();
     selectedSavedParcelId = null;
     refreshSavedParcelStyles();
@@ -701,6 +705,13 @@
     savedParcelRecordById.clear();
 
     if (!selectedParcelStillExists) {
+      if (pendingSavedParcelId) {
+        savedParcelDetailRevision += 1;
+        pendingSavedParcelController?.abort();
+        pendingSavedParcelController = null;
+        pendingSavedParcelId = null;
+        window.MapUi.showSavedParcelSelectionStatus?.(null);
+      }
       selectedSavedParcelId = null;
       currentSavedParcel = null;
       openedSavedParcelId = null;
@@ -892,13 +903,24 @@
       }
     }
 
+    if (selectedSavedParcelId || parcelDetailPanelOpen) window.MapUi.closeCurrentResultPanel();
     const requestRevision = ++savedParcelDetailRevision;
     pendingSavedParcelController?.abort();
     const controller = new AbortController();
     pendingSavedParcelController = controller;
     pendingSavedParcelId = parcel.id;
+    let focusedBeforeDetail = false;
 
     try {
+      if (savedParcelLayerById.has(parcel.id) || window.MapParcelState.isValidGeoJsonGeometry(parcel.geometry)) {
+        selectSavedParcelLayer(parcel);
+        if (options.fitBounds) {
+          focusSavedParcelLayer(parcel);
+          focusedBeforeDetail = true;
+        }
+      }
+      window.MapParcelManagement.closeMyParcelsSheet();
+      window.MapUi.showSavedParcelSelectionStatus?.("loading");
       const detail = await getOwnedParcelDetail(parcel, { signal: controller.signal });
       if (
         deletedSavedParcelIds.has(parcel.id) || !window.MapParcelState.shouldAcceptDetailResponse(
@@ -911,10 +933,8 @@
         return;
       }
       selectSavedParcelLayer(detail);
-      if (options.fitBounds) {
-        focusSavedParcelLayer(detail);
-      }
-      window.MapParcelManagement.closeMyParcelsSheet();
+      if (options.fitBounds && !focusedBeforeDetail) focusSavedParcelLayer(detail);
+      window.MapUi.showSavedParcelSelectionStatus?.(null);
       setInitialSavedPhotos(detail);
       window.MapUi.renderSavedParcelDetail(detail);
       loadSavedPhotos(detail);
@@ -924,7 +944,12 @@
       )) {
         return;
       }
-      window.MapUi.renderSavedParcelDetail(parcel, window.MapParcelManagement.getFriendlyError(error));
+      window.MapUi.showSavedParcelSelectionStatus?.("error", () => {
+        if (requestRevision === savedParcelDetailRevision && pendingSavedParcelId === parcel.id) {
+          return openSavedParcel(parcel, { ...options, confirmUnsaved: false });
+        }
+        return undefined;
+      });
     } finally {
       if (pendingSavedParcelController === controller) {
         pendingSavedParcelController = null;
@@ -937,12 +962,19 @@
       return;
     }
 
+    if (selectedSavedParcelId || parcelDetailPanelOpen) window.MapUi.closeCurrentResultPanel();
     const requestRevision = ++savedParcelDetailRevision;
     pendingSavedParcelController?.abort();
     const controller = new AbortController();
     pendingSavedParcelController = controller;
     pendingSavedParcelId = parcel.id;
     try {
+      if (savedParcelLayerById.has(parcel.id) || window.MapParcelState.isValidGeoJsonGeometry(parcel.geometry)) {
+        selectSavedParcelLayer(parcel);
+        focusSavedParcelLayer(parcel);
+      }
+      window.MapParcelManagement.closeMyParcelsSheet();
+      window.MapUi.showSavedParcelSelectionStatus?.("loading");
       const detail = await getOwnedParcelDetail(parcel, { signal: controller.signal });
       if (deletedSavedParcelIds.has(parcel.id) || !window.MapParcelState.shouldAcceptDetailResponse(
         parcel.id, pendingSavedParcelId, requestRevision, savedParcelDetailRevision,
@@ -951,7 +983,7 @@
       }
       selectSavedParcelLayer(detail);
       focusSavedParcelLayer(detail);
-      window.MapParcelManagement.closeMyParcelsSheet();
+      window.MapUi.showSavedParcelSelectionStatus?.(null);
       window.MapUi.renderParcelResult({
         id: detail.id,
         name: detail.parcelName || detail.parcelCode,
@@ -986,6 +1018,7 @@
       )) {
         return;
       }
+      window.MapUi.showSavedParcelSelectionStatus?.(null);
       window.MapUi.renderSavedParcelDetail(parcel, window.MapParcelManagement.getFriendlyError(error));
     } finally {
       if (pendingSavedParcelController === controller) {
@@ -1349,6 +1382,7 @@
           geometry: snapshot.geometry,
         });
         savedParcel = result.parcel;
+        parcel.name = savedParcel.parcelName;
         if (!window.MapParcelState.markSaveSucceeded(parcel, snapshot, savedParcel)) {
           throw new Error("ขอบเขตแปลงเปลี่ยนแล้ว กรุณาวิเคราะห์ใหม่ก่อนบันทึก");
         }
@@ -1427,17 +1461,6 @@
 
   function getCompletedTemporaryParcels() {
     return [...temporaryParcels.values()].sort((left, right) => left.createdAt - right.createdAt);
-  }
-
-  function getNextAvailableParcelName() {
-    const usedNames = new Set(
-      getCompletedTemporaryParcels().map((parcel) => parcel.name.trim()),
-    );
-    let index = 1;
-    while (usedNames.has(`แปลงที่ ${index}`)) {
-      index += 1;
-    }
-    return `แปลงที่ ${index}`;
   }
 
   function getParcelStatusText(parcel) {
@@ -1544,7 +1567,7 @@
       return window.MapUi.createParcelPopupContent({
         ...parcel,
         analysis: {
-          name: parcel.name,
+          name: parcel.name || "แปลงใหม่",
           parcel: {
             areaSquareMeters: parcel.areaSquareMeters,
             areaRai: null,
@@ -1652,7 +1675,7 @@
       confirmText: "บันทึกแปลง",
       allowPhotos: true,
       onCancel: (details) => {
-        Object.assign(parcel, { ...details, name: details.name || parcel.name });
+        Object.assign(parcel, details);
         updateTemporaryParcelPopup(parcel, false);
         refreshTemporaryParcelList();
       },
@@ -1735,7 +1758,7 @@
     try {
       const analysis = await window.MapApi.analyzePolygonArea(
         {
-          name: parcel.name,
+          name: parcel.name || "แปลงใหม่",
           geometry: parcel.geometry,
         },
         { signal: requestController.signal },
@@ -1916,7 +1939,7 @@
     try {
       shouldDelete = await window.MapUi.confirmAction({
         title: "ลบร่างแปลง?",
-        message: `ลบ ${parcel.name} และข้อมูลที่ยังไม่บันทึกใช่หรือไม่`,
+        message: `ลบ ${parcel.name || "แปลงใหม่"} และข้อมูลที่ยังไม่บันทึกใช่หรือไม่`,
         continueText: "เก็บร่างไว้",
         confirmText: "ลบร่างแปลง",
       });
@@ -2208,7 +2231,7 @@
       return;
     }
     const parcel = registerTemporaryParcel(layer, {
-      name: getNextAvailableParcelName(), photos: [], cropType: "rice", riceVariety: "", note: "",
+      name: "", photos: [], cropType: "rice", riceVariety: "", note: "",
       plantingDate: (() => {
         const today = new Date();
         return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;

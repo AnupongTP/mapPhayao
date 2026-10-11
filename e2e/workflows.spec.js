@@ -213,13 +213,62 @@ test("mobile hazard legend opens, scrolls, and collapses after a local layer req
   await expect(legend).toBeVisible();
   const toggle = legend.locator(".hazard-legend-mobile-toggle");
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(legend.locator(".hazard-legend-content")).toBeHidden();
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(legend.locator(".hazard-legend-content")).toBeVisible();
-  await expectVisualSnapshot(legend, "mobile-hazard-legend.png");
+  const location = page.locator("#mobile-location-launcher");
+  const initialViewport = page.viewportSize();
+  for (const width of [320, 360, 390, 430]) {
+    await page.setViewportSize({ width, height: 844 });
+    const layout = await page.evaluate(() => {
+      const box = (selector) => document.querySelector(selector).getBoundingClientRect();
+      const legend = box(".hazard-legend");
+      const location = box("#mobile-location-launcher");
+      const attribution = box(".leaflet-control-attribution");
+      const zoom = box(".leaflet-control-zoom");
+      return {
+        legendLeft: legend.left, legendRight: legend.right, legendTop: legend.top,
+        zoomRight: zoom.right, zoomBottom: zoom.bottom,
+        locationRight: location.right, locationBottom: location.bottom,
+        attributionTop: attribution.top,
+        overflow: document.documentElement.scrollWidth - innerWidth,
+      };
+    });
+    expect(layout.legendLeft).toBeGreaterThanOrEqual(0);
+    expect(layout.legendRight).toBeLessThanOrEqual(width + 1);
+    expect(layout.legendTop).toBeGreaterThanOrEqual(0);
+    expect(layout.legendLeft).toBeGreaterThan(layout.zoomRight);
+    expect(layout.legendRight).toBeGreaterThan(width - 24);
+    expect(layout.legendTop).toBeLessThan(60);
+    expect(layout.locationRight).toBeGreaterThan(width - 24);
+    expect(layout.locationRight).toBeLessThanOrEqual(width + 1);
+    expect(layout.locationBottom).toBeLessThan(layout.attributionTop);
+    expect(layout.locationBottom).toBeGreaterThan(layout.zoomBottom);
+    expect(layout.overflow).toBeLessThanOrEqual(2);
+    await expect(location).toBeVisible();
+  }
+  await page.setViewportSize(initialViewport);
+  await expectVisualSnapshot(legend.locator(".hazard-legend-content"), "mobile-hazard-legend.png");
   const box = await legend.boundingBox();
   const viewport = page.viewportSize();
   expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+  await page.getByRole("button", { name: "เปิดรายการชั้นข้อมูลแผนที่" }).click();
+  const flood = page.locator(".leaflet-control-layers-overlays label")
+    .filter({ hasText: "พื้นที่น้ำท่วมซ้ำซาก" }).locator("input");
+  await flood.check();
+  await page.getByRole("button", { name: "ปิดรายการชั้นข้อมูลแผนที่" }).click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  const floodTab = legend.getByRole("tab", { name: "น้ำท่วมซ้ำซาก" });
+  const droughtTab = legend.getByRole("tab", { name: "ภัยแล้งซ้ำซาก" });
+  await expect(floodTab).toBeVisible();
+  await expect(droughtTab).toBeVisible();
+  await expect(droughtTab).toHaveAttribute("aria-selected", "true");
+  await floodTab.click();
+  await expect(floodTab).toHaveAttribute("aria-selected", "true");
+  await expect(legend.getByRole("tabpanel", { name: "น้ำท่วมซ้ำซาก" })).toBeVisible();
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   expect(forbidden).toEqual([]);

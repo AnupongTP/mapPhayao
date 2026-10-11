@@ -400,6 +400,8 @@ function createHarness(options = {}) {
     temporaryListLengths: [],
     openedMyParcels: 0,
     messages: [],
+    selectionStatus: null,
+    selectionStatuses: [],
   };
   let parcelHandlers = null;
 
@@ -430,8 +432,9 @@ function createHarness(options = {}) {
       apiCalls.push({ method: "listMyParcels" });
       return { success: true, parcels: options.listParcels || [] };
     },
-    getMyParcel: async (id) => {
+    getMyParcel: async (id, requestOptions) => {
       apiCalls.push({ method: "getMyParcel", id });
+      if (options.getMyParcelHandler) return options.getMyParcelHandler(id, requestOptions);
       if (options.getMyParcelDeferred) {
         return options.getMyParcelDeferred.promise;
       }
@@ -554,6 +557,10 @@ function createHarness(options = {}) {
       renderSavedParcelDetail(parcel, message) {
         uiState.renderedSavedDetails.push({ parcel, message });
       },
+      showSavedParcelSelectionStatus(state, onRetry) {
+        uiState.selectionStatus = { state, onRetry };
+        uiState.selectionStatuses.push(state);
+      },
       updateSavedParcelPhotos(parcelId, photos) {
         uiState.updatedSavedPhotos.push({ parcelId, photos });
       },
@@ -565,6 +572,7 @@ function createHarness(options = {}) {
       },
       closeCurrentResultPanel() {
         uiState.closeResultPanelCalls += 1;
+        uiState.resultPanelCloseHandler?.();
       },
     },
     matchMedia() {
@@ -717,6 +725,90 @@ test("saved parcel tap restores previous highlight and MultiPolygon paths resolv
   assert.equal(layerA.style.color, "#166534");
   assert.equal(layerB.style.color, "#ea580c");
   assert.equal(harness.savedGroup.layers.length, 2);
+});
+
+test("saved parcel highlights immediately, shows loading, and dismisses it on success", async () => {
+  const summary = { ...parcel(PARCEL_A_ID, "A"), images: undefined };
+  const detail = parcel(PARCEL_A_ID, "A");
+  const pending = createDeferred();
+  const harness = createHarness({ getMyParcelHandler: () => pending.promise });
+  harness.parcelHandlers.onParcelsLoaded([summary]);
+
+  const opening = harness.parcelHandlers.onOpenParcel(summary);
+  assert.equal(harness.savedGroup.layers[0].style.color, "#ea580c");
+  assert.equal(harness.uiState.selectionStatus.state, "loading");
+  assert.equal(harness.uiState.renderedSavedDetails.length, 0);
+  pending.resolve({ success: true, parcel: detail });
+  await opening;
+  assert.equal(harness.uiState.selectionStatus.state, null);
+  assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.id, PARCEL_A_ID);
+});
+
+test("newest saved parcel selection wins and closing cancels the pending detail", async () => {
+  const summaryA = { ...parcel(PARCEL_A_ID, "A"), images: undefined };
+  const summaryB = { ...parcel(PARCEL_B_ID, "B", polygon(0.002)), images: undefined };
+  const first = createDeferred();
+  const second = createDeferred();
+  const signals = new Map();
+  const harness = createHarness({ getMyParcelHandler(id, options) {
+    signals.set(id, options.signal);
+    return id === PARCEL_A_ID ? first.promise : second.promise;
+  } });
+  harness.parcelHandlers.onParcelsLoaded([summaryA, summaryB]);
+
+  const openingA = harness.parcelHandlers.onOpenParcel(summaryA);
+  const openingB = harness.parcelHandlers.onOpenParcel(summaryB);
+  assert.equal(signals.get(PARCEL_A_ID).aborted, true);
+  assert.equal(harness.savedGroup.layers.find((layer) => layer._mapPhayaoParcelId === PARCEL_B_ID).style.color, "#ea580c");
+  first.resolve({ success: true, parcel: parcel(PARCEL_A_ID, "A") });
+  await openingA;
+  assert.equal(harness.uiState.renderedSavedDetails.length, 0);
+  second.resolve({ success: true, parcel: parcel(PARCEL_B_ID, "B", polygon(0.002)) });
+  await openingB;
+  assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.id, PARCEL_B_ID);
+
+  const third = createDeferred();
+  const pendingHarness = createHarness({ getMyParcelHandler: () => third.promise });
+  pendingHarness.parcelHandlers.onParcelsLoaded([summaryA]);
+  const opening = pendingHarness.parcelHandlers.onOpenParcel(summaryA);
+  pendingHarness.uiState.resultPanelCloseHandler();
+  assert.equal(pendingHarness.uiState.selectionStatus.state, null);
+  assert.equal(pendingHarness.savedGroup.layers[0].style.color, "#166534");
+  third.resolve({ success: true, parcel: parcel(PARCEL_A_ID, "A") });
+  await opening;
+  assert.equal(pendingHarness.uiState.renderedSavedDetails.length, 0);
+});
+
+test("failed saved detail keeps selection and offers a bounded user retry", async () => {
+  const summary = { ...parcel(PARCEL_A_ID, "A"), images: undefined };
+  let attempts = 0;
+  const harness = createHarness({ getMyParcelHandler: async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("unavailable");
+    return { success: true, parcel: parcel(PARCEL_A_ID, "A") };
+  } });
+  harness.parcelHandlers.onParcelsLoaded([summary]);
+  await harness.parcelHandlers.onOpenParcel(summary);
+  assert.equal(harness.uiState.selectionStatus.state, "error");
+  assert.equal(harness.savedGroup.layers[0].style.color, "#ea580c");
+  assert.equal(harness.uiState.renderedSavedDetails.length, 0);
+  await harness.uiState.selectionStatus.onRetry();
+  assert.equal(attempts, 2);
+  assert.equal(harness.uiState.selectionStatus.state, null);
+  assert.equal(harness.uiState.renderedSavedDetails.at(-1).parcel.id, PARCEL_A_ID);
+});
+
+test("ID-only saved parcel waits for owned detail before creating its map layer", async () => {
+  const pending = createDeferred();
+  const harness = createHarness({ getMyParcelHandler: () => pending.promise });
+  const opening = harness.parcelHandlers.onOpenParcel({ id: PARCEL_A_ID });
+  assert.equal(harness.uiState.selectionStatus.state, "loading");
+  assert.equal(harness.savedGroup.layers.length, 0);
+  pending.resolve({ success: true, parcel: parcel(PARCEL_A_ID, "A") });
+  await opening;
+  assert.equal(harness.savedGroup.layers.length, 1);
+  assert.equal(harness.savedGroup.layers[0].style.color, "#ea580c");
+  assert.equal(harness.uiState.selectionStatus.state, null);
 });
 
 test("rebuilding saved layers keeps one click handler per persisted layer", () => {

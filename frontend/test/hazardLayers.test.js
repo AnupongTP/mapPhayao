@@ -88,6 +88,9 @@ function floodResponse(features = [feature(1, [2024])], properties = {}) {
 }
 
 function createDomNode(tagName, className) {
+  const classes = new Set((className || "").split(" ").filter(Boolean));
+  const attributes = new Map();
+  const listeners = new Map();
   return {
     tagName,
     className: className || "",
@@ -95,6 +98,20 @@ function createDomNode(tagName, className) {
     style: {},
     hidden: false,
     textContent: "",
+    classList: {
+      add(name) { classes.add(name); },
+      remove(name) { classes.delete(name); },
+      contains(name) { return classes.has(name); },
+      toggle(name) {
+        if (classes.has(name)) { classes.delete(name); return false; }
+        classes.add(name);
+        return true;
+      },
+    },
+    setAttribute(name, value) { attributes.set(name, value); },
+    getAttribute(name) { return attributes.get(name); },
+    addEventListener(name, handler) { listeners.set(name, handler); },
+    click() { listeners.get("click")?.(); },
     appendChild(child) {
       this.children.push(child);
       return child;
@@ -210,8 +227,9 @@ function createLeafletStub(state) {
         }
       },
     },
-    control() {
+    control(options) {
       return {
+        options,
         addTo(map) {
           this.container = this.onAdd(map);
           state.controls.push(this);
@@ -600,6 +618,41 @@ test("flood legend uses five-year blue classes and dynamic period", async () => 
     swatches.slice(0, 3).map((node) => node.style.backgroundColor),
     ["#D9F0FF", "#7EC3F7", "#1F6FD6"],
   );
+});
+
+test("hazard legend stays closed when layers are enabled and opens only on tap", async () => {
+  const harness = createHarness();
+  const legend = harness.legend;
+  const toggle = findNodes(legend, (node) => node.className === "hazard-legend-mobile-toggle")[0];
+  assert.equal(harness.state.controls[0].options.position, "topright");
+  assert.equal(legend.hidden, true);
+
+  harness.map.addOverlay(harness.floodLayer);
+  assert.equal(legend.hidden, false);
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  assert.equal(findNodes(legend, (node) => node.tagName === "h4").length, 1);
+  toggle.click();
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  await flushAsync();
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+
+  harness.map.addOverlay(harness.overlays.droughtRecurrenceLayer);
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  assert.equal(findNodes(legend, (node) => node.tagName === "h4").length, 2);
+  toggle.click();
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  harness.map.removeOverlay(harness.floodLayer);
+  assert.equal(findNodes(legend, (node) => node.tagName === "h4").length, 1);
+  assert.match(collectText(legend), /ภัยแล้ง/);
+  harness.map.removeOverlay(harness.overlays.droughtRecurrenceLayer);
+  assert.equal(legend.hidden, true);
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+
+  harness.map.addOverlay(harness.overlays.droughtRecurrenceLayer);
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+  toggle.click();
+  toggle.click();
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
 });
 
 test("flood popup uses five-year values and safe admin labels", async () => {

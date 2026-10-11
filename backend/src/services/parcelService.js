@@ -8,6 +8,8 @@ const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
 const PARCEL_NOT_FOUND_MESSAGE = "Parcel not found";
 const AUTH_REQUIRED_MESSAGE = "LINE authentication required";
+const MAX_AUTO_PARCEL_NAME_NUMBER = 9223372036854775807n;
+const AUTOMATIC_PARCEL_NAME = /^แปลงที่ [1-9][0-9]*$/;
 
 function normalizeText(value) {
   if (value === null || value === undefined) {
@@ -119,6 +121,43 @@ const PARCEL_SELECT_FIELDS = `
   updated_at
 `;
 
+async function assertAutomaticStyleNameAvailable(database, ownerUserId, name, parcelId = null) {
+  if (!AUTOMATIC_PARCEL_NAME.test(name || "")) return;
+  if (parcelId) {
+    const current = await database.query(`
+      SELECT parcel_name FROM app.parcels WHERE id = $1 AND owner_user_id = $2;
+    `, [parcelId, ownerUserId]);
+    if (current.rows[0]?.parcel_name === name) return;
+  }
+  const occupied = await database.query(`
+    SELECT EXISTS (
+      SELECT 1 FROM app.parcels
+      WHERE owner_user_id = $1 AND parcel_name = $2
+        AND ($3::uuid IS NULL OR id <> $3::uuid)
+    ) AS occupied;
+  `, [ownerUserId, name, parcelId]);
+  if (occupied.rows[0]?.occupied) {
+    throw createHttpError(409, "ชื่อแปลงนี้ถูกใช้แล้ว กรุณาใช้ชื่ออื่น");
+  }
+}
+
+async function withOwnerNameWriteLock(ownerUserId, work) {
+  const client = await db.pool.connect();
+  try {
+    await client.query("BEGIN");
+    const owner = await client.query("SELECT id FROM app.users WHERE id = $1 FOR UPDATE", [ownerUserId]);
+    if (!owner.rows[0]) throw createHttpError(404, PARCEL_NOT_FOUND_MESSAGE);
+    const result = await work(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function createParcel(payload, options = {}) {
   // บันทึกแปลงใน transaction เดียว เพื่อไม่ให้รหัสแปลงกับ geometry หลุดจากกัน
   const geometry = validateGeometry(payload.geometry);
@@ -144,6 +183,41 @@ async function createParcel(payload, options = {}) {
     await client.query("BEGIN");
     const appUser = await userService.findOrCreateLineUser(lineUserId, { client });
     const ownerUserId = validateAppUserId(appUser?.id);
+    const counter = await client.query(`
+      SELECT next_auto_parcel_name_number
+      FROM app.users
+      WHERE id = $1
+      FOR UPDATE;
+    `, [ownerUserId]);
+    if (!counter.rows[0]) throw new Error("Parcel owner counter is missing");
+    let savedParcelName = parcelName;
+    if (savedParcelName) {
+      await assertAutomaticStyleNameAvailable(client, ownerUserId, savedParcelName);
+    } else {
+      let number = BigInt(counter.rows[0].next_auto_parcel_name_number);
+      while (number <= MAX_AUTO_PARCEL_NAME_NUMBER) {
+        const candidate = `แปลงที่ ${number}`;
+        const occupied = await client.query(`
+          SELECT EXISTS (
+            SELECT 1 FROM app.parcels
+            WHERE owner_user_id = $1 AND parcel_name = $2
+          ) AS occupied;
+        `, [ownerUserId, candidate]);
+        if (!occupied.rows[0]?.occupied) {
+          savedParcelName = candidate;
+          break;
+        }
+        number += 1n;
+      }
+      if (!savedParcelName || number === MAX_AUTO_PARCEL_NAME_NUMBER) {
+        throw createHttpError(409, "ไม่สามารถตั้งชื่อแปลงอัตโนมัติเพิ่มได้");
+      }
+      await client.query(`
+        UPDATE app.users
+        SET next_auto_parcel_name_number = $2::bigint
+        WHERE id = $1;
+      `, [ownerUserId, String(number + 1n)]);
+    }
 
     const result = await client.query(
       `
@@ -207,7 +281,7 @@ async function createParcel(payload, options = {}) {
       `,
       [
         geometryJson,
-        parcelName,
+        savedParcelName,
         cropType,
         riceVariety,
         plantingDate,
@@ -355,7 +429,7 @@ async function deleteOwnedParcel(id, appUserId, cleanup, databaseClient) {
   }
 }
 
-async function updateOwnedParcel(id, payload, appUserId) {
+async function updateOwnedParcelQuery(id, payload, appUserId, database = db) {
   const parcelId = validateUuid(id);
   const ownerUserId = validateAppUserId(appUserId);
   const hasParcelName = Object.prototype.hasOwnProperty.call(payload, "parcelName");
@@ -383,7 +457,7 @@ async function updateOwnedParcel(id, payload, appUserId) {
   if (hasGeometry) {
     const geometryJson = JSON.stringify(geometry);
     try {
-      const result = await db.query(
+      const result = await database.query(
         `
         WITH matched AS (
           SELECT id
@@ -508,7 +582,7 @@ async function updateOwnedParcel(id, payload, appUserId) {
     }
   }
 
-  const result = await db.query(
+  const result = await database.query(
     `
     UPDATE app.parcels
     SET
@@ -544,6 +618,19 @@ async function updateOwnedParcel(id, payload, appUserId) {
   }
 
   return parcel;
+}
+
+async function updateOwnedParcel(id, payload, appUserId) {
+  const parcelId = validateUuid(id);
+  const ownerUserId = validateAppUserId(appUserId);
+  if (!Object.prototype.hasOwnProperty.call(payload, "parcelName")) {
+    return updateOwnedParcelQuery(parcelId, payload, ownerUserId);
+  }
+  return withOwnerNameWriteLock(ownerUserId, async (client) => {
+    await assertAutomaticStyleNameAvailable(client, ownerUserId,
+      normalizeText(payload.parcelName), parcelId);
+    return updateOwnedParcelQuery(parcelId, payload, ownerUserId, client);
+  });
 }
 
 async function getOwnedParcelAnalysisInput(id, appUserId) {
