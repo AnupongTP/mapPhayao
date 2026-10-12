@@ -96,6 +96,22 @@ function imageReadHarness(outcomes, timerOptions = {}) {
   return { ...harness, delays, logs };
 }
 
+test("flood generation API uses the public generation endpoint and forwards abort signal", async () => {
+  const { calls, MapApi } = createApiHarness({ generation: "7" });
+  const controller = new AbortController();
+
+  const result = await MapApi.getFloodRecurrenceGeneration({ signal: controller.signal });
+
+  assert.equal(result.generation, "7");
+  assert.equal(
+    calls[0].url,
+    "https://backend.example.test/api/hazard-layers/flood-recurrence-generation",
+  );
+  assert.equal(calls[0].options.signal, controller.signal);
+  assert.equal(calls[0].options.cache, "no-store");
+  assert.equal(calls[0].options.headers, undefined);
+});
+
 test("parcel photo upload uses authenticated multipart without client owner fields", async () => {
   const { calls, MapApi } = createApiHarness({ image: { id: "image-id" } });
   const parcelId = "11111111-1111-4111-8111-111111111111";

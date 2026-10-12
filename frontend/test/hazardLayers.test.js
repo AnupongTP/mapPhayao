@@ -23,14 +23,9 @@ function nextTick() {
 }
 
 async function flushAsync() {
-  await nextTick();
-  await nextTick();
-  await nextTick();
-  await nextTick();
-  await nextTick();
-  await nextTick();
-  await nextTick();
-  await nextTick();
+  for (let index = 0; index < 20; index += 1) {
+    await nextTick();
+  }
 }
 
 function collectText(node) {
@@ -85,6 +80,7 @@ function floodResponse(features = [feature(1, [2024])], properties = {}) {
       endYear: 2024,
       years: [2020, 2021, 2022, 2023, 2024],
       yearCount: 5,
+      datasetGeneration: "1",
       ...properties,
     },
     features,
@@ -261,10 +257,10 @@ function createMapStub(state) {
     },
     getBounds() {
       return {
-        getWest: () => 99.9,
-        getSouth: () => 19,
-        getEast: () => 100,
-        getNorth: () => 19.1,
+        getWest: () => state.bounds[0],
+        getSouth: () => state.bounds[1],
+        getEast: () => state.bounds[2],
+        getNorth: () => state.bounds[3],
       };
     },
     getZoom() {
@@ -284,14 +280,23 @@ function createMapStub(state) {
 function createHarness(options = {}) {
   const state = {
     apiCalls: [],
+    generationCalls: [],
     droughtCalls: [],
     canvasOptions: [],
     controls: [],
     geoJsonLayers: [],
     mapClicks: 0,
     messages: [],
+    bounds: [99.9, 19, 100, 19.1],
+    now: options.now || 1_000_000,
   };
   const responses = options.responses || [floodResponse()];
+  const generationResponses = options.generationResponses || [{ generation: "1" }];
+  class HarnessDate extends Date {
+    static now() {
+      return state.now;
+    }
+  }
   const window = {
     AppConfig: {
       map: { maxZoom: 18 },
@@ -310,6 +315,19 @@ function createHarness(options = {}) {
       },
     },
     MapApi: {
+      getFloodRecurrenceGeneration: async (requestOptions) => {
+        state.generationCalls.push({ requestOptions });
+        const next = generationResponses.length > 1
+          ? generationResponses.shift()
+          : generationResponses[0];
+        if (next && typeof next.then === "function") {
+          return next;
+        }
+        if (next instanceof Error) {
+          throw next;
+        }
+        return next || { generation: "1" };
+      },
       getFloodRecurrenceLayer: async (bbox, zoom, requestOptions) => {
         state.apiCalls.push({ bbox, zoom, requestOptions });
         const next = responses.shift();
@@ -348,6 +366,7 @@ function createHarness(options = {}) {
     Number,
     String,
     Promise,
+    Date: HarnessDate,
     console: window.console,
     setTimeout,
     clearTimeout,
@@ -449,14 +468,15 @@ test("flood enable while prefetching waits for the same request", async () => {
   assert.equal(harness.map.hasLayer(harness.floodLayer), true);
 });
 
-test("flood disable before prefetch completion prevents late display but keeps cache", async () => {
+test("flood disable aborts prefetch and prevents stale cache population", async () => {
   const pending = createDeferred();
-  const harness = createHarness({ responses: [pending.promise] });
+  const harness = createHarness({ responses: [pending.promise, floodResponse()] });
 
   const prefetchPromise = harness.floodController.prefetch();
   harness.map.addOverlay(harness.floodLayer);
   await flushAsync();
   harness.map.removeOverlay(harness.floodLayer);
+  assert.equal(harness.state.apiCalls[0].requestOptions.signal.aborted, true);
   pending.resolve(floodResponse());
   await prefetchPromise;
   await flushAsync();
@@ -467,8 +487,47 @@ test("flood disable before prefetch completion prevents late display but keeps c
 
   harness.map.addOverlay(harness.floodLayer);
   await flushAsync();
-  assert.equal(harness.state.apiCalls.length, 1);
+  assert.equal(harness.state.apiCalls.length, 2);
   assert.equal(harness.floodLayer.getLayers().length, 1);
+});
+
+test("flood viewport change aborts the old request and suppresses its stale response", async () => {
+  const pending = createDeferred();
+  const harness = createHarness({ responses: [pending.promise, floodResponse([feature(3, [2022, 2023, 2024])])] });
+
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+  const firstSignal = harness.state.apiCalls[0].requestOptions.signal;
+  harness.state.bounds = [100.1, 19.1, 100.2, 19.2];
+  const newerLoad = harness.floodController.load();
+  await flushAsync();
+
+  assert.equal(firstSignal.aborted, true);
+  assert.equal(harness.state.apiCalls.length, 2);
+  pending.resolve(floodResponse([feature(1, [2024])]));
+  await newerLoad;
+  await flushAsync();
+
+  assert.match(harness.floodController.getState().dataKey, /^100\.100000,19\.100000/);
+  assert.equal(harness.floodLayer.getLayers()[0].feature.properties.frequency, 3);
+});
+
+test("flood HTTP 413 is shown once and is not retried after an in-flight prefetch", async () => {
+  const pending = createDeferred();
+  const error = Object.assign(new Error("extent too large"), { statusCode: 413 });
+  const harness = createHarness({ responses: [pending.promise, floodResponse()] });
+
+  const prefetch = harness.floodController.prefetch();
+  await flushAsync();
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+  pending.reject(error);
+  await prefetch;
+  await flushAsync();
+
+  assert.equal(harness.state.apiCalls.length, 1);
+  assert.equal(harness.floodController.getState().status, "failed");
+  assert.equal(harness.state.messages.includes("ไม่สามารถโหลดข้อมูลน้ำท่วมซ้ำซากได้ในขณะนี้"), true);
 });
 
 test("flood prefetch failures are silent and user-triggered retries remain possible", async () => {
@@ -587,6 +646,7 @@ test("flood layer reuses successful session cache and does not duplicate legend"
   await flushAsync();
   const firstLegend = harness.legend;
   assert.equal(harness.state.apiCalls.length, 1);
+  assert.equal(harness.state.generationCalls.length, 1);
 
   harness.map.removeOverlay(harness.floodLayer);
   assert.equal(harness.floodLayer.getLayers().length, 1);
@@ -594,9 +654,102 @@ test("flood layer reuses successful session cache and does not duplicate legend"
   await flushAsync();
 
   assert.equal(harness.state.apiCalls.length, 1);
+  assert.equal(harness.state.generationCalls.length, 2);
   assert.equal(harness.legend, firstLegend);
   assert.equal(findNodes(harness.legend, (node) => node.tagName === "h4").length, 1);
   assert.equal(harness.floodLayer.getLayers().length, 1);
+});
+
+test("flood layer invalidates cached geometry when dataset generation changes", async () => {
+  const harness = createHarness({
+    generationResponses: [{ generation: "1" }, { generation: "2" }],
+    responses: [
+      floodResponse([feature(1, [2024])], { datasetGeneration: "1" }),
+      floodResponse([feature(2, [2023, 2024])], { datasetGeneration: "2" }),
+    ],
+  });
+
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+  assert.equal(harness.state.apiCalls.length, 1);
+
+  harness.map.removeOverlay(harness.floodLayer);
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+
+  assert.equal(harness.state.apiCalls.length, 2);
+  assert.equal(harness.floodController.getState().generation, "2");
+  assert.equal(harness.floodController.getState().cacheEntries, 1);
+  assert.deepEqual(
+    harness.floodLayer.getLayers().map((item) => item.feature.properties.frequency),
+    [2],
+  );
+});
+
+test("flood layer bypasses cache when generation probe fails", async () => {
+  const harness = createHarness({
+    generationResponses: [{ generation: "1" }, new Error("generation unavailable")],
+    responses: [floodResponse(), floodResponse()],
+  });
+
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+  harness.map.removeOverlay(harness.floodLayer);
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+
+  assert.equal(harness.state.apiCalls.length, 2);
+  assert.equal(harness.floodLayer.getLayers().length, 1);
+});
+
+test("flood layer rejects generation regression without serving stale cached geometry", async () => {
+  const harness = createHarness({
+    generationResponses: [{ generation: "2" }, { generation: "1" }],
+    responses: [floodResponse([feature(2, [2023, 2024])], { datasetGeneration: "2" })],
+  });
+
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+  harness.map.removeOverlay(harness.floodLayer);
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+
+  assert.equal(harness.state.apiCalls.length, 1);
+  assert.equal(harness.floodController.getState().generation, "2");
+  assert.equal(harness.floodController.getState().status, "failed");
+  assert.equal(harness.floodLayer.getLayers().length, 0);
+});
+
+test("flood layer expires cached responses after the bounded cache lifetime", async () => {
+  const harness = createHarness({ responses: [floodResponse(), floodResponse()] });
+
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+  harness.map.removeOverlay(harness.floodLayer);
+  harness.state.now += 60_001;
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+
+  assert.equal(harness.state.apiCalls.length, 2);
+  assert.equal(harness.floodController.getState().cacheEntries, 1);
+});
+
+test("flood layer cache remains bounded by entry count and estimated bytes", async () => {
+  const responses = Array.from({ length: 22 }, () => floodResponse());
+  const harness = createHarness({ responses });
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+
+  for (let index = 1; index < 22; index += 1) {
+    harness.state.bounds = [99.9 + index / 1000, 19, 100 + index / 1000, 19.1];
+    await harness.floodController.load();
+  }
+
+  const cacheState = harness.floodController.getState();
+  assert.equal(harness.state.apiCalls.length, 22);
+  assert.equal(cacheState.cacheEntries, 20);
+  assert.ok(cacheState.cacheBytes > 0);
+  assert.ok(cacheState.cacheBytes <= 16 * 1024 * 1024);
 });
 
 test("flood layer avoids duplicate in-flight requests and failed loads can retry", async () => {
