@@ -44,6 +44,9 @@
 
   const FLOOD_LOADING_MESSAGE = "กำลังโหลดข้อมูลน้ำท่วมซ้ำซาก…";
   const FLOOD_FAILURE_MESSAGE = "ไม่สามารถโหลดข้อมูลน้ำท่วมซ้ำซากได้ในขณะนี้";
+  const FLOOD_CACHE_MAX_ENTRIES = 20;
+  const FLOOD_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+  const FLOOD_CACHE_MAX_AGE_MS = 60 * 1000;
 
   function createBaseLayers() {
     const maxZoom = window.AppConfig.map.maxZoom;
@@ -397,7 +400,11 @@
       loadingKey: "",
       error: null,
       cache: new Map(),
+      cacheBytes: 0,
+      generation: "",
       metadata: null,
+      abortController: null,
+      requestId: 0,
     };
 
     function publishMetadata() {
@@ -416,10 +423,74 @@
       };
     }
 
+    function normalizeGeneration(value) {
+      const generation = String(value || "");
+      return /^[1-9]\d*$/.test(generation) ? generation : "";
+    }
+
+    function compareGenerations(left, right) {
+      if (left.length !== right.length) {
+        return left.length < right.length ? -1 : 1;
+      }
+      return left === right ? 0 : (left < right ? -1 : 1);
+    }
+
+    function removeCacheEntry(key) {
+      const entry = state.cache.get(key);
+      if (!entry) {
+        return;
+      }
+      state.cache.delete(key);
+      state.cacheBytes = Math.max(0, state.cacheBytes - entry.bytes);
+    }
+
+    function clearResultCache() {
+      state.cache.clear();
+      state.cacheBytes = 0;
+    }
+
+    function acceptGeneration(generation) {
+      if (!generation) {
+        return;
+      }
+      if (state.generation && compareGenerations(generation, state.generation) < 0) {
+        const error = new Error("Flood dataset generation regressed");
+        error.code = "FLOOD_DATASET_GENERATION_REGRESSION";
+        throw error;
+      }
+      if (state.generation && state.generation !== generation) {
+        clearResultCache();
+        state.data = null;
+        state.dataKey = "";
+        state.preparedKey = "";
+        layer.clearLayers();
+        state.metadata = null;
+        publishMetadata();
+      }
+      state.generation = generation;
+    }
+
+    function cacheKey(key, generation) {
+      return `${key}:${generation}`;
+    }
+
     function rememberGeojson(key, geojson) {
-      state.cache.set(key, geojson);
-      if (state.cache.size > 20) {
-        state.cache.delete(state.cache.keys().next().value);
+      const generation = normalizeGeneration(geojson?.properties?.datasetGeneration);
+      acceptGeneration(generation);
+      if (generation) {
+        const entryKey = cacheKey(key, generation);
+        removeCacheEntry(entryKey);
+        const bytes = JSON.stringify(geojson).length * 2;
+        state.cache.set(entryKey, {
+          geojson,
+          bytes,
+          expiresAt: Date.now() + FLOOD_CACHE_MAX_AGE_MS,
+        });
+        state.cacheBytes += bytes;
+        while (state.cache.size > FLOOD_CACHE_MAX_ENTRIES
+            || state.cacheBytes > FLOOD_CACHE_MAX_BYTES) {
+          removeCacheEntry(state.cache.keys().next().value);
+        }
       }
       state.data = geojson;
       state.dataKey = key;
@@ -438,8 +509,37 @@
       publishMetadata();
     }
 
-    function getCachedGeojson(key) {
-      return state.cache.get(key) || null;
+    function getCachedGeojson(key, generation = state.generation) {
+      if (!generation) {
+        return null;
+      }
+      const entryKey = cacheKey(key, generation);
+      const entry = state.cache.get(entryKey);
+      if (!entry) {
+        return null;
+      }
+      if (entry.expiresAt <= Date.now()) {
+        removeCacheEntry(entryKey);
+        return null;
+      }
+      state.cache.delete(entryKey);
+      state.cache.set(entryKey, entry);
+      return entry.geojson;
+    }
+
+    async function readCurrentGeneration(signal) {
+      if (typeof window.MapApi.getFloodRecurrenceGeneration !== "function") {
+        return "";
+      }
+      try {
+        const result = await window.MapApi.getFloodRecurrenceGeneration({ signal });
+        return normalizeGeneration(result?.generation);
+      } catch (error) {
+        if (error?.name === "AbortError") {
+          throw error;
+        }
+        return "";
+      }
     }
 
     function shouldSkipPrefetch() {
@@ -454,39 +554,53 @@
     }
 
     async function requestGeojson(request, options = {}) {
-      const cached = getCachedGeojson(request.key);
-      if (cached) {
-        prepareLayer(request.key, cached);
-        return cached;
-      }
-
       if (state.promise) {
         if (state.loadingKey === request.key) {
           return state.promise;
         }
-        await state.promise.catch(() => null);
-        const laterCached = getCachedGeojson(request.key);
-        if (laterCached) {
-          prepareLayer(request.key, laterCached);
-          return laterCached;
+        if (state.abortController) {
+          state.abortController.abort();
         }
       }
 
       const controller = new AbortController();
+      state.requestId += 1;
+      const currentRequestId = state.requestId;
+      state.abortController = controller;
       state.status = options.prefetch ? "prefetching" : "loading";
       state.loadingKey = request.key;
       state.error = null;
-      state.promise = window.MapApi.getFloodRecurrenceLayer(
-        request.bbox,
-        request.zoom,
-        { signal: controller.signal },
-      )
+      state.promise = (async () => {
+        const generation = await readCurrentGeneration(controller.signal);
+        if (controller.signal.aborted || currentRequestId !== state.requestId) {
+          const error = new Error("Flood layer request was aborted");
+          error.name = "AbortError";
+          throw error;
+        }
+        acceptGeneration(generation);
+        const cached = getCachedGeojson(request.key, generation);
+        if (cached) {
+          prepareLayer(request.key, cached);
+          return cached;
+        }
+        return window.MapApi.getFloodRecurrenceLayer(
+          request.bbox,
+          request.zoom,
+          { signal: controller.signal },
+        );
+      })()
         .then((geojson) => {
+          if (controller.signal.aborted || currentRequestId !== state.requestId) {
+            return geojson;
+          }
           rememberGeojson(request.key, geojson);
           prepareLayer(request.key, geojson);
           return geojson;
         })
         .catch((error) => {
+          if (controller.signal.aborted || currentRequestId !== state.requestId) {
+            throw error;
+          }
           state.status = "failed";
           state.error = error;
           if (error.name !== "AbortError") {
@@ -498,9 +612,10 @@
           throw error;
         })
         .finally(() => {
-          if (state.loadingKey === request.key) {
+          if (currentRequestId === state.requestId) {
             state.promise = null;
             state.loadingKey = "";
+            state.abortController = null;
           }
         });
 
@@ -525,18 +640,6 @@
       }
 
       const request = getLayerRequest();
-      if (state.preparedKey === request.key && layer.getLayers().length) {
-        notifyHazardLayer("");
-        return;
-      }
-
-      const cached = getCachedGeojson(request.key);
-      if (cached) {
-        prepareLayer(request.key, cached);
-        notifyHazardLayer("");
-        return;
-      }
-
       notifyHazardLayer(FLOOD_LOADING_MESSAGE);
 
       const waitingForPrefetch =
@@ -547,7 +650,7 @@
         if (!state.enabled || !map.hasLayer(layer)) {
           return;
         }
-        if (!waitingForPrefetch) {
+        if (!waitingForPrefetch || error.statusCode === 413) {
           if (error.name !== "AbortError") {
             layer.clearLayers();
             state.preparedKey = "";
@@ -568,7 +671,7 @@
       }
 
       if (state.enabled && map.hasLayer(layer)) {
-        const latest = getCachedGeojson(request.key);
+        const latest = getCachedGeojson(request.key) || state.data;
         if (latest) {
           prepareLayer(request.key, latest);
         }
@@ -594,6 +697,13 @@
 
     function unload() {
       state.enabled = false;
+      state.requestId += 1;
+      if (state.abortController) {
+        state.abortController.abort();
+      }
+      state.promise = null;
+      state.loadingKey = "";
+      state.abortController = null;
       map.off("moveend", scheduleLoad);
       if (state.timer) {
         window.clearTimeout(state.timer);
@@ -615,6 +725,9 @@
         preparedKey: state.preparedKey,
         hasPromise: Boolean(state.promise),
         hasData: Boolean(state.data),
+        generation: state.generation,
+        cacheEntries: state.cache.size,
+        cacheBytes: state.cacheBytes,
         featureCount: layer.getLayers().length,
       }),
     };

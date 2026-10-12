@@ -98,6 +98,13 @@
     return getJson(`/hazard-layers/flood-recurrence?${params.toString()}`, options);
   }
 
+  function getFloodRecurrenceGeneration(options) {
+    return getJson("/hazard-layers/flood-recurrence-generation", {
+      ...options,
+      cache: "no-store",
+    });
+  }
+
   function getDroughtRecurrenceLayer(options) {
     return getJson("/hazard-layers/drought-recurrence", options);
   }
@@ -236,6 +243,7 @@
     getRiceSuitabilityAtPoint,
     getLocationReport,
     getFloodRecurrenceLayer,
+    getFloodRecurrenceGeneration,
     getDroughtRecurrenceLayer,
     analyzeLineLocation: function (payload, options) {
       return sendJson("/line/location-analysis", payload, "POST", options);

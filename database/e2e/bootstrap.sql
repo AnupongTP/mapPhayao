@@ -113,6 +113,15 @@ CREATE TABLE gis.flood_recurrence_pyo (
   synced_at timestamptz,
   geom geometry(MultiPolygon, 4326) NOT NULL
 );
+CREATE TABLE gis.dataset_generations (
+  dataset_key text PRIMARY KEY,
+  generation bigint NOT NULL CHECK (generation > 0),
+  source_count bigint CHECK (source_count IS NULL OR source_count > 0),
+  published_row_count bigint CHECK (published_row_count IS NULL OR published_row_count > 0),
+  published_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+INSERT INTO gis.dataset_generations (dataset_key,generation)
+VALUES ('flood_recurrence_pyo',1);
 CREATE TABLE gis.drought_recurrence_tambon_pyo (
   id integer PRIMARY KEY,
   tambon_name text,

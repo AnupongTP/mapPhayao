@@ -1,499 +1,182 @@
-const test = require("node:test");
+"use strict";
+
 const assert = require("node:assert/strict");
-
+const test = require("node:test");
 const db = require("../src/config/database");
-const hazardLayerService = require("../src/services/hazardLayerService");
+const service = require("../src/services/hazardLayerService");
 
-const originalQuery = db.query;
+const BBOX = "99.9,19.0,100.0,19.1";
+const YEARS = [2020, 2021, 2022, 2023, 2024];
+let testGeneration = 100;
 
-test.afterEach(() => {
-  db.query = originalQuery;
-  hazardLayerService.clearCache();
-});
-
-function mockFloodQueries({
-  latestYear = 2024,
-  years,
-  count = 1,
-  latestSyncedAt = "2026-07-17T00:00:00.000Z",
-  rows = [],
-} = {}) {
-  const calls = [];
-  const selectedYears = Array.isArray(years)
-    ? years
-    : Array.from({ length: 5 }, (_, index) => latestYear - 4 + index);
-  db.query = async (sql, params) => {
-    calls.push({ sql, params });
-    if (calls.length === 1) {
-      return {
-        rows: [{
-          start_year: selectedYears[0],
-          end_year: selectedYears[selectedYears.length - 1],
-          years: selectedYears,
-        }],
-      };
-    }
-    if (calls.length === 2) {
-      return { rows: [{ count, latest_synced_at: latestSyncedAt }] };
-    }
-    return { rows };
-  };
-  return calls;
-}
-
-function floodRow(properties) {
+function collection(features = []) {
   return {
-    properties,
-    geometry: JSON.stringify({
-      type: "MultiPolygon",
-      coordinates: [[[[99, 19], [100, 19], [100, 20], [99, 19]]]],
-    }),
+    type: "FeatureCollection",
+    properties: { startYear: 2020, endYear: 2024, years: YEARS, yearCount: 5 },
+    features,
   };
 }
 
-test("parseBbox accepts valid longitude latitude bounds", () => {
-  const result = hazardLayerService.parseBbox("99.9,19.0,100.0,19.1");
-
-  assert.deepEqual(result.bbox, {
-    minLng: 99.9,
-    minLat: 19,
-    maxLng: 100,
-    maxLat: 19.1,
-  });
-});
-
-test("parseBbox rejects invalid bounds", () => {
-  assert.match(hazardLayerService.parseBbox("99,19,98,20").error, /min values/);
-  assert.match(hazardLayerService.parseBbox("99,19,100").error, /must contain/);
-  assert.match(hazardLayerService.parseBbox("181,19,182,20").error, /outside/);
-});
-
-test("flood layer validates bbox before querying database", async () => {
-  let queried = false;
-  db.query = async () => {
-    queried = true;
-    return { rows: [] };
+function feature() {
+  return {
+    type: "Feature",
+    properties: {
+      frequency: 1, yearsDetected: [2024], startYear: 2020, endYear: 2024,
+      areaRai: 1.25, province: "Phayao", district: "Mueang", subdistrict: "Mae Ka",
+      source: "GISTDA",
+    },
+    geometry: { type: "Polygon", coordinates: [] },
   };
+}
 
-  await assert.rejects(
-    () => hazardLayerService.getFloodRecurrenceLayer({ bbox: "bad", zoom: 12 }),
-    /bbox must contain/,
-  );
-  assert.equal(queried, false);
-});
-
-test("flood latest five available years are detected dynamically", async () => {
+function installFloodMock({ generation = String(testGeneration), row, failBuild } = {}) {
+  let currentGeneration = generation;
+  let builds = 0;
+  let generationReads = 0;
   db.query = async (sql, params) => {
-    assert.deepEqual(params, [5]);
-    return { rows: [{ start_year: 2020, end_year: 2024, years: [2020, 2021, 2022, 2023, 2024] }] };
+    if (/gis\.dataset_generations/.test(sql)) {
+      generationReads += 1;
+      assert.deepEqual(params, ["flood_recurrence_pyo"]);
+      return { rows: [{ generation: currentGeneration }] };
+    }
+    if (/collection_candidate/.test(sql)) {
+      builds += 1;
+      if (failBuild && builds === 1) throw new Error("temporary dissolve failure");
+      return { rows: [row || {
+        years: YEARS,
+        source_overflow: false,
+        output_overflow: false,
+        byte_overflow: false,
+        collection: collection([feature()]),
+      }] };
+    }
+    throw new Error(`Unexpected query: ${sql.slice(0, 80)}`);
   };
+  return {
+    builds: () => builds,
+    generationReads: () => generationReads,
+    setGeneration(value) { currentGeneration = value; },
+  };
+}
 
-  const result = await hazardLayerService.getFloodYearWindow(5);
-
-  assert.deepEqual(result, {
-    startYear: 2020,
-    endYear: 2024,
-    years: [2020, 2021, 2022, 2023, 2024],
-  });
+test.beforeEach(() => {
+  testGeneration += 10;
+  service.clearCache();
 });
 
-test("flood latest five-year window uses available source years, not current calendar", async () => {
-  db.query = async () => ({
-    rows: [{ start_year: 2019, end_year: 2025, years: [2019, 2021, 2022, 2024, 2025] }],
+test("bbox validation and zoom tolerance remain compatible", () => {
+  assert.deepEqual(service.parseBbox(BBOX).bbox, {
+    minLng: 99.9, minLat: 19, maxLng: 100, maxLat: 19.1,
   });
-
-  const result = await hazardLayerService.getFloodYearWindow(5);
-
-  assert.deepEqual(result, {
-    startYear: 2019,
-    endYear: 2025,
-    years: [2019, 2021, 2022, 2024, 2025],
-  });
+  assert.match(service.parseBbox("bad").error, /must contain/);
+  assert.match(service.parseBbox("99,19,98,20").error, /min values/);
+  assert.equal(service.getFloodTolerance(15), 0);
+  assert.equal(service.getFloodTolerance(12), 5);
+  assert.equal(service.getFloodTolerance(9), 10);
+  assert.equal(service.getFloodTolerance(8), 20);
 });
 
-test("shared flood year-window helper keeps the 10-year default for non-layer consumers", async () => {
+test("shared year-window helper remains available to point and parcel analysis", async () => {
   db.query = async (sql, params) => {
+    assert.match(sql, /latest_years/);
     assert.deepEqual(params, [10]);
-    return {
-      rows: [{
-        start_year: 2015,
-        end_year: 2024,
-        years: [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024],
-      }],
-    };
+    return { rows: [{ start_year: 2015, end_year: 2024, years: [2015,2016,2017,2018,2019,2020,2021,2022,2023,2024] }] };
   };
-
-  const result = await hazardLayerService.getFloodYearWindow();
-
-  assert.equal(result.startYear, 2015);
-  assert.equal(result.endYear, 2024);
-  assert.equal(result.years.length, 10);
+  assert.equal((await service.getFloodYearWindow()).years.length, 10);
 });
 
-test("flood layer returns latest-five-year safe display properties without raw metadata", async () => {
-  const calls = mockFloodQueries({
-    latestYear: 2024,
-    count: 1,
-    rows: [floodRow({
-      frequency: 1,
-      yearsDetected: [2024],
-      startYear: 2020,
-      endYear: 2024,
-      areaRai: 10.5,
-      province: "Phayao",
-      district: "Mueang Phayao",
-      subdistrict: "Mae Ka",
-      source: "GISTDA",
-    })],
-  });
-
-  const result = await hazardLayerService.getFloodRecurrenceLayer({
-    bbox: "99.9,19.0,100.0,19.1",
-    zoom: 12,
-  });
-
-  assert.equal(result.type, "FeatureCollection");
-  assert.deepEqual(result.properties, {
-    startYear: 2020,
-    endYear: 2024,
-    years: [2020, 2021, 2022, 2023, 2024],
-    yearCount: 5,
-  });
+test("flood overlay returns the bounded single-query FeatureCollection contract", async () => {
+  const mock = installFloodMock();
+  const result = await service.getFloodRecurrenceLayer({ bbox: BBOX, zoom: 12 });
+  assert.deepEqual(result.properties.years, YEARS);
+  assert.equal(result.properties.datasetGeneration, String(testGeneration));
   assert.equal(result.features.length, 1);
-  assert.equal(result.features[0].properties.startYear, 2020);
-  assert.equal(result.features[0].properties.endYear, 2024);
-  assert.deepEqual(result.features[0].properties.yearsDetected, [2024]);
-  assert.equal(
-    result.features[0].properties.frequency,
-    result.features[0].properties.yearsDetected.length,
-  );
   assert.deepEqual(Object.keys(result.features[0].properties).sort(), [
-    "areaRai",
-    "district",
-    "endYear",
-    "frequency",
-    "province",
-    "source",
-    "startYear",
-    "subdistrict",
-    "yearsDetected",
+    "areaRai", "district", "endYear", "frequency", "province", "source",
+    "startYear", "subdistrict", "yearsDetected",
   ]);
-  assert.equal(result.features[0].properties._id, undefined);
-  assert.equal(result.features[0].properties.shape_area, undefined);
-  assert.deepEqual(calls[1].params[4], [2020, 2021, 2022, 2023, 2024]);
-  assert.deepEqual(calls[2].params.slice(4, 7), [
-    [2020, 2021, 2022, 2023, 2024],
-    2020,
-    2024,
-  ]);
-  assert.match(calls[2].sql, /ST_UnaryUnion\(ST_Collect\(geom\)\)/);
-  assert.match(calls[2].sql, /\(ST_Dump\(geom\)\)\.geom AS geom/);
-  assert.match(calls[2].sql, /ST_SimplifyPreserveTopology/);
-  assert.match(calls[2].sql, /ST_Transform\(geom, 32647\)/);
-  assert.match(calls[2].sql, /GROUP BY[\s\S]+subdistrict_id[\s\S]+frequency[\s\S]+years_detected/);
+  assert.equal(mock.builds(), 1);
+  assert.equal(mock.generationReads(), 2);
 });
 
-test("flood layer uses future dynamic latest-five-year query parameters", async () => {
-  const calls = mockFloodQueries({ latestYear: 2025, count: 0, rows: [] });
-
-  const result = await hazardLayerService.getFloodRecurrenceLayer({
-    bbox: "99.9,19.0,100.0,19.1",
-    zoom: 12,
-  });
-
-  assert.equal(result.features.length, 0);
-  assert.deepEqual(calls[1].params[4], [2021, 2022, 2023, 2024, 2025]);
-  assert.deepEqual(calls[2].params.slice(4, 7), [
-    [2021, 2022, 2023, 2024, 2025],
-    2021,
-    2025,
-  ]);
+test("empty BBOX aggregation filters the LEFT JOIN null feature", () => {
+  const source = require("../src/services/floodRecurrenceBboxService").FLOOD_BBOX_SQL;
+  assert.match(source, /FILTER \(WHERE s\.feature IS NOT NULL\)/);
+  assert.match(source, /'features',COALESCE\(jsonb_agg/);
 });
 
-test("flood layer excludes records without latest-window detections", async () => {
-  const calls = mockFloodQueries({ latestYear: 2024, count: 0, rows: [] });
-
-  const result = await hazardLayerService.getFloodRecurrenceLayer({
-    bbox: "99.9,19.0,100.0,19.1",
-    zoom: 12,
-  });
-
-  assert.equal(result.features.length, 0);
-  assert.match(calls[1].sql, /= ANY\(\$5::int\[\]\)/);
-  assert.match(calls[2].sql, /w\.frequency > 0/);
+test("same generation reuses cache and a higher generation invalidates it", async () => {
+  const mock = installFloodMock();
+  await service.getFloodRecurrenceLayer({ bbox: BBOX, zoom: 12 });
+  await service.getFloodRecurrenceLayer({ bbox: BBOX, zoom: 12 });
+  assert.equal(mock.builds(), 1);
+  mock.setGeneration(String(testGeneration + 1));
+  await service.getFloodRecurrenceLayer({ bbox: BBOX, zoom: 12 });
+  assert.equal(mock.builds(), 2);
 });
 
-test("flood layer includes only detected years inside the latest window", async () => {
-  const calls = mockFloodQueries({
-    latestYear: 2024,
-    count: 1,
-    rows: [floodRow({
-      frequency: 1,
-      yearsDetected: [2024],
-      startYear: 2020,
-      endYear: 2024,
-      areaRai: null,
-      province: null,
-      district: null,
-      subdistrict: null,
-      source: "GISTDA",
-    })],
-  });
-
-  const result = await hazardLayerService.getFloodRecurrenceLayer({
-    bbox: "99.9,19.0,100.0,19.1",
-    zoom: 12,
-  });
-
-  assert.deepEqual(result.features[0].properties.yearsDetected, [2024]);
-  assert.equal(result.features[0].properties.frequency, 1);
-  assert.match(calls[2].sql, /COUNT\(DISTINCT year_value\)::int AS frequency/);
-  assert.match(calls[2].sql, /= ANY\(flood_window\.years\)/);
-  assert.match(calls[2].sql, /CASE[\s\S]+frequency[\s\S]+ELSE 0/);
-  assert.match(calls[2].sql, /GROUP BY[\s\S]+frequency[\s\S]+years_detected/);
+test("generation regression fails closed without serving an older cache", async () => {
+  const mock = installFloodMock();
+  await service.getFloodRecurrenceLayer({ bbox: BBOX, zoom: 12 });
+  mock.setGeneration(String(testGeneration - 1));
+  await assert.rejects(
+    service.getFloodRecurrenceLayer({ bbox: BBOX, zoom: 12 }),
+    (error) => error.code === "FLOOD_DATASET_GENERATION_REGRESSION",
+  );
+  assert.equal(mock.builds(), 1);
 });
 
-test("flood layer dissolves only semantic-safe groups and dumps connected parts", async () => {
-  const calls = mockFloodQueries({
-    rows: [
-      floodRow({
-        frequency: 1,
-        yearsDetected: [2020],
-        startYear: 2020,
-        endYear: 2024,
-        areaRai: 1.25,
-        province: "Phayao",
-        district: "Mueang Phayao",
-        subdistrict: "Mae Ka",
-        source: "GISTDA",
-      }),
-      floodRow({
-        frequency: 1,
-        yearsDetected: [2024],
-        startYear: 2020,
-        endYear: 2024,
-        areaRai: 1.5,
-        province: "Phayao",
-        district: "Mueang Phayao",
-        subdistrict: "Mae Ka",
-        source: "GISTDA",
-      }),
-    ],
-  });
-
-  const result = await hazardLayerService.getFloodRecurrenceLayer({
-    bbox: "99.9,19.0,100.0,19.1",
-    zoom: 12,
-  });
-
-  assert.equal(result.features.length, 2);
-  assert.deepEqual(result.features.map((feature) => feature.properties.yearsDetected), [
-    [2020],
-    [2024],
-  ]);
-  assert.match(calls[2].sql, /ST_CollectionExtract\(\s*ST_MakeValid\(ST_Intersection\(f\.geom, b\.geom\)\),\s*3\s*\)/);
-  assert.match(calls[2].sql, /ST_UnaryUnion\(ST_Collect\(geom\)\)/);
-  assert.match(calls[2].sql, /GROUP BY[\s\S]+province_id[\s\S]+district_id[\s\S]+subdistrict_id[\s\S]+frequency[\s\S]+years_detected/);
-  assert.match(calls[2].sql, /\(ST_Dump\(geom\)\)\.geom AS geom/);
-});
-
-test("flood layer simplification uses a metric CRS and passes metre tolerance", async () => {
-  const calls = mockFloodQueries({
-    rows: [floodRow({
-      frequency: 1,
-      yearsDetected: [2024],
-      startYear: 2020,
-      endYear: 2024,
-      areaRai: 1,
-      source: "GISTDA",
-    })],
-  });
-
-  await hazardLayerService.getFloodRecurrenceLayer({
-    bbox: "99.9,19.0,100.0,19.1",
-    zoom: 12,
-  });
-
-  assert.equal(calls[2].params[7], 5);
-  assert.match(calls[2].sql, /ST_Transform\(\s*ST_SimplifyPreserveTopology\(\s*ST_Transform\(geom, 32647\),\s*\$8::double precision\s*\),\s*4326\s*\)/);
-  assert.match(calls[2].sql, /ST_AsGeoJSON\(geom\) AS geometry/);
-});
-
-test("flood layer cache reuses successful builds and includes source version", async () => {
-  let sourceVersion = "2026-07-17T00:00:00.000Z";
-  let buildCount = 0;
-  const calls = [];
-  db.query = async (sql, params) => {
-    calls.push({ sql, params });
-    if (/latest_years/.test(sql)) {
-      return { rows: [{ start_year: 2020, end_year: 2024, years: [2020, 2021, 2022, 2023, 2024] }] };
-    }
-    if (/latest_synced_at/.test(sql)) {
-      return { rows: [{ count: 1, latest_synced_at: sourceVersion }] };
-    }
-    buildCount += 1;
-    return { rows: [floodRow({
-      frequency: 1,
-      yearsDetected: [2024],
-      startYear: 2020,
-      endYear: 2024,
-      source: "GISTDA",
-    })] };
-  };
-
-  await hazardLayerService.getFloodRecurrenceLayer({ bbox: "99.9,19.0,100.0,19.1", zoom: 12 });
-  await hazardLayerService.getFloodRecurrenceLayer({ bbox: "99.9,19.0,100.0,19.1", zoom: 12 });
-  assert.equal(buildCount, 1);
-
-  sourceVersion = "2026-07-18T00:00:00.000Z";
-  await hazardLayerService.getFloodRecurrenceLayer({ bbox: "99.9,19.0,100.0,19.1", zoom: 12 });
-  assert.equal(buildCount, 2);
-  assert.ok(calls.some((call) => /MAX\(f\.synced_at\)::text/.test(call.sql)));
-});
-
-test("flood layer concurrent requests share one in-flight dissolve build", async () => {
-  let buildCount = 0;
-  let releaseBuild;
-  const buildStarted = new Promise((resolve) => {
-    releaseBuild = resolve;
-  });
+test("concurrent requests share one dissolve build", async () => {
+  let release;
+  const waiting = new Promise((resolve) => { release = resolve; });
+  let builds = 0;
   db.query = async (sql) => {
-    if (/latest_years/.test(sql)) {
-      return { rows: [{ start_year: 2020, end_year: 2024, years: [2020, 2021, 2022, 2023, 2024] }] };
-    }
-    if (/latest_synced_at/.test(sql)) {
-      return { rows: [{ count: 1, latest_synced_at: "2026-07-17T00:00:00.000Z" }] };
-    }
-    buildCount += 1;
-    await buildStarted;
-    return { rows: [floodRow({
-      frequency: 1,
-      yearsDetected: [2024],
-      startYear: 2020,
-      endYear: 2024,
-      source: "GISTDA",
-    })] };
+    if (/gis\.dataset_generations/.test(sql)) return { rows: [{ generation: String(testGeneration) }] };
+    builds += 1;
+    await waiting;
+    return { rows: [{ years: YEARS, source_overflow: false, output_overflow: false,
+      byte_overflow: false, collection: collection([feature()]) }] };
   };
-
-  const first = hazardLayerService.getFloodRecurrenceLayer({ bbox: "99.9,19.0,100.0,19.1", zoom: 12 });
-  const second = hazardLayerService.getFloodRecurrenceLayer({ bbox: "99.9,19.0,100.0,19.1", zoom: 12 });
+  const first = service.getFloodRecurrenceLayer({ bbox: BBOX, zoom: 12 });
+  const second = service.getFloodRecurrenceLayer({ bbox: BBOX, zoom: 12 });
   await Promise.resolve();
-  releaseBuild();
-  const results = await Promise.all([first, second]);
-
-  assert.equal(buildCount, 1);
-  assert.equal(results[0], results[1]);
+  release();
+  const values = await Promise.all([first, second]);
+  assert.equal(builds, 1);
+  assert.equal(values[0], values[1]);
 });
 
-test("flood layer failed dissolve builds are not permanently cached", async () => {
-  let buildCount = 0;
+test("failed builds are not cached", async () => {
+  const mock = installFloodMock({ failBuild: true });
+  await assert.rejects(service.getFloodRecurrenceLayer({ bbox: BBOX, zoom: 12 }), /temporary/);
+  assert.equal((await service.getFloodRecurrenceLayer({ bbox: BBOX, zoom: 12 })).features.length, 1);
+  assert.equal(mock.builds(), 2);
+});
+
+for (const item of [
+  ["source", "source_overflow", "FLOOD_SOURCE_BUDGET_EXCEEDED"],
+  ["output", "output_overflow", "FLOOD_OUTPUT_BUDGET_EXCEEDED"],
+  ["response", "byte_overflow", "FLOOD_RESPONSE_BUDGET_EXCEEDED"],
+]) {
+  test(`explicit ${item[0]} budget error is never returned as partial HTTP 200 data`, async () => {
+    const row = { years: YEARS, source_count: 5001, output_count_bounded: 5001,
+      response_bytes_bounded: 9000000, source_overflow: false, output_overflow: false,
+      byte_overflow: false, collection: null };
+    row[item[1]] = true;
+    installFloodMock({ row });
+    await assert.rejects(
+      service.getFloodRecurrenceLayer({ bbox: BBOX, zoom: 12 }),
+      (error) => error.statusCode === 413 && error.code === item[2],
+    );
+  });
+}
+
+test("drought endpoint and response contract remain unchanged", async () => {
   db.query = async (sql) => {
-    if (/latest_years/.test(sql)) {
-      return { rows: [{ start_year: 2020, end_year: 2024, years: [2020, 2021, 2022, 2023, 2024] }] };
-    }
-    if (/latest_synced_at/.test(sql)) {
-      return { rows: [{ count: 1, latest_synced_at: "2026-07-17T00:00:00.000Z" }] };
-    }
-    buildCount += 1;
-    if (buildCount === 1) {
-      throw new Error("temporary dissolve failure");
-    }
-    return { rows: [floodRow({
-      frequency: 1,
-      yearsDetected: [2024],
-      startYear: 2020,
-      endYear: 2024,
-      source: "GISTDA",
-    })] };
+    assert.match(sql, /gis\.drought_recurrence_tambon_pyo/);
+    return { rows: [{ properties: { source: "GISTDA", summaryLevel: "tambon" },
+      geometry: JSON.stringify({ type: "Polygon", coordinates: [] }) }] };
   };
-
-  await assert.rejects(
-    () => hazardLayerService.getFloodRecurrenceLayer({ bbox: "99.9,19.0,100.0,19.1", zoom: 12 }),
-    /temporary dissolve failure/,
-  );
-  const result = await hazardLayerService.getFloodRecurrenceLayer({
-    bbox: "99.9,19.0,100.0,19.1",
-    zoom: 12,
-  });
-
-  assert.equal(buildCount, 2);
-  assert.equal(result.features.length, 1);
-});
-
-test("flood layer keeps returned years numeric unique and sorted", async () => {
-  mockFloodQueries({
-    latestYear: 2024,
-    count: 1,
-    rows: [floodRow({
-      frequency: 2,
-      yearsDetected: [2020, 2024],
-      startYear: 2020,
-      endYear: 2024,
-      areaRai: null,
-      province: null,
-      district: null,
-      subdistrict: null,
-      source: "GISTDA",
-    })],
-  });
-
-  const result = await hazardLayerService.getFloodRecurrenceLayer({
-    bbox: "99.9,19.0,100.0,19.1",
-    zoom: 12,
-  });
-
-  const years = result.features[0].properties.yearsDetected;
-  assert.deepEqual(years, [2020, 2024]);
-  assert.equal(new Set(years).size, years.length);
-  assert.ok(years.every((year) => Number.isInteger(year)));
-});
-
-test("flood layer rejects extents above feature cap", async () => {
-  mockFloodQueries({ latestYear: 2024, count: 5001 });
-
-  await assert.rejects(
-    () => hazardLayerService.getFloodRecurrenceLayer({
-      bbox: "99.9,19.0,100.0,19.1",
-      zoom: 12,
-    }),
-    /too many/,
-  );
-});
-
-test("drought layer returns tambon-level safe properties", async () => {
-  db.query = async () => ({
-    rows: [{
-      properties: {
-        totalOccurrences: 2,
-        yearsDetected: [2019, 2023],
-        startYear: 2018,
-        endYear: 2023,
-        tambon: "Mae Ka",
-        district: "Mueang Phayao",
-        province: "Phayao",
-        source: "GISTDA",
-        summaryLevel: "tambon",
-      },
-      geometry: JSON.stringify({
-        type: "MultiPolygon",
-        coordinates: [[[[99, 19], [100, 19], [100, 20], [99, 19]]]],
-      }),
-    }],
-  });
-
-  const result = await hazardLayerService.getDroughtRecurrenceLayer();
-
-  assert.equal(result.type, "FeatureCollection");
-  assert.equal(result.features.length, 1);
+  const result = await service.getDroughtRecurrenceLayer();
   assert.equal(result.features[0].properties.summaryLevel, "tambon");
-  assert.equal(result.features[0].properties.source, "GISTDA");
-  assert.equal(result.features[0].properties._id, undefined);
-});
-
-test("flood simplification tolerance decreases at higher zoom", () => {
-  assert.equal(hazardLayerService.getFloodTolerance(15), 0);
-  assert.equal(hazardLayerService.getFloodTolerance(12), 5);
-  assert.equal(hazardLayerService.getFloodTolerance(9), 10);
-  assert.equal(hazardLayerService.getFloodTolerance(8), 20);
-  assert.ok(hazardLayerService.getFloodTolerance(8) > hazardLayerService.getFloodTolerance(12));
 });
