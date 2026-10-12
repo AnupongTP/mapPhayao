@@ -1,4 +1,6 @@
 const db = require("../config/database");
+const { createHazardLayerService } = require("./floodRecurrenceBboxService");
+const { getFloodDatasetGeneration } = require("./floodDatasetGeneration");
 
 const FLOOD_FEATURE_LIMIT = 5000;
 const FLOOD_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -10,6 +12,11 @@ const FLOOD_SIMPLIFY_CRS = 32647;
 
 const cache = new Map();
 const pendingBuilds = new Map();
+
+const floodBboxService = createHazardLayerService({
+  db,
+  getDatasetGeneration: () => getFloodDatasetGeneration(db),
+});
 
 function toNumber(value) {
   const number = Number(value);
@@ -149,244 +156,6 @@ async function getFloodYearWindow(windowYears = FLOOD_WINDOW_YEARS) {
   };
 }
 
-async function getFloodRecurrenceLayer({ bbox, zoom }) {
-  const parsed = parseBbox(bbox);
-  if (parsed.error) {
-    const error = new Error(parsed.error);
-    error.statusCode = 400;
-    throw error;
-  }
-
-  const numericZoom = toNumber(zoom) ?? 12;
-  const roundedBbox = [
-    parsed.bbox.minLng,
-    parsed.bbox.minLat,
-    parsed.bbox.maxLng,
-    parsed.bbox.maxLat,
-  ].map((value) => value.toFixed(5)).join(",");
-  const yearWindow = await getFloodYearWindow(FLOOD_LAYER_WINDOW_YEARS);
-  if (!yearWindow) {
-    return featureCollection([]);
-  }
-
-  const versionResult = await db.query(
-    `
-    WITH bounds AS (
-      SELECT ST_MakeEnvelope($1, $2, $3, $4, 4326) AS geom
-    )
-    SELECT
-      COUNT(*)::int AS count,
-      COALESCE(MAX(f.synced_at)::text, 'unsynced') AS latest_synced_at
-    FROM gis.flood_recurrence_pyo f, bounds b
-    WHERE f.geom && b.geom
-      AND ST_Intersects(f.geom, b.geom)
-      AND EXISTS (
-        SELECT 1
-        FROM jsonb_array_elements(f.yearly_frequency) AS item
-        WHERE (item ->> 'year') ~ '^\\d{4}$'
-          AND (item ->> 'year')::int = ANY($5::int[])
-          AND CASE
-            WHEN (item ->> 'frequency') ~ '^-?\\d+(\\.\\d+)?$'
-            THEN (item ->> 'frequency')::numeric
-            ELSE 0
-          END > 0
-      );
-    `,
-    [
-      parsed.bbox.minLng,
-      parsed.bbox.minLat,
-      parsed.bbox.maxLng,
-      parsed.bbox.maxLat,
-      yearWindow.years,
-    ],
-  );
-  const versionRow = versionResult.rows[0] || {};
-  const count = versionRow.count || 0;
-  if (count > FLOOD_FEATURE_LIMIT) {
-    const error = new Error("Requested extent contains too many flood recurrence features");
-    error.statusCode = 413;
-    throw error;
-  }
-
-  const tolerance = getFloodTolerance(numericZoom);
-  const cacheKey = [
-    "flood",
-    FLOOD_CACHE_VERSION,
-    yearWindow.years.join(","),
-    roundedBbox,
-    Math.round(numericZoom),
-    tolerance,
-    count,
-    versionRow.latest_synced_at || "unsynced",
-  ].join(":");
-
-  return getOrBuildCache(cacheKey, FLOOD_CACHE_TTL_MS, async () => {
-    const result = await db.query(
-      `
-      WITH bounds AS (
-        SELECT ST_MakeEnvelope($1, $2, $3, $4, 4326) AS geom
-      ),
-      flood_window AS (
-        SELECT
-          $5::int[] AS years,
-          $6::int AS start_year,
-          $7::int AS end_year
-      ),
-      qualified AS (
-        SELECT
-          f.province_id,
-          f.province_name,
-          f.district_id,
-          f.district_name,
-          f.subdistrict_id,
-          f.subdistrict_name,
-          w.frequency,
-          w.years_detected,
-          ST_Force2D(
-            ST_CollectionExtract(
-              ST_MakeValid(ST_Intersection(f.geom, b.geom)),
-              3
-            )
-          ) AS geom
-        FROM gis.flood_recurrence_pyo f
-        CROSS JOIN bounds b
-        CROSS JOIN flood_window
-        CROSS JOIN LATERAL (
-          SELECT
-            COUNT(DISTINCT year_value)::int AS frequency,
-            COALESCE(array_agg(DISTINCT year_value ORDER BY year_value), '{}'::int[]) AS years_detected
-          FROM (
-            SELECT (item ->> 'year')::int AS year_value
-            FROM jsonb_array_elements(f.yearly_frequency) AS item
-            WHERE (item ->> 'year') ~ '^\\d{4}$'
-              AND (item ->> 'year')::int = ANY(flood_window.years)
-              AND CASE
-                WHEN (item ->> 'frequency') ~ '^-?\\d+(\\.\\d+)?$'
-                THEN (item ->> 'frequency')::numeric
-                ELSE 0
-              END > 0
-          ) AS detected_years
-        ) AS w
-        WHERE f.geom && b.geom
-          AND ST_Intersects(f.geom, b.geom)
-          AND w.frequency > 0
-      ),
-      valid_polygons AS (
-        SELECT *
-        FROM qualified
-        WHERE NOT ST_IsEmpty(geom)
-      ),
-      dissolved AS (
-        SELECT
-          province_id,
-          province_name,
-          district_id,
-          district_name,
-          subdistrict_id,
-          subdistrict_name,
-          frequency,
-          years_detected,
-          ST_CollectionExtract(
-            ST_MakeValid(ST_UnaryUnion(ST_Collect(geom))),
-            3
-          ) AS geom
-        FROM valid_polygons
-        GROUP BY
-          province_id,
-          province_name,
-          district_id,
-          district_name,
-          subdistrict_id,
-          subdistrict_name,
-          frequency,
-          years_detected
-      ),
-      dumped AS (
-        SELECT
-          province_id,
-          province_name,
-          district_id,
-          district_name,
-          subdistrict_id,
-          subdistrict_name,
-          frequency,
-          years_detected,
-          (ST_Dump(geom)).geom AS geom
-        FROM dissolved
-        WHERE NOT ST_IsEmpty(geom)
-      ),
-      simplified AS (
-        SELECT
-          province_id,
-          province_name,
-          district_id,
-          district_name,
-          subdistrict_id,
-          subdistrict_name,
-          frequency,
-          years_detected,
-          ST_CollectionExtract(
-            ST_MakeValid(
-              CASE
-                WHEN $8::double precision > 0
-                THEN ST_Transform(
-                  ST_SimplifyPreserveTopology(
-                    ST_Transform(geom, ${FLOOD_SIMPLIFY_CRS}),
-                    $8::double precision
-                  ),
-                  4326
-                )
-                ELSE geom
-              END
-            ),
-            3
-          ) AS geom
-        FROM dumped
-      )
-      SELECT
-        jsonb_build_object(
-          'frequency', frequency,
-          'yearsDetected', years_detected,
-          'startYear', flood_window.start_year,
-          'endYear', flood_window.end_year,
-          'areaRai', ROUND((ST_Area(ST_Transform(geom, ${FLOOD_SIMPLIFY_CRS})) / 1600.0)::numeric, 2),
-          'province', province_name,
-          'district', district_name,
-          'subdistrict', subdistrict_name,
-          'source', 'GISTDA'
-        ) AS properties,
-        ST_AsGeoJSON(geom) AS geometry
-      FROM simplified
-      CROSS JOIN flood_window
-      WHERE NOT ST_IsEmpty(geom)
-      LIMIT $9;
-      `,
-      [
-        parsed.bbox.minLng,
-        parsed.bbox.minLat,
-        parsed.bbox.maxLng,
-        parsed.bbox.maxLat,
-        yearWindow.years,
-        yearWindow.startYear,
-        yearWindow.endYear,
-        tolerance,
-        FLOOD_FEATURE_LIMIT,
-      ],
-    );
-
-    return featureCollection(result.rows.map((row) => ({
-      type: "Feature",
-      properties: row.properties,
-      geometry: parseGeometry(row.geometry),
-    })), {
-      startYear: yearWindow.startYear,
-      endYear: yearWindow.endYear,
-      years: yearWindow.years,
-      yearCount: yearWindow.years.length,
-    });
-  });
-}
-
 async function getDroughtRecurrenceLayer() {
   const cacheKey = "drought:phayao";
   const cached = getCache(cacheKey);
@@ -426,13 +195,15 @@ async function getDroughtRecurrenceLayer() {
 function clearCache() {
   cache.clear();
   pendingBuilds.clear();
+  floodBboxService.clearCache();
 }
 
 module.exports = {
   parseBbox,
   getFloodTolerance,
   getFloodYearWindow,
-  getFloodRecurrenceLayer,
+  getFloodRecurrenceLayer: floodBboxService.getFloodRecurrenceLayer,
+  getFloodRecurrenceGeneration: floodBboxService.refreshDatasetGeneration,
   getDroughtRecurrenceLayer,
   clearCache,
 };
