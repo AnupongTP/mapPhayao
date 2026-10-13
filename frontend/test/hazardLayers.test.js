@@ -470,7 +470,7 @@ test("raster mode uses XYZ tiles through zoom 19 without requesting flood BBOX G
   assert.equal(harness.state.generationCalls.length, 0);
 });
 
-test("raster point detail preserves ordinary map clicks and aborts stale lookups", async () => {
+test("raster point detail waits for confirmation and aborts stale lookups", async () => {
   const stale = createDeferred();
   const harness = createHarness({
     search: "?floodRaster=1",
@@ -490,12 +490,17 @@ test("raster point detail preserves ordinary map clicks and aborts stale lookups
   harness.map.addOverlay(harness.floodLayer);
   harness.map.fire("click", { latlng: { lat: 19.03, lng: 99.9 } });
   await flushAsync();
+  assert.equal(harness.state.mapClicks, 1);
+  assert.equal(harness.state.pointCalls.length, 0);
+
+  void harness.overlays.showFloodRasterPointDetail({ lat: 19.03, lng: 99.9 });
+  await flushAsync();
   const firstSignal = harness.state.pointCalls[0].requestOptions.signal;
-  harness.map.fire("click", { latlng: { lat: 19.04, lng: 99.91 } });
+  await harness.overlays.showFloodRasterPointDetail({ lat: 19.04, lng: 99.91 });
   await flushAsync();
 
   assert.equal(firstSignal.aborted, true);
-  assert.equal(harness.state.mapClicks, 2);
+  assert.equal(harness.state.mapClicks, 1);
   assert.equal(harness.state.apiCalls.length, 0);
   assert.equal(harness.state.pointCalls.length, 2);
   assert.equal(harness.state.popups.length, 1);
@@ -507,7 +512,7 @@ test("raster point detail preserves ordinary map clicks and aborts stale lookups
   assert.equal(harness.state.popups.length, 1);
 
   harness.map.removeOverlay(harness.floodLayer);
-  harness.map.fire("click", { latlng: { lat: 19.05, lng: 99.92 } });
+  await harness.overlays.showFloodRasterPointDetail({ lat: 19.05, lng: 99.92 });
   await flushAsync();
   assert.equal(harness.state.pointCalls.length, 2);
 });

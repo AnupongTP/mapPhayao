@@ -51,7 +51,10 @@ async function getFloodRecurrenceAtPoint(req, res, next) {
         error: error.message,
       });
     }
-    return next(error);
+    return res.status(503).json({
+      success: false,
+      error: "Flood recurrence detail is unavailable",
+    });
   }
 }
 

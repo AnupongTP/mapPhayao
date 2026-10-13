@@ -13,6 +13,7 @@
   let hasLineSummarySent = false;
   let isPointAnalysisLoading = false;
   let appMap = null;
+  let showFloodRasterPointDetail = null;
   let parcelDrawHandler = null;
   let isParcelDrawingActive = false;
   let drawingCancelPending = false;
@@ -2392,6 +2393,9 @@
     const overlayLayers = window.MapLayers.createOverlayLayers(map);
 
     appMap = map;
+    showFloodRasterPointDetail = typeof overlayLayers.showFloodRasterPointDetail === "function"
+      ? overlayLayers.showFloodRasterPointDetail
+      : null;
     baseLayers.googleSatellite.addTo(map);
     window.MapUi.addLayerControl(map, baseLayers, overlayLayers);
     window.MapUi.setupLocationPanel({
@@ -2702,6 +2706,14 @@
         closeResultPopup();
       }
       markLineSummaryPointConfirmed(requestLocation);
+      if (showFloodRasterPointDetail) {
+        void showFloodRasterPointDetail(requestLocation, {
+          shouldDisplay: () => (
+            selectedPointRevision === requestPointRevision
+            && createPointKey(selectedLocation) === requestPointKey
+          ),
+        });
+      }
     } catch (error) {
       if (error.name === "AbortError") {
         return;

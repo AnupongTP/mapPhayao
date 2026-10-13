@@ -176,6 +176,29 @@ test("public raster point route forwards coordinates and returns the detail cont
   }
 });
 
+test("public raster point route sanitizes unexpected database failures", async () => {
+  const original = service.getFloodRecurrenceAtPoint;
+  service.getFloodRecurrenceAtPoint = async () => {
+    throw new Error("database host and credential detail");
+  };
+  const server = createApp().listen(0, "127.0.0.1");
+  try {
+    await new Promise((resolve) => server.once("listening", resolve));
+    const response = await fetch(
+      `http://127.0.0.1:${server.address().port}`
+        + "/api/hazard-layers/flood-recurrence/point?lat=19.03&lng=99.9",
+    );
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), {
+      success: false,
+      error: "Flood recurrence detail is unavailable",
+    });
+  } finally {
+    service.getFloodRecurrenceAtPoint = original;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("flood overlay returns the bounded single-query FeatureCollection contract", async () => {
   const mock = installFloodMock();
   const result = await service.getFloodRecurrenceLayer({ bbox: BBOX, zoom: 12 });

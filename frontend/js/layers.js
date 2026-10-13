@@ -402,8 +402,8 @@
       abortController: null,
     };
 
-    async function handlePointClick(event) {
-      if (!state.enabled || !map.hasLayer(layer) || !event?.latlng) {
+    async function showPointDetail(latlng, options = {}) {
+      if (!state.enabled || !map.hasLayer(layer) || !latlng) {
         return;
       }
       state.requestId += 1;
@@ -413,8 +413,8 @@
       state.abortController = controller;
       try {
         const detail = await window.MapApi.getFloodRecurrenceAtPoint(
-          event.latlng.lat,
-          event.latlng.lng,
+          latlng.lat,
+          latlng.lng,
           { signal: controller.signal },
         );
         if (
@@ -422,12 +422,13 @@
           || requestId !== state.requestId
           || !state.enabled
           || !map.hasLayer(layer)
+          || (typeof options.shouldDisplay === "function" && !options.shouldDisplay())
           || !detail?.found
         ) {
           return;
         }
         L.popup()
-          .setLatLng(event.latlng)
+          .setLatLng(latlng)
           .setContent(createFloodPopupHtml(detail))
           .openOn(map);
       } catch (error) {
@@ -445,10 +446,7 @@
     }
 
     function load() {
-      if (!state.enabled) {
-        state.enabled = true;
-        map.on("click", handlePointClick);
-      }
+      state.enabled = true;
       return Promise.resolve();
     }
 
@@ -457,13 +455,13 @@
       state.requestId += 1;
       state.abortController?.abort();
       state.abortController = null;
-      map.off("click", handlePointClick);
     }
 
     return {
       layer,
       load,
       unload,
+      showPointDetail,
       prefetch: async () => null,
       getMetadata: () => ({ startYear: 2020, endYear: 2024, yearCount: 5 }),
       getState: () => ({ enabled: state.enabled, requestId: state.requestId }),
@@ -1253,6 +1251,7 @@
       floodRecurrenceLayer: floodRecurrenceController.layer,
       droughtRecurrenceLayer: droughtRecurrenceController.layer,
       prefetchFloodRecurrenceLayer: floodRecurrenceController.prefetch,
+      showFloodRasterPointDetail: floodRecurrenceController.showPointDetail || null,
       lazyLayerControllers,
     };
   }
