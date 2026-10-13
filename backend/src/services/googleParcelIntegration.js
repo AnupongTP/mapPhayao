@@ -119,6 +119,24 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
   const folderId = env.GOOGLE_DRIVE_PARCEL_IMAGE_FOLDER_ID;
   let drive;
   let oauthDrive;
+  const oauthDiagnostics = new (require("node:async_hooks").AsyncLocalStorage)();
+  function instrumentOAuth(auth) {
+    if (typeof auth.getRequestMetadataAsync !== "function") return;
+    const getRequestMetadata = auth.getRequestMetadataAsync.bind(auth);
+    auth.getRequestMetadataAsync = async (...args) => {
+      const diagnostic = oauthDiagnostics.getStore();
+      diagnostic?.mark("OAUTH_TOKEN_REQUEST_STARTED");
+      try {
+        const metadata = await getRequestMetadata(...args);
+        diagnostic?.mark("OAUTH_TOKEN_READY");
+        diagnostic?.mark("DRIVE_READ_STARTED");
+        return metadata;
+      } catch (error) {
+        diagnostic?.providerError(error);
+        throw error;
+      }
+    };
+  }
   if (provider === "apps-script") {
     try {
       drive = createAppsScriptDriveBridge({
@@ -134,6 +152,7 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
     if (folderId && clientId && clientSecret && refreshToken) {
       const driveAuth = new google.auth.OAuth2(clientId, clientSecret);
       driveAuth.setCredentials({ refresh_token: refreshToken });
+      instrumentOAuth(driveAuth);
       oauthDrive = google.drive({ version: "v3", auth: driveAuth });
       drive = {
         async uploadImage(bytes, fileName) {
@@ -180,18 +199,21 @@ function createGoogleParcelIntegration(env = process.env, google = require("goog
       if (!oauthDrive) {
         const auth = new google.auth.OAuth2(clientId, clientSecret);
         auth.setCredentials({ refresh_token: refreshToken });
+        instrumentOAuth(auth);
         oauthDrive = google.drive({ version: "v3", auth });
       }
-      readDrive = { async getImage(fileId) {
+      readDrive = { async getImage(fileId, diagnostic) {
         try {
-          const response = await oauthDrive.files.get(
-            { fileId, alt: "media" }, { responseType: "stream" },
-          );
+          const fetchImage = () => oauthDrive.files.get(
+            { fileId, alt: "media" }, { responseType: "stream" });
+          const response = await (diagnostic ? oauthDiagnostics.run(diagnostic, fetchImage) : fetchImage());
           if (!response?.data || typeof response.data.pipe !== "function") {
             throw new Error("Invalid Drive stream");
           }
+          diagnostic?.mark("DRIVE_READ_HEADERS_RECEIVED");
           return response.data;
-        } catch {
+        } catch (error) {
+          diagnostic?.providerError(error);
           throw tagGoogleError(createHttpError(503, "บริการอ่านรูปภาพแปลงขัดข้อง"), "drive-read");
         }
       } };
