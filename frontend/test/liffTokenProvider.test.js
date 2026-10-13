@@ -112,6 +112,9 @@ function createHarness(options = {}) {
     initRejects = false,
     liffPresent = true,
     context = { type: "utou", viewType: "full", liffId: CORRECT_LIFF_ID, userId: "U-secret" },
+    origin = PRODUCTION_FRONTEND_ORIGIN,
+    pathname = "/",
+    localDevEnabled = false,
   } = options;
   const hasConfiguredLiffId = Object.prototype.hasOwnProperty.call(options, "liffId");
   const configuredLiffId = hasConfiguredLiffId ? options.liffId : CORRECT_LIFF_ID;
@@ -149,8 +152,9 @@ function createHarness(options = {}) {
   const window = {
     location: {
       search,
-      origin: PRODUCTION_FRONTEND_ORIGIN,
-      pathname: "/",
+      origin,
+      hostname: new URL(origin).hostname,
+      pathname,
       hash: "#secret-fragment",
       replace: (value) => navigationCalls.push({ method: "location.replace", value }),
       assign: (value) => navigationCalls.push({ method: "location.assign", value }),
@@ -167,6 +171,7 @@ function createHarness(options = {}) {
           endpointUrl: CORRECT_LIFF_ENDPOINT_URL,
         },
     liff,
+    AppConfig: { apiBaseUrl: "http://localhost:3000/api" },
     navigator: {
       clipboard: {
         writeText: async (text) => {
@@ -185,6 +190,8 @@ function createHarness(options = {}) {
     JSON,
     window,
     document,
+    fetch: async () => ({ ok: true, json: async () => ({ enabled: localDevEnabled }) }),
+    URL,
     console: {
       log: (...args) => logs.push(args),
       info: (...args) => logs.push(args),
@@ -210,6 +217,27 @@ function createHarness(options = {}) {
     clipboardWrites,
   };
 }
+
+test("local development candidate uses backend readiness without calling LIFF", async () => {
+  const local = createHarness({ search: "", origin: "http://localhost",
+    pathname: "/mapphayao1/frontend/index.html", localDevEnabled: true });
+  assert.equal(local.MapLiffMode.isEnabled(), false);
+  assert.equal(await local.MapLiffMode.initialize(), true);
+  assert.equal(local.MapLiffMode.isEnabled(), true);
+  assert.equal(local.MapLiffMode.isLocalDevAuth(), true);
+  assert.equal(await local.MapLiffMode.getCurrentIdToken(), "map-phayao-local-dev");
+  assert.deepEqual(local.initCalls, []);
+
+  const disabled = createHarness({ search: "", origin: "http://localhost",
+    pathname: "/mapphayao1/frontend/index.html" });
+  assert.equal(await disabled.MapLiffMode.initialize(), false);
+  assert.equal(disabled.MapLiffMode.isReady(), false);
+  assert.equal(disabled.MapLiffMode.isEnabled(), false);
+  await assert.rejects(() => disabled.MapLiffMode.getCurrentIdToken());
+  const production = createHarness({ search: "", origin: PRODUCTION_FRONTEND_ORIGIN,
+    pathname: "/mapphayao1/frontend/index.html", localDevEnabled: true });
+  assert.equal(production.MapLiffMode.isEnabled(), false);
+});
 
 test("canonical LIFF config uses the exact case-sensitive public ID and URL", () => {
   const context = { window: {} };

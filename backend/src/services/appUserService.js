@@ -69,8 +69,28 @@ async function updateVerifiedDisplayName(userId, displayName) {
   `, [userId, name]);
 }
 
+async function findExistingLocalDevUser(userId, options = {}) {
+  if (typeof userId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(userId)) {
+    return null;
+  }
+  const result = await (options.database || db).query(`
+    SELECT id, line_user_id
+    FROM app.users
+    WHERE id = $1
+    LIMIT 1;
+  `, [userId]);
+  const row = result.rows[0];
+  const lineUserId = normalizeLineUserId(row?.line_user_id);
+  const isInternalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    .test(lineUserId);
+  return row?.id && lineUserId.startsWith("U") && !isInternalUuid
+    ? { id: row.id, lineUserId } : null;
+}
+
 module.exports = {
   findOrCreateLineUser,
+  findExistingLocalDevUser,
   updateVerifiedDisplayName,
   _private: {
     normalizeLineUserId,

@@ -4,6 +4,10 @@
   const WITH_LOGIN_ON_EXTERNAL_BROWSER = true;
   const params = new URLSearchParams(window.location.search);
   const enabled = params.get("liff") === "1";
+  const localDevCandidate = !enabled &&
+    ["localhost", "127.0.0.1"].includes(window.location.hostname) &&
+    window.location.pathname === "/mapphayao1/frontend/index.html";
+  const localDevBearer = "map-phayao-local-dev";
   const debugEnabled = params.get("liffDebug") === "1";
   const sdkUrl = "https://static.line-scdn.net/liff/edge/2/sdk.js";
   const authUnavailableMessage =
@@ -18,6 +22,7 @@
   let initialized = false;
   let initializing = null;
   let idToken = "";
+  let localDevReady = false;
   let errorMessage = "";
   let currentState = enabled ? "idle" : "idle";
   let initStarted = false;
@@ -210,6 +215,20 @@
   }
 
   async function initialize() {
+    if (localDevCandidate) {
+      if (localDevReady) return true;
+      if (!initializing) {
+        initializing = (async () => {
+          const response = await fetch(`${window.AppConfig.apiBaseUrl}/parcels/dev-auth`, { cache: "no-store" });
+          const result = response.ok ? await response.json() : null;
+          localDevReady = result?.enabled === true;
+          if (!localDevReady) return false;
+          currentState = "ready-local-development";
+          return true;
+        })().finally(() => { initializing = null; });
+      }
+      return initializing;
+    }
     if (!enabled) {
       return false;
     }
@@ -315,14 +334,19 @@
 
   function isReady() {
     return Boolean(
-      enabled &&
+      localDevReady || (enabled &&
         initResolved &&
         initialized &&
-        idToken,
+        idToken),
     );
   }
 
   async function getCurrentIdToken() {
+    if (localDevCandidate) {
+      await initialize();
+      if (!localDevReady) throw createAuthError("Local development authentication is unavailable");
+      return localDevBearer;
+    }
     addDebugEvent("token-provider-request");
 
     if (!enabled) {
@@ -581,8 +605,10 @@
     expectedLiffId: EXPECTED_LIFF_ID,
     expectedLiffUrl: EXPECTED_LIFF_URL,
     isEnabled: function () {
-      return enabled;
+      return enabled || localDevReady;
     },
+    isLocalDevCandidate: function () { return localDevCandidate; },
+    isLocalDevAuth: function () { return localDevReady; },
     initialize,
     isReady,
     getIdToken: function () {

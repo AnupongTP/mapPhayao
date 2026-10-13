@@ -197,6 +197,7 @@
   }
 
   function hasUsableLineSummaryPoint() {
+    if (window.MapLiffMode?.isLocalDevAuth?.()) return false;
     return Boolean(
       lastConfirmedPoint &&
         window.MapPointState.isValidPoint(lastConfirmedPoint) &&
@@ -2400,7 +2401,7 @@
     window.MapUi.setLineSummaryHandler(sendConfirmedPointSummaryToLine);
     syncLineSummaryButtonState();
     initSavedParcels(map);
-    if (isLiffModeEnabled()) {
+    if (isLiffModeEnabled() || window.MapLiffMode?.isLocalDevCandidate?.()) {
       window.MapLiffMode.initialize()
         .then(() => {
           const liffReady = window.MapLiffMode && window.MapLiffMode.isReady();
