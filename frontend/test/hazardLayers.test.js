@@ -372,6 +372,7 @@ function createHarness(options = {}) {
     navigator: {
       connection: options.connection,
     },
+    location: { search: "" },
     console: {
       error() {},
     },
@@ -385,6 +386,7 @@ function createHarness(options = {}) {
     String,
     Promise,
     Date: HarnessDate,
+    URLSearchParams,
     console: window.console,
     setTimeout,
     clearTimeout,
