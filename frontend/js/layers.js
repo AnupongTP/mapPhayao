@@ -377,6 +377,34 @@
     ].map((value) => value.toFixed(6)).join(",");
   }
 
+  // Opt-in raster layer for production-site smoke testing without replacing
+  // the existing GeoJSON layer for other visitors.
+  function createFloodRasterPreviewController() {
+    const layer = L.tileLayer(
+      "https://phayao-flood-tiles-anupong.netlify.app/flood-tiles/v1/{z}/{x}/{y}.png",
+      {
+        pane: "hazardPane",
+        minZoom: 10,
+        maxZoom: 16,
+        maxNativeZoom: 16,
+        tileSize: 256,
+        opacity: 1,
+        tms: false,
+        keepBuffer: 2,
+        updateWhenIdle: true,
+      },
+    );
+    // PNG tiles have no feature properties; point-detail popup needs a
+    // separate matching five-year PostGIS endpoint before full rollout.
+    return {
+      layer,
+      load: async () => null,
+      unload: () => {},
+      prefetch: async () => null,
+      getMetadata: () => ({ startYear: 2020, endYear: 2024, yearCount: 5 }),
+    };
+  }
+
   function createFloodRecurrenceController(map, onMetadataChange) {
     const floodRenderer = typeof L.canvas === "function"
       ? L.canvas({ padding: 0.2 })
@@ -1063,7 +1091,11 @@
       },
     });
 
-    const floodRecurrenceController = createFloodRecurrenceController(map);
+    const floodRasterPreview = new URLSearchParams(window.location.search)
+      .get("floodRaster") === "1";
+    const floodRecurrenceController = floodRasterPreview
+      ? createFloodRasterPreviewController()
+      : createFloodRecurrenceController(map);
     floodRecurrenceController.layer.options.hazardLayerKey = HAZARD_LAYER_KEYS.flood;
     lazyLayerControllers.set(floodRecurrenceController.layer, floodRecurrenceController);
 
