@@ -37,8 +37,27 @@ async function getFloodRecurrenceGeneration(req, res, next) {
   }
 }
 
+async function getFloodRecurrenceAtPoint(req, res, next) {
+  try {
+    const result = await hazardLayerService.getFloodRecurrenceAtPoint({
+      lat: req.query.lat,
+      lng: req.query.lng,
+    });
+    return res.status(200).json(result);
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        success: false,
+        error: error.message,
+      });
+    }
+    return next(error);
+  }
+}
+
 module.exports = {
   getFloodRecurrence,
   getFloodRecurrenceGeneration,
+  getFloodRecurrenceAtPoint,
   getDroughtRecurrence,
 };

@@ -105,6 +105,14 @@
     });
   }
 
+  function getFloodRecurrenceAtPoint(lat, lng, options) {
+    const params = new URLSearchParams({
+      lat: String(lat),
+      lng: String(lng),
+    });
+    return getJson(`/hazard-layers/flood-recurrence/point?${params.toString()}`, options);
+  }
+
   function getDroughtRecurrenceLayer(options) {
     return getJson("/hazard-layers/drought-recurrence", options);
   }
@@ -244,6 +252,7 @@
     getLocationReport,
     getFloodRecurrenceLayer,
     getFloodRecurrenceGeneration,
+    getFloodRecurrenceAtPoint,
     getDroughtRecurrenceLayer,
     analyzeLineLocation: function (payload, options) {
       return sendJson("/line/location-analysis", payload, "POST", options);

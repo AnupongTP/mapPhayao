@@ -322,6 +322,13 @@
 
   function bindFloodPopup(feature, layer) {
     const properties = feature.properties || {};
+    if (layer && typeof layer.on === "function") {
+      layer.on("click", stopLayerClickPropagation);
+    }
+    layer.bindPopup(createFloodPopupHtml(properties));
+  }
+
+  function createFloodPopupHtml(properties) {
     const years = Array.isArray(properties.yearsDetected)
       ? properties.yearsDetected
       : [];
@@ -329,11 +336,7 @@
       ? Number(properties.frequency)
       : years.length;
     const period = formatPeriod(properties.startYear, properties.endYear);
-    if (layer && typeof layer.on === "function") {
-      layer.on("click", stopLayerClickPropagation);
-    }
-    layer.bindPopup(
-      `<div class="map-popup hazard-popup">`
+    return `<div class="map-popup hazard-popup">`
         + `<h3>พื้นที่น้ำท่วมซ้ำซาก</h3>`
         + `<p><strong>ช่วงข้อมูล:</strong> ${escapeHtml(period)}</p>`
         + `<p><strong>จำนวนปีที่พบ:</strong> ${frequency}</p>`
@@ -341,8 +344,7 @@
         + `<p><strong>ตำบล:</strong> ${escapeHtml(formatThaiAdminName(properties.subdistrict, "ต."))}</p>`
         + `<p><strong>อำเภอ:</strong> ${escapeHtml(formatThaiAdminName(properties.district, "อ."))}</p>`
         + `<p><strong>แหล่งข้อมูล:</strong> GISTDA</p>`
-        + `</div>`,
-    );
+        + `</div>`;
   }
 
   function bindDroughtPopup(feature, layer) {
@@ -379,13 +381,13 @@
 
   // Opt-in raster layer for production-site smoke testing without replacing
   // the existing GeoJSON layer for other visitors.
-  function createFloodRasterPreviewController() {
+  function createFloodRasterPreviewController(map) {
     const layer = L.tileLayer(
-      "https://phayao-flood-tiles-anupong.netlify.app/flood-tiles/v1/{z}/{x}/{y}.png",
+      window.AppConfig.data.floodRasterTileUrl,
       {
         pane: "hazardPane",
         minZoom: 10,
-        maxZoom: 16,
+        maxZoom: window.AppConfig.map.maxZoom,
         maxNativeZoom: 16,
         tileSize: 256,
         opacity: 1,
@@ -394,14 +396,77 @@
         updateWhenIdle: true,
       },
     );
-    // PNG tiles have no feature properties; point-detail popup needs a
-    // separate matching five-year PostGIS endpoint before full rollout.
+    const state = {
+      enabled: false,
+      requestId: 0,
+      abortController: null,
+    };
+
+    async function handlePointClick(event) {
+      if (!state.enabled || !map.hasLayer(layer) || !event?.latlng) {
+        return;
+      }
+      state.requestId += 1;
+      const requestId = state.requestId;
+      state.abortController?.abort();
+      const controller = new AbortController();
+      state.abortController = controller;
+      try {
+        const detail = await window.MapApi.getFloodRecurrenceAtPoint(
+          event.latlng.lat,
+          event.latlng.lng,
+          { signal: controller.signal },
+        );
+        if (
+          controller.signal.aborted
+          || requestId !== state.requestId
+          || !state.enabled
+          || !map.hasLayer(layer)
+          || !detail?.found
+        ) {
+          return;
+        }
+        L.popup()
+          .setLatLng(event.latlng)
+          .setContent(createFloodPopupHtml(detail))
+          .openOn(map);
+      } catch (error) {
+        if (error?.name !== "AbortError") {
+          console.error("[Hazard layer] Failed to load flood raster point detail", {
+            statusCode: error?.statusCode || null,
+            message: error?.message || "unknown error",
+          });
+        }
+      } finally {
+        if (requestId === state.requestId) {
+          state.abortController = null;
+        }
+      }
+    }
+
+    function load() {
+      if (!state.enabled) {
+        state.enabled = true;
+        map.on("click", handlePointClick);
+      }
+      return Promise.resolve();
+    }
+
+    function unload() {
+      state.enabled = false;
+      state.requestId += 1;
+      state.abortController?.abort();
+      state.abortController = null;
+      map.off("click", handlePointClick);
+    }
+
     return {
       layer,
-      load: async () => null,
-      unload: () => {},
+      load,
+      unload,
       prefetch: async () => null,
       getMetadata: () => ({ startYear: 2020, endYear: 2024, yearCount: 5 }),
+      getState: () => ({ enabled: state.enabled, requestId: state.requestId }),
     };
   }
 
@@ -1164,7 +1229,7 @@
     const floodRasterPreview = new URLSearchParams(window.location.search)
       .get("floodRaster") === "1";
     const floodRecurrenceController = floodRasterPreview
-      ? createFloodRasterPreviewController()
+      ? createFloodRasterPreviewController(map)
       : createFloodRecurrenceController(map);
     floodRecurrenceController.layer.options.hazardLayerKey = HAZARD_LAYER_KEYS.flood;
     lazyLayerControllers.set(floodRecurrenceController.layer, floodRecurrenceController);

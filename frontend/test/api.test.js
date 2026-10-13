@@ -112,6 +112,22 @@ test("flood generation API uses the public generation endpoint and forwards abor
   assert.equal(calls[0].options.headers, undefined);
 });
 
+test("flood raster point API sends only coordinates and forwards abort signal", async () => {
+  const { calls, MapApi } = createApiHarness({ found: true, frequency: 3 });
+  const controller = new AbortController();
+
+  const result = await MapApi.getFloodRecurrenceAtPoint(19.03, 99.9, {
+    signal: controller.signal,
+  });
+
+  assert.equal(result.frequency, 3);
+  assert.equal(
+    calls[0].url,
+    "https://backend.example.test/api/hazard-layers/flood-recurrence/point?lat=19.03&lng=99.9",
+  );
+  assert.equal(calls[0].options.signal, controller.signal);
+});
+
 test("parcel photo upload uses authenticated multipart without client owner fields", async () => {
   const { calls, MapApi } = createApiHarness({ image: { id: "image-id" } });
   const parcelId = "11111111-1111-4111-8111-111111111111";

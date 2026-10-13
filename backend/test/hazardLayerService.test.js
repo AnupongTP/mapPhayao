@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const db = require("../src/config/database");
 const service = require("../src/services/hazardLayerService");
+const { createApp } = require("../src/server");
 
 const BBOX = "99.9,19.0,100.0,19.1";
 const YEARS = [2020, 2021, 2022, 2023, 2024];
@@ -83,6 +84,96 @@ test("shared year-window helper remains available to point and parcel analysis",
     return { rows: [{ start_year: 2015, end_year: 2024, years: [2015,2016,2017,2018,2019,2020,2021,2022,2023,2024] }] };
   };
   assert.equal((await service.getFloodYearWindow()).years.length, 10);
+});
+
+test("raster point lookup uses an indexed prefilter and exact 2020-2024 classification", async () => {
+  let capturedSql = "";
+  let capturedParams = null;
+  const reader = service.createFloodRecurrencePointReader({
+    async query(sql, params) {
+      capturedSql = sql;
+      capturedParams = params;
+      return { rows: [{
+        province_name: "พะเยา",
+        district_name: "เมืองพะเยา",
+        subdistrict_name: "เวียง",
+        years_detected: [2020, 2022, 2024],
+        frequency: 3,
+      }] };
+    },
+  });
+
+  const result = await reader({ lat: 19.03, lng: 99.9 });
+
+  assert.match(capturedSql, /f\.geom && p\.geom/);
+  assert.match(capturedSql, /ST_Covers/);
+  assert.match(capturedSql, /ST_MakeValid/);
+  assert.deepEqual(capturedParams, [99.9, 19.03, 2020, 2024]);
+  assert.deepEqual(result, {
+    found: true,
+    frequency: 3,
+    yearsDetected: [2020, 2022, 2024],
+    startYear: 2020,
+    endYear: 2024,
+    province: "พะเยา",
+    district: "เมืองพะเยา",
+    subdistrict: "เวียง",
+    source: "GISTDA",
+    summaryLevel: "point",
+  });
+});
+
+test("raster point lookup validates coordinates and returns explicit no-data metadata", async () => {
+  let calls = 0;
+  const reader = service.createFloodRecurrencePointReader({
+    async query() {
+      calls += 1;
+      return { rows: [] };
+    },
+  });
+
+  await assert.rejects(() => reader({ lat: "bad", lng: 99.9 }),
+    (error) => error.statusCode === 400 && /lat/.test(error.message));
+  assert.equal(calls, 0);
+  assert.deepEqual(await reader({ lat: 19.03, lng: 99.9 }), {
+    found: false,
+    frequency: 0,
+    yearsDetected: [],
+    startYear: 2020,
+    endYear: 2024,
+    province: null,
+    district: null,
+    subdistrict: null,
+    source: "GISTDA",
+    summaryLevel: "point",
+  });
+});
+
+test("public raster point route forwards coordinates and returns the detail contract", async () => {
+  const original = service.getFloodRecurrenceAtPoint;
+  let received = null;
+  service.getFloodRecurrenceAtPoint = async (point) => {
+    received = point;
+    return { found: true, frequency: 2, yearsDetected: [2023, 2024] };
+  };
+  const server = createApp().listen(0, "127.0.0.1");
+  try {
+    await new Promise((resolve) => server.once("listening", resolve));
+    const response = await fetch(
+      `http://127.0.0.1:${server.address().port}`
+        + "/api/hazard-layers/flood-recurrence/point?lat=19.03&lng=99.9",
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(received, { lat: "19.03", lng: "99.9" });
+    assert.deepEqual(await response.json(), {
+      found: true,
+      frequency: 2,
+      yearsDetected: [2023, 2024],
+    });
+  } finally {
+    service.getFloodRecurrenceAtPoint = original;
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test("flood overlay returns the bounded single-query FeatureCollection contract", async () => {

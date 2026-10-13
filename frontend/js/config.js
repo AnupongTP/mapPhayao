@@ -13,6 +13,9 @@
     && /^http:\/\/127\.0\.0\.1:\d+\/api$/.test(e2eApiBaseUrl)
     ? e2eApiBaseUrl
     : null;
+  const floodRasterTileUrl = isLocal
+    ? `http://${hostname}/flood-tiles-lab/tiles_v1/{z}/{x}/{y}.png`
+    : "https://phayao-flood-tiles-anupong.netlify.app/flood-tiles/v1/{z}/{x}/{y}.png";
 
   window.AppConfig = {
     apiBaseUrl: isLocal
@@ -26,6 +29,7 @@
     },
 
     data: {
+      floodRasterTileUrl,
       thailandProvinceGeoJson: "data/thailand_province.geojson",
 
       layers: {
