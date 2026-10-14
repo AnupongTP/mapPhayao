@@ -9,6 +9,64 @@ const FLOOD_WINDOW_YEARS = 10;
 const FLOOD_LAYER_WINDOW_YEARS = 5;
 const FLOOD_CACHE_VERSION = "latest5-dissolve-v1";
 const FLOOD_SIMPLIFY_CRS = 32647;
+const FLOOD_RASTER_START_YEAR = 2020;
+const FLOOD_RASTER_END_YEAR = 2024;
+
+const FLOOD_RASTER_POINT_SQL = `
+WITH input_point AS (
+  SELECT ST_SetSRID(
+    ST_MakePoint($1::double precision, $2::double precision),
+    4326
+  ) AS geom
+), spatial_candidates AS MATERIALIZED (
+  SELECT
+    f.province_name,
+    f.district_name,
+    f.subdistrict_name,
+    f.yearly_frequency,
+    f.geom
+  FROM gis.flood_recurrence_pyo AS f
+  CROSS JOIN input_point AS p
+  WHERE f.geom && p.geom
+), classified AS (
+  SELECT
+    c.province_name,
+    c.district_name,
+    c.subdistrict_name,
+    ARRAY(
+      SELECT DISTINCT (item->>'year')::int
+      FROM jsonb_array_elements(
+        CASE WHEN jsonb_typeof(c.yearly_frequency) = 'array'
+          THEN c.yearly_frequency ELSE '[]'::jsonb END
+      ) AS item
+      WHERE (item->>'year') ~ '^\\d{4}$'
+        AND (item->>'year')::int BETWEEN $3::int AND $4::int
+        AND CASE WHEN (item->>'frequency') ~ '^-?\\d+(\\.\\d+)?$'
+          THEN (item->>'frequency')::numeric ELSE 0 END > 0
+      ORDER BY (item->>'year')::int
+    ) AS years_detected
+  FROM spatial_candidates AS c
+  CROSS JOIN input_point AS p
+  WHERE ST_Covers(
+    ST_CollectionExtract(ST_MakeValid(c.geom), 3),
+    p.geom
+  )
+)
+SELECT
+  province_name,
+  district_name,
+  subdistrict_name,
+  years_detected,
+  cardinality(years_detected)::int AS frequency
+FROM classified
+WHERE cardinality(years_detected) > 0
+ORDER BY
+  cardinality(years_detected) DESC,
+  province_name NULLS LAST,
+  district_name NULLS LAST,
+  subdistrict_name NULLS LAST
+LIMIT 1;
+`;
 
 const cache = new Map();
 const pendingBuilds = new Map();
@@ -17,6 +75,48 @@ const floodBboxService = createHazardLayerService({
   db,
   getDatasetGeneration: () => getFloodDatasetGeneration(db),
 });
+
+function parsePointCoordinate(value, min, max, name) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < min || number > max) {
+    const error = new Error(`${name} is invalid`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return number;
+}
+
+function createFloodRecurrencePointReader(database = db) {
+  return async function getFloodRecurrenceAtPoint({ lat, lng } = {}) {
+    const latitude = parsePointCoordinate(lat, -90, 90, "lat");
+    const longitude = parsePointCoordinate(lng, -180, 180, "lng");
+    const result = await database.query(FLOOD_RASTER_POINT_SQL, [
+      longitude,
+      latitude,
+      FLOOD_RASTER_START_YEAR,
+      FLOOD_RASTER_END_YEAR,
+    ]);
+    const row = result.rows[0];
+    const yearsDetected = Array.isArray(row?.years_detected)
+      ? row.years_detected.map(toNumber).filter(Number.isInteger)
+      : [];
+
+    return {
+      found: Boolean(row),
+      frequency: row ? Number(row.frequency) : 0,
+      yearsDetected,
+      startYear: FLOOD_RASTER_START_YEAR,
+      endYear: FLOOD_RASTER_END_YEAR,
+      province: row?.province_name || null,
+      district: row?.district_name || null,
+      subdistrict: row?.subdistrict_name || null,
+      source: "GISTDA",
+      summaryLevel: "point",
+    };
+  };
+}
+
+const getFloodRecurrenceAtPoint = createFloodRecurrencePointReader();
 
 function toNumber(value) {
   const number = Number(value);
@@ -204,6 +304,9 @@ module.exports = {
   getFloodYearWindow,
   getFloodRecurrenceLayer: floodBboxService.getFloodRecurrenceLayer,
   getFloodRecurrenceGeneration: floodBboxService.refreshDatasetGeneration,
+  getFloodRecurrenceAtPoint,
   getDroughtRecurrenceLayer,
   clearCache,
+  FLOOD_RASTER_POINT_SQL,
+  createFloodRecurrencePointReader,
 };

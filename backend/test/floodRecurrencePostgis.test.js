@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const { Pool } = require("pg");
 const { createHazardLayerService } = require("../src/services/floodRecurrenceBboxService");
+const { createFloodRecurrencePointReader } = require("../src/services/hazardLayerService");
 const { refreshFloodDataset } = require("../scripts/floodRecurrenceAtomicRefresh");
 
 const connectionString = process.env.FLOOD_POSTGIS_TEST_DATABASE_URL || "";
@@ -73,6 +74,14 @@ test("real PostGIS empty BBOX returns metadata and an empty feature array", {
       },
       features: [],
     });
+
+    const pointReader = createFloodRecurrencePointReader(pool);
+    const inside = await pointReader({ lat: 19.05, lng: 99.85 });
+    const outside = await pointReader({ lat: 20.05, lng: 100.55 });
+    assert.equal(inside.found, true);
+    assert.equal(inside.frequency, 5);
+    assert.deepEqual(inside.yearsDetected, [2020, 2021, 2022, 2023, 2024]);
+    assert.equal(outside.found, false);
   } finally {
     await pool.query("DROP SCHEMA IF EXISTS gis CASCADE").catch(() => {});
     await pool.end();

@@ -110,6 +110,33 @@ test("an aborted Apps Script fetch records elapsed time and remains a timeout", 
   assert.ok(Number.isFinite(measured[0]) && measured[0] >= 0);
 });
 
+test("read distinguishes timeout, abort, network and body timeout without changing upload semantics", async () => {
+  for (const [failure, category] of [
+    [new DOMException("timed out", "TimeoutError"), "timeout"],
+    [new DOMException("aborted", "AbortError"), "aborted"],
+    [new TypeError("network failed"), "network"],
+  ]) {
+    const bridge = createAppsScriptDriveBridge({ url, secret, fetchImpl: async () => { throw failure; } });
+    await assert.rejects(() => bridge.getImage("file_1"),
+      { googleStage: "apps-script-read", bridgeCategory: category });
+  }
+  const originalTimeout = AbortSignal.timeout;
+  AbortSignal.timeout = () => {
+    const controller = new AbortController();
+    controller.abort(new DOMException("timed out", "TimeoutError"));
+    return controller.signal;
+  };
+  try {
+    const bridge = createAppsScriptDriveBridge({ url, secret, fetchImpl: async () => ({
+      ok: true, async json() { throw new DOMException("aborted", "AbortError"); },
+    }) });
+    await assert.rejects(() => bridge.getImage("file_1"),
+      { googleStage: "apps-script-read", bridgeCategory: "timeout" });
+  } finally {
+    AbortSignal.timeout = originalTimeout;
+  }
+});
+
 test("default nonce generator is random and changes for consecutive requests", async () => {
   const calls = [];
   const bridge = createAppsScriptDriveBridge({ url, secret, fetchImpl: async (_target, options) => {

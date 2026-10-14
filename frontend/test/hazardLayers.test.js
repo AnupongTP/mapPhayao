@@ -206,7 +206,19 @@ function createLeafletStub(state) {
       return { type: "canvas", options };
     },
     tileLayer(url, options) {
-      return { url, options };
+      const layer = { url, options };
+      state.tileLayers.push(layer);
+      return layer;
+    },
+    popup() {
+      const popup = {
+        latlng: null,
+        content: "",
+        setLatLng(latlng) { this.latlng = latlng; return this; },
+        setContent(content) { this.content = content; return this; },
+        openOn() { state.popups.push(this); return this; },
+      };
+      return popup;
     },
     geoJSON: createGeoJsonLayer,
     DomUtil: {
@@ -300,7 +312,11 @@ function createHarness(options = {}) {
     apiCalls: [],
     generationCalls: [],
     droughtCalls: [],
+    pointCalls: [],
+    pointResponses: options.pointResponses || [],
     canvasOptions: [],
+    tileLayers: [],
+    popups: [],
     controls: [],
     geoJsonLayers: [],
     mapClicks: 0,
@@ -317,8 +333,12 @@ function createHarness(options = {}) {
   }
   const window = {
     AppConfig: {
-      map: { maxZoom: 18 },
+      features: {
+        enableFloodRasterPopup: options.enableFloodRasterPopup === true,
+      },
+      map: { maxZoom: 19 },
       data: {
+        floodRasterTileUrl: "http://127.0.0.1/flood-tiles-lab/tiles_v1/{z}/{x}/{y}.png",
         thailandProvinceGeoJson: "data/thailand.geojson",
         layers: {
           tambon: "data/layers/tambon.geojson",
@@ -357,6 +377,13 @@ function createHarness(options = {}) {
         }
         return next || floodResponse();
       },
+      getFloodRecurrenceAtPoint: async (lat, lng, requestOptions) => {
+        state.pointCalls.push({ lat, lng, requestOptions });
+        const next = state.pointResponses.shift();
+        if (next && typeof next.then === "function") return next;
+        if (next instanceof Error) throw next;
+        return next || { found: false };
+      },
       getDroughtRecurrenceLayer: async () => {
         state.droughtCalls.push({});
         return floodResponse([]);
@@ -372,6 +399,9 @@ function createHarness(options = {}) {
     navigator: {
       connection: options.connection,
     },
+    location: {
+      search: Object.hasOwn(options, "search") ? options.search : "?floodRaster=0",
+    },
     console: {
       error() {},
     },
@@ -385,6 +415,7 @@ function createHarness(options = {}) {
     String,
     Promise,
     Date: HarnessDate,
+    URLSearchParams,
     console: window.console,
     setTimeout,
     clearTimeout,
@@ -427,6 +458,101 @@ test("flood recurrence layer is lazy and uses approved blue classes", async () =
   assert.deepEqual(styles.map((style) => style.color), ["#7CB9DE", "#3B82C4", "#0F4FA8"]);
   assert.ok(harness.floodLayer.options.renderer);
   assert.equal(harness.floodLayer.getLayers().length, 3);
+});
+
+test("raster mode is the default and uses XYZ tiles through zoom 19 without flood BBOX GeoJSON", async () => {
+  const harness = createHarness({ search: "" });
+
+  assert.equal(harness.floodLayer.url,
+    "http://127.0.0.1/flood-tiles-lab/tiles_v1/{z}/{x}/{y}.png");
+  assert.equal(harness.floodLayer.options.minZoom, 10);
+  assert.equal(harness.floodLayer.options.maxNativeZoom, 16);
+  assert.equal(harness.floodLayer.options.maxZoom, 19);
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+
+  assert.equal(harness.state.apiCalls.length, 0);
+  assert.equal(harness.state.generationCalls.length, 0);
+});
+
+test("floodRaster=0 keeps the GeoJSON BBOX controller available for rollback", async () => {
+  const harness = createHarness({ search: "?floodRaster=0" });
+
+  harness.map.addOverlay(harness.floodLayer);
+  await flushAsync();
+
+  assert.equal(harness.state.apiCalls.length, 1);
+  assert.equal(harness.state.generationCalls.length, 1);
+  assert.equal(harness.state.tileLayers.length, 0);
+});
+
+test("raster point detail waits for confirmation and aborts stale lookups", async () => {
+  const stale = createDeferred();
+  const harness = createHarness({
+    search: "?floodRaster=1",
+    enableFloodRasterPopup: true,
+    pointResponses: [
+      stale.promise,
+      {
+        found: true,
+        frequency: 3,
+        yearsDetected: [2020, 2022, 2024],
+        startYear: 2020,
+        endYear: 2024,
+        district: "เมืองพะเยา",
+        subdistrict: "เวียง",
+      },
+    ],
+  });
+  harness.map.addOverlay(harness.floodLayer);
+  harness.map.fire("click", { latlng: { lat: 19.03, lng: 99.9 } });
+  await flushAsync();
+  assert.equal(harness.state.mapClicks, 1);
+  assert.equal(harness.state.pointCalls.length, 0);
+
+  void harness.overlays.showFloodRasterPointDetail({ lat: 19.03, lng: 99.9 });
+  await flushAsync();
+  const firstSignal = harness.state.pointCalls[0].requestOptions.signal;
+  await harness.overlays.showFloodRasterPointDetail({ lat: 19.04, lng: 99.91 });
+  await flushAsync();
+
+  assert.equal(firstSignal.aborted, true);
+  assert.equal(harness.state.mapClicks, 1);
+  assert.equal(harness.state.apiCalls.length, 0);
+  assert.equal(harness.state.pointCalls.length, 2);
+  assert.equal(harness.state.popups.length, 1);
+  assert.match(harness.state.popups[0].content, /2020–2024/);
+  assert.match(harness.state.popups[0].content, /2020, 2022, 2024/);
+
+  stale.resolve({ found: true, frequency: 1, yearsDetected: [2024] });
+  await flushAsync();
+  assert.equal(harness.state.popups.length, 1);
+
+  harness.map.removeOverlay(harness.floodLayer);
+  await harness.overlays.showFloodRasterPointDetail({ lat: 19.05, lng: 99.92 });
+  await flushAsync();
+  assert.equal(harness.state.pointCalls.length, 2);
+});
+
+test("disabled raster popup flag prevents point-detail requests and popup creation", async () => {
+  const harness = createHarness({
+    search: "?floodRaster=1",
+    enableFloodRasterPopup: false,
+    pointResponses: [{
+      found: true,
+      frequency: 3,
+      yearsDetected: [2020, 2022, 2024],
+    }],
+  });
+  harness.map.addOverlay(harness.floodLayer);
+
+  await harness.overlays.showFloodRasterPointDetail({ lat: 19.03, lng: 99.9 });
+  await flushAsync();
+
+  assert.equal(harness.state.pointCalls.length, 0);
+  assert.equal(harness.state.popups.length, 0);
+  assert.equal(harness.map.hasLayer(harness.floodLayer), true);
+  assert.equal(harness.floodLayer.options.opacity, 0.45);
 });
 
 test("flood prefetch starts in the background without displaying layer or legend", async () => {

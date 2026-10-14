@@ -1,161 +1,632 @@
-# AGENTS.md
+# AGENTS.md — Map Phayao / mapphayao1
 
-Read this file before editing the repository. Use the actual code and database state as the primary source of truth.
+Read this file before editing the repository. Use the latest explicit user instruction and the actual current local code/database state as the primary source of truth.
 
-## Project
+## 1. Project identity
 
-Web GIS for rice and maize land-suitability analysis in Phayao.
+Project: Map Phayao / mapphayao1
 
-- Frontend: HTML, CSS, JavaScript, Leaflet, Leaflet Draw
-- Backend: Node.js, Express
-- Database: PostgreSQL/PostGIS (`map1`)
-- Display layers: Static GeoJSON loaded by Leaflet
-- Spatial analysis: Backend API + PostGIS
-- Frontend/GPS/GeoJSON CRS: EPSG:4326
-- Analysis CRS: EPSG:32647
+Repository:
+C:\ms4w\Apache\htdocs\mapphayao1
 
-Do not replace frameworks or create duplicate maps, Layer Controls, handlers, routes, or renderers.
+Production architecture:
+LINE LIFF
+→ Netlify frontend
+→ Render Node/Express backend
+→ Supabase PostgreSQL/PostGIS
+→ Google Sheet mirror / Google Drive parcel photos through signed Apps Script bridge
 
-## Display Layers
+Frontend:
+- Plain HTML/CSS/JavaScript
+- Leaflet 1.9.x
+- Leaflet Draw
+- Mobile-first, especially LINE in-app browser / LIFF
 
-Frontend overlays use static GeoJSON only:
+Backend:
+- Node.js + Express
+- PostgreSQL/PostGIS authoritative business database
+- Google integration for mirror/photo storage
 
-- Thailand provinces
-- amphoe
-- tambon
-- basin_main
-- sub_basin_display
-- stream
-- irrigation_canal
-- rice_potential
-- maize_potential
+GIS CRS:
+- Frontend/GPS/GeoJSON: EPSG:4326
+- Stored parcel geometry / spatial analysis: EPSG:32647
+- Parcel geometry in PostgreSQL must remain MultiPolygon SRID 32647
 
-GeoJSON is for display only. Analysis data such as `soil`, `basin`, and other GIS tables must remain in PostGIS.
+Do not redesign the architecture from scratch unless explicitly requested.
 
-Overlay rules:
+## 2. Source-of-truth priority
 
-- Do not load overlay GeoJSON during initial page load.
-- Load a layer only when the user enables it.
-- Use relative URLs such as `data/layers/amphoe.geojson`.
-- When disabled, abort unfinished fetches and call `clearLayers()`.
-- Prevent stale responses and duplicate features.
-- Optional overlays are disabled initially.
-- Styles are defined in Leaflet JavaScript.
-- Do not regenerate, simplify, dissolve, split, or modify GeoJSON geometry unless explicitly requested.
+When sources disagree, use this order:
 
-Frontend overlays must not use:
+1. Latest explicit user instruction.
+2. Actual current local repository files and Git state.
+3. Current database schema / migrations in the working tree.
+4. Current runtime behavior and logs.
+5. Current remote main when relevant.
+6. mapProject_memory1.md.
+7. Older handoff files or chat assumptions.
 
-- `L.tileLayer.wms`
-- `localhost:8080`
-- GeoServer workspace/layer names
-- `CQL_FILTER`
-- GeoServer SLD styles
+Never assume a local implementation is deployed.
+Never assume a passing mocked test proves production behavior.
 
-GeoServer may remain in the repository, but it is not a frontend display dependency.
-
-## Point Analysis
-
-Required flow:
-
-1. User clicks the map, drags the existing marker, or uses GPS.
-2. Latitude and longitude update.
-3. No API call occurs yet.
-4. User confirms the location.
-5. Frontend calls:
-
-`GET /api/rice-suitability/point?lat={lat}&lng={lng}`
-
-Rules:
-
-- Use one draggable marker.
-- GPS moves the existing marker.
-- Use `dragend`.
-- Do not call the point API during map click, drag, GPS lookup, page load, or layer toggle.
-- Use `AbortController` for overlapping confirmation requests.
-- Display rice and maize results separately.
-
-## Temporary Parcels
-
-Temporary parcels use Leaflet Draw and frontend memory only.
-
-- Support multiple parcels, editing, deletion, selection, and retry analysis.
-- `Escape` cancels unfinished drawing only.
-- Use `POST /api/area-analysis/polygon`.
-- Do not use localStorage, sessionStorage, IndexedDB, or automatic database persistence.
-- Frontend must not call `/api/parcels` unless explicitly requested.
-
-## Database and GIS
-
-- Inspect the real schema before writing SQL.
-- Never guess column names.
-- Use parameterized SQL.
-- Input coordinates are EPSG:4326.
-- Transform to EPSG:32647 before GIS analysis.
-- Use `ST_MakePoint(longitude, latitude)`.
-- Do not use `ST_SetSRID` instead of coordinate transformation.
-- Use `ST_Covers` for polygon lookup where appropriate.
-- Use `<->` for nearest ordering and `ST_Distance` for actual distance.
-- Do not use `SELECT *`.
-- Do not return geometry unless required.
-
-Suitability classes:
-
-- S1 = Highly suitable
-- S2 = Moderately suitable
-- S3 = Marginally suitable
-- N = Not suitable
-
-`NO_DATA` and `NO_COVERAGE` are not `N`.
-
-For display GeoJSON:
-
-- Suitability field: `suitabilit`
-- Thai label field: `suitabil_1`
-
-Verify actual properties before changing code.
-
-## Security
-
-- Never hardcode credentials.
-- Frontend must not connect directly to PostgreSQL.
-- Never build SQL from raw user input.
-- Do not expose stack traces, connection strings, credentials, or internal paths.
-- Prefer `textContent` and safe DOM creation.
-- Do not use `mode: "no-cors"`.
-
-## Working Rules
+## 3. Mandatory pre-work steps
 
 Before editing:
 
-- Inspect the project tree and relevant files.
-- Report briefly which files will change and why.
+1. Read this AGENTS.md.
+2. Read any nested AGENTS.md applicable to files you may change.
+3. Run:
+   git status --short
+4. Inspect the current dirty working tree.
+5. Inspect the actual relevant files and tests.
+6. Briefly report what you intend to change and why.
 
-During editing:
+Do not assume the repository is clean.
 
-- Make the smallest targeted change.
-- Preserve existing structure, coding style, and Thai UTF-8.
-- Do not modify unrelated files.
-- Do not modify Backend/PostGIS for frontend display-only work.
-- Do not create duplicate implementations.
-- Do not use destructive Git or database commands.
+## 4. Git safety
 
-After editing:
+Do not use destructive Git commands.
 
-- Show changed files and relevant Git diff.
-- Report what was actually tested.
-- State anything not tested.
-- Do not claim tests passed unless they were run.
-- Do not commit, push, deploy, delete services, or change billing without explicit approval.
+Never use:
+- git reset
+- git clean
+- git stash
+- git restore
+- git checkout -- .
+- git add .
 
-## Minimum Checks
+Do not stage, commit, push, deploy, amend, rebase, or force-push unless explicitly approved.
 
-- GoogleSatellite remains the active initial basemap.
-- Layer Control is not duplicated.
-- No overlay GeoJSON loads initially.
-- Enabling a layer loads only that file.
-- Disabling a layer clears its features.
-- Re-enabling does not create duplicates.
-- No frontend request uses GeoServer WMS or `localhost:8080`.
-- GPS, marker, point analysis, parcel drawing, and polygon analysis still work.
-- No new console errors.
-- Thai text remains valid UTF-8.
+Preserve unrelated local changes.
+
+When staging is later approved:
+- stage exact intended files only
+- review staged diff before commit
+
+LF/CRLF warnings are not errors by themselves.
+
+## 5. Security and ownership
+
+Parcel APIs use verified LINE identity.
+
+Required ownership chain:
+
+verified LINE idToken
+→ verified LINE subject
+→ app.users.line_user_id
+→ app.users.id UUID
+→ app.parcels.owner_user_id
+
+Rules:
+- Never trust owner IDs from the frontend.
+- Never trust LINE user IDs from the frontend.
+- Never expose LINE IDs, idTokens, access tokens, HMAC secrets, Google credentials, or service-account keys.
+- Never hardcode secrets.
+- Frontend must never connect directly to PostgreSQL.
+- Use parameterized SQL.
+- Do not expose stack traces or internal filesystem paths to users.
+- Do not use wildcard CORS.
+- Do not use mode: "no-cors".
+
+clientPhotoId is an idempotency identifier only; it is not an authorization credential.
+
+## 6. Parcel lifecycle
+
+### Temporary parcel
+
+Temporary parcels live in frontend state until final save confirmation.
+
+Current intended flow:
+
+Draw parcel
+→ confirm boundary
+→ open one "รายละเอียดแปลง" form
+→ enter metadata once
+→ analyze
+→ show analysis result
+→ press Save
+→ show confirmation only
+→ confirm final save
+→ create authenticated permanent parcel
+→ upload selected photos sequentially
+
+Temporary parcel details include:
+1. ชื่อแปลง
+2. ชนิดพืช
+3. พันธุ์
+4. วันที่ปลูก
+5. รูปภาพ
+6. หมายเหตุ
+
+Rules:
+- New temporary parcel planting date defaults to the device-local current calendar date.
+- Reopening/editing the temporary form preserves the previously selected date.
+- Do not persist a parcel before final confirmation.
+- Selected photos remain temporary/local until final save.
+- Maximum 5 photos per parcel.
+- Note is optional.
+
+### Saved parcel editing
+
+Saved parcel edit form is metadata-only for now:
+- parcel name
+- crop type
+- variety
+- planting date
+- note
+
+Do not add saved-parcel photo management unless explicitly requested later.
+
+Editing a saved parcel must not reset planting date to today.
+
+## 7. Parcel database rules
+
+PostgreSQL/PostGIS is authoritative for:
+- users
+- parcel ownership
+- parcel business metadata
+- parcel geometry
+- note
+- cleanup queue
+
+Do not introduce active parcel-photo metadata storage in PostgreSQL.
+
+Specifically:
+- Do not create or reintroduce app.parcel_images.
+- Supabase/PostgreSQL must not become the parcel-photo metadata store.
+
+Parcel geometry storage:
+- MultiPolygon
+- SRID 32647
+
+Client/API GeoJSON:
+- EPSG:4326
+
+Use ST_Transform for CRS conversion.
+Do not substitute ST_SetSRID for coordinate transformation.
+
+Do not use SELECT *.
+
+## 8. Google Sheet mirror contract
+
+Spreadsheet:
+FarmTech
+
+The parcels sheet exact A:P contract is:
+
+A user_id
+B display_name
+C parcel_code
+D parcel_name
+E crop
+F variety
+G planting_date
+H Coordinate
+I geometry
+J area_m2
+K area_rai
+L Image
+M LinkImage
+N note
+O created_at
+P updated_at
+
+Rules:
+- Do not rename, reorder, insert, or rebuild headers silently.
+- Validate the exact header contract and stop/report on mismatch.
+- Image and LinkImage are aligned JSON arrays.
+- Image[i] must correspond to LinkImage[i].
+- Business-data mirror updates must preserve photo arrays unless explicitly changing photos.
+- Image append to existing row should not overwrite N:P.
+- note is mirrored to column N.
+- created_at / updated_at displayed in Sheet use explicit Asia/Bangkok (+07:00) representation.
+- PostgreSQL timestamps remain timestamptz; do not add seven hours in SQL.
+
+Google Sheet is a secondary mirror, not the authoritative application database.
+
+## 9. Parcel photo architecture
+
+Final architecture:
+
+Actual image files:
+Google Drive
+
+Photo references:
+Google Sheet Image / LinkImage
+
+Authoritative parcel ownership:
+PostgreSQL
+
+### Upload flow
+
+Frontend temporary photo
+→ client preparation/compression
+→ authenticated backend
+→ owner verification
+→ backend Sharp normalization
+→ signed Apps Script bridge
+→ Google Drive
+→ Sheet Image/LinkImage update
+
+Current browser preprocessing:
+- max edge about 1600 px
+- WebP around quality 0.80 when supported
+- safe fallback if decode/encoding unsupported or output is worse
+
+Backend Sharp remains authoritative:
+- accepted formats according to current implementation
+- raw upload maximum about 12 MB
+- auto orientation
+- max edge 1600
+- WebP quality 75
+- metadata stripped
+
+Do not weaken backend validation because browser preprocessing exists.
+
+### Saved photo read flow
+
+Frontend / LIFF
+→ authenticated Render endpoint
+→ LINE ownership check
+→ trusted Sheet Image/LinkImage lookup
+→ derive Drive fileId server-side
+→ signed Apps Script read
+→ Drive getBlob
+→ backend returns image/webp
+→ frontend Blob/ObjectURL
+
+Do not use direct Google Drive URLs as normal <img src>.
+Do not add a direct Drive fallback.
+
+### Photo limits and ordering
+
+- Maximum 5 photos per parcel.
+- Upload sequentially.
+- Do not replace sequential upload with unbounded Promise.all.
+
+## 10. Photo upload reliability
+
+Each temporary photo has a stable clientPhotoId.
+
+Requirements:
+- assigned once when accepted
+- preserved through preprocessing, analysis, reopen, save, and retry
+- new photo gets a new ID
+- backend validates clientPhotoId
+- backend derives deterministic final filename from trusted parcel data + clientPhotoId
+- frontend does not supply the trusted final filename
+
+Retry rules:
+- initial attempt + maximum 3 retries = maximum 4 attempts
+- approximate delays: 500 ms / 1000 ms / 2000 ms
+- retry only positively classified safe transient errors
+- do not retry validation/auth/ownership/413/415/integrity errors
+- successful previous photos must not be re-uploaded unnecessarily
+- partial save must reuse the already-created parcel
+
+Important:
+Apps Script upload timeout/network after dispatch can be an ambiguous write.
+Do not blindly replay Drive createFile() when idempotency cannot be proven safely.
+
+Do not solve this by:
+- scanning Drive
+- folder.getFilesByName
+- full-folder enumeration
+- app.parcel_images
+
+Do not introduce Drive filename search into normal upload or retry.
+
+## 11. Parcel deletion and cleanup queue
+
+User-facing delete must be fast.
+
+Current intended flow:
+
+authenticate owner
+→ collect trusted parcelCode and Drive fileIds from server-side data
+→ DB transaction:
+   DELETE owned parcel
+   INSERT durable cleanup job
+→ COMMIT
+→ return HTTP success
+→ frontend removes parcel immediately
+→ background cleanup continues
+
+The authoritative delete and cleanup enqueue must be atomic.
+
+Durable queue:
+app.cleanup_jobs
+
+The queue exists only for background cleanup work; it is not parcel-photo metadata.
+
+Cleanup order:
+1. delete Google Sheet parcel row
+2. delete Drive image files sequentially
+
+Rules:
+- Sheet delete is idempotent; already-missing row is complete.
+- Persist partial Drive cleanup progress.
+- Retry transient failures with backoff.
+- Do not hammer Apps Script.
+- Keep terminal failed jobs for diagnosis.
+- Use PostgreSQL claiming/locking suitable for multiple backend instances.
+- Recover stale processing leases after restart.
+- Do not use fire-and-forget Promise or setTimeout as the durability mechanism.
+
+Important 404 rule:
+An Apps Script bridge HTTP 404 is NOT proof that a Drive file is already absent.
+Do not silently treat bridge endpoint 404 as successful file cleanup.
+
+## 12. Current known concurrency risk
+
+Upload-vs-delete race for the same parcel must be treated carefully.
+
+Potential scenario:
+- one request uploads a photo
+- another request deletes the same parcel concurrently
+
+Before release, test/analyze whether this can orphan a new Drive file or recreate/modify Sheet state after delete.
+
+Do not invent a broad distributed lock unless evidence shows it is required.
+
+If a fix is required:
+- use the smallest robust fix
+- preserve normal performance
+- preserve no-Drive-scan rule
+- preserve ownership checks
+
+## 13. Apps Script bridge
+
+Apps Script is a signed server-to-server bridge.
+
+Production uses the existing /exec Web App URL.
+
+Do not expose the bridge secret.
+
+Current HMAC protections, timestamp/skew checks, and nonce/replay protections must not be weakened.
+
+Opening /exec directly in a browser may produce a doGet-related message because the bridge is POST-based; do not misdiagnose that alone as failure.
+
+When Code.gs changes:
+- source changes do not imply deployment
+- deploy later only with explicit approval
+- preserve the existing deployment URL by publishing a new version of the existing deployment
+
+## 14. Weather bridge
+
+Weather currently uses Apps Script as an approved transport path when configured.
+
+Do not redesign weather while working on parcel/photo tasks unless explicitly requested.
+
+Do not silently fall back from Apps Script transport to direct provider calls in production.
+
+## 15. GIS display rules
+
+Static display overlays use frontend GeoJSON.
+
+Do not restore GeoServer WMS as an active frontend dependency.
+
+Do not use:
+- L.tileLayer.wms for approved static overlays
+- localhost:8080 frontend dependencies
+- CQL_FILTER
+- GeoServer SLD logic
+
+Static overlay behavior:
+- optional overlays disabled initially
+- load only when enabled
+- abort unfinished fetch on disable where current code supports it
+- clear layer on disable
+- prevent stale responses and duplicates
+- do not regenerate/simplify/dissolve geometry unless explicitly requested
+
+Google Satellite should remain the expected initial basemap unless explicitly changed.
+
+## 16. Point analysis rules
+
+Point flow remains explicit-confirmation based:
+
+click/drag/GPS
+→ update location
+→ no immediate point API call
+→ user confirms
+→ call point analysis/report API
+
+Do not trigger point analysis on every map click, drag, GPS lookup, page load, or layer toggle.
+
+Use one draggable marker and AbortController for overlapping confirmed requests where current code does so.
+
+## 17. Testing rules
+
+During implementation:
+- use focused tests first
+- avoid unnecessary full E2E for every small change
+
+Before release:
+- run meaningful full frontend/backend regression
+- run realistic CRUD/integration tests against disposable PostgreSQL/PostGIS
+- run realistic browser E2E
+- test retry/fault injection
+- test cleanup queue persistence, lease recovery, and multi-worker behavior
+- inspect migration order
+- run git diff --check
+
+Never use production Supabase, production Google Sheet, production Drive, or production Apps Script as automated E2E scratch systems.
+
+Use synthetic/fake LIFF identity and disposable test database.
+
+Passing mocks alone is not enough to claim production success.
+
+## 18. Realistic CRUD expectations
+
+Before release, test the full lifecycle:
+
+CREATE
+- create parcel
+- note/date/metadata
+- selected photos
+
+READ
+- list/open owned parcel
+- verify note and metadata
+- verify protected thumbnail/fullscreen read
+
+UPDATE
+- edit name/crop/variety/date/note
+- edit note only
+- clear note
+- verify unrelated values remain unchanged
+
+DELETE
+- delete parcel
+- verify immediate UI removal after HTTP success
+- verify parcel row gone
+- verify cleanup job exists
+- verify worker eventually removes Sheet/Drive artifacts in test environment
+
+## 19. Test infrastructure integrity
+
+Test helpers and fake providers must not hide real failures.
+
+Do not:
+- globally ignore arbitrary console errors
+- globally ignore failed HTTP requests
+- bypass ownership in a way production cannot
+- force success unconditionally
+
+If a test deliberately injects a known 503/429/etc., assert that specific expected failure narrowly.
+
+Clean disposable servers/containers/volumes started by tests.
+
+## 20. Performance and scalability rules
+
+Do not introduce:
+- Drive folder scans
+- Drive filename enumeration
+- unbounded Promise.all
+- high-frequency worker polling
+- synchronous Drive cleanup in user DELETE request
+
+Known future scalability concern:
+Current Google Sheet row lookup may read broad ranges.
+Treat this as a future optimization unless it causes a concrete correctness/performance failure now.
+
+Do not redesign Sheet indexing during unrelated work.
+
+## 21. Logging
+
+Logs may include safe operational context such as:
+- parcelId
+- cleanup job id
+- attempt
+- remaining file count
+- safe stage/category/status
+
+Never log:
+- LINE idToken
+- Authorization header
+- LINE user ID
+- Apps Script secret/signature
+- Google credentials
+- image bytes/Base64
+- raw sensitive request bodies
+
+User-facing errors must remain sanitized.
+
+## 22. Deployment and production safety
+
+Do not:
+- run production migrations without explicit approval
+- change Render billing/plan
+- change LINE Developers settings
+- change Netlify/Render production config
+- deploy Apps Script
+- push Git
+
+unless explicitly instructed.
+
+Release preparation order should normally be:
+
+1. final review
+2. focused fixes
+3. rerun regression
+4. stage exact files
+5. review staged diff
+6. commit
+7. apply approved migrations in correct order
+8. deploy backend/frontend/Apps Script if required
+9. push as explicitly instructed
+10. verify production runtime
+11. test real LINE LIFF on phone
+
+Exact order may be adjusted based on deployment mechanics, but never skip review and migration safety.
+
+## 23. Current uncommitted milestone context
+
+At the time this draft was prepared, the local working tree contains uncommitted Round 1–3 work:
+
+Round 1:
+- one-time parcel details form
+- max 5 photos
+- note end-to-end
+- Sheet +07:00 timestamp rendering
+
+Round 2:
+- clientPhotoId
+- deterministic filenames
+- safe upload retry
+- partial-save protection
+- no Drive filename search
+
+Round 3:
+- durable app.cleanup_jobs queue
+- atomic delete + enqueue
+- background Sheet/Drive cleanup
+- lease/retry/backoff
+
+Also:
+- saved parcel edit form already supports note
+- saved-parcel photo management is intentionally deferred
+
+Do not assume these changes are committed or deployed until Git/deployment state proves it.
+
+## 24. Minimum release checks
+
+Before claiming the system is ready:
+
+- no staged surprises
+- git diff --check passes
+- migrations apply cleanly to disposable DB
+- frontend tests pass
+- backend tests pass
+- relevant/full E2E passes
+- no new console errors
+- Thai UTF-8 text remains valid
+- ownership isolation still works
+- point analysis still works
+- parcel draw/analyze/save/edit/delete still works
+- max 5 photos enforced
+- protected photo read still works
+- upload retry behavior is bounded and safe
+- delete HTTP no longer waits for Drive cleanup
+- cleanup job is durable and recoverable
+- no Drive scan/search introduced
+- no app.parcel_images introduced
+- no direct Drive image fallback introduced
+
+## 25. Final working rule
+
+Make the smallest targeted change that satisfies the request.
+
+Preserve:
+- existing architecture
+- existing security model
+- GIS CRS discipline
+- owner isolation
+- protected photo architecture
+- current dirty working tree
+
+When uncertain:
+inspect the actual code, schema, logs, or runtime instead of guessing.
+
+Do not claim success for anything not actually tested or verified.

@@ -12,6 +12,7 @@ test("checked-in Apps Script creates private uploads and keeps signed Drive oper
   const nonces = new Map();
   const events = [];
   const replies = [];
+  const readLogs = [];
   let nextId = 1;
   let creationFails = false;
   const folder = { getId: () => "owned-folder", createFile(blob) {
@@ -36,6 +37,7 @@ test("checked-in Apps Script creates private uploads and keeps signed Drive oper
     return file;
   } };
   const context = vm.createContext({
+    console: { log(line) { readLogs.push(JSON.parse(line)); } },
     PropertiesService: { getScriptProperties: () => ({ getProperty(name) {
       return { BRIDGE_SECRET: "LOCAL_TEST_SECRET", FOLDER_ID: "owned-folder" }[name];
     } }) },
@@ -48,6 +50,7 @@ test("checked-in Apps Script creates private uploads and keeps signed Drive oper
       put: (key, value) => nonces.set(key, value) }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     Utilities: {
+      getUuid: () => "local-test-trace-id",
       Charset: { UTF_8: "utf8" }, DigestAlgorithm: { SHA_256: "sha256" },
       computeHmacSha256Signature: (value, key) => [...createHmac("sha256", key).update(value).digest()],
       computeDigest: (_algorithm, value) => [...createHash("sha256").update(value).digest()],
@@ -76,7 +79,22 @@ test("checked-in Apps Script creates private uploads and keeps signed Drive oper
   const chunks = [];
   for await (const chunk of await bridge.getImage(id)) chunks.push(chunk);
   assert.equal(Buffer.concat(chunks).toString(), "WEBP");
+  assert.deepEqual(readLogs.map((entry) => entry.stage), [
+    "REQUEST_ACCEPTED", "SIGNATURE_VERIFIED", "NONCE_LOCK_WAIT_STARTED", "NONCE_LOCK_ACQUIRED",
+    "NONCE_VERIFIED", "NONCE_LOCK_RELEASED", "FILE_LOOKUP_STARTED", "FILE_LOOKUP_COMPLETED",
+    "TRASH_CHECK_COMPLETED", "PARENT_CHECK_COMPLETED", "MIME_CHECK_COMPLETED",
+    "BLOB_READ_STARTED", "BLOB_READ_COMPLETED", "BASE64_STARTED", "BASE64_COMPLETED", "RESPONSE_READY",
+  ]);
+  for (const entry of readLogs) {
+    assert.deepEqual(Object.keys(entry), ["operation", "traceId", "stage", "elapsedMs"]);
+    assert.equal(entry.operation, "read");
+    assert.equal(entry.traceId, "local-te");
+    assert.ok(Number.isInteger(entry.elapsedMs) && entry.elapsedMs >= 0);
+  }
+  assert.doesNotMatch(JSON.stringify(readLogs), /LOCAL_TEST_SECRET|owned-folder|file_1|WEBP|contentBase64/);
+  readLogs.length = 0;
   await bridge.deleteImage(id);
+  assert.equal(readLogs.length, 0);
   await assert.rejects(() => bridge.getImage(id), { bridgeCategory: "rejected" });
   const replay = context.doPost({ postData: { contents: JSON.stringify(requests[0]) } });
   assert.equal(JSON.parse(replay.value).error, "replay");

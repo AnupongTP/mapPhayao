@@ -322,6 +322,13 @@
 
   function bindFloodPopup(feature, layer) {
     const properties = feature.properties || {};
+    if (layer && typeof layer.on === "function") {
+      layer.on("click", stopLayerClickPropagation);
+    }
+    layer.bindPopup(createFloodPopupHtml(properties));
+  }
+
+  function createFloodPopupHtml(properties) {
     const years = Array.isArray(properties.yearsDetected)
       ? properties.yearsDetected
       : [];
@@ -329,11 +336,7 @@
       ? Number(properties.frequency)
       : years.length;
     const period = formatPeriod(properties.startYear, properties.endYear);
-    if (layer && typeof layer.on === "function") {
-      layer.on("click", stopLayerClickPropagation);
-    }
-    layer.bindPopup(
-      `<div class="map-popup hazard-popup">`
+    return `<div class="map-popup hazard-popup">`
         + `<h3>พื้นที่น้ำท่วมซ้ำซาก</h3>`
         + `<p><strong>ช่วงข้อมูล:</strong> ${escapeHtml(period)}</p>`
         + `<p><strong>จำนวนปีที่พบ:</strong> ${frequency}</p>`
@@ -341,8 +344,7 @@
         + `<p><strong>ตำบล:</strong> ${escapeHtml(formatThaiAdminName(properties.subdistrict, "ต."))}</p>`
         + `<p><strong>อำเภอ:</strong> ${escapeHtml(formatThaiAdminName(properties.district, "อ."))}</p>`
         + `<p><strong>แหล่งข้อมูล:</strong> GISTDA</p>`
-        + `</div>`,
-    );
+        + `</div>`;
   }
 
   function bindDroughtPopup(feature, layer) {
@@ -375,6 +377,95 @@
       bounds.getEast(),
       bounds.getNorth(),
     ].map((value) => value.toFixed(6)).join(",");
+  }
+
+  // Default raster display; floodRaster=0 keeps the bounded GeoJSON rollback path.
+  function createFloodRasterPreviewController(map) {
+    const pointPopupEnabled = window.AppConfig.features?.enableFloodRasterPopup === true;
+    const layer = L.tileLayer(
+      window.AppConfig.data.floodRasterTileUrl,
+      {
+        pane: "hazardPane",
+        minZoom: 10,
+        maxZoom: window.AppConfig.map.maxZoom,
+        maxNativeZoom: 16,
+        tileSize: 256,
+        opacity: 0.45,
+        tms: false,
+        keepBuffer: 2,
+        updateWhenIdle: true,
+      },
+    );
+    const state = {
+      enabled: false,
+      requestId: 0,
+      abortController: null,
+    };
+
+    async function showPointDetail(latlng, options = {}) {
+      if (!pointPopupEnabled || !state.enabled || !map.hasLayer(layer) || !latlng) {
+        return;
+      }
+      state.requestId += 1;
+      const requestId = state.requestId;
+      state.abortController?.abort();
+      const controller = new AbortController();
+      state.abortController = controller;
+      try {
+        const detail = await window.MapApi.getFloodRecurrenceAtPoint(
+          latlng.lat,
+          latlng.lng,
+          { signal: controller.signal },
+        );
+        if (
+          controller.signal.aborted
+          || requestId !== state.requestId
+          || !state.enabled
+          || !map.hasLayer(layer)
+          || (typeof options.shouldDisplay === "function" && !options.shouldDisplay())
+          || !detail?.found
+        ) {
+          return;
+        }
+        L.popup()
+          .setLatLng(latlng)
+          .setContent(createFloodPopupHtml(detail))
+          .openOn(map);
+      } catch (error) {
+        if (error?.name !== "AbortError") {
+          console.error("[Hazard layer] Failed to load flood raster point detail", {
+            statusCode: error?.statusCode || null,
+            message: error?.message || "unknown error",
+          });
+        }
+      } finally {
+        if (requestId === state.requestId) {
+          state.abortController = null;
+        }
+      }
+    }
+
+    function load() {
+      state.enabled = true;
+      return Promise.resolve();
+    }
+
+    function unload() {
+      state.enabled = false;
+      state.requestId += 1;
+      state.abortController?.abort();
+      state.abortController = null;
+    }
+
+    return {
+      layer,
+      load,
+      unload,
+      showPointDetail,
+      prefetch: async () => null,
+      getMetadata: () => ({ startYear: 2020, endYear: 2024, yearCount: 5 }),
+      getState: () => ({ enabled: state.enabled, requestId: state.requestId }),
+    };
   }
 
   function createFloodRecurrenceController(map, onMetadataChange) {
@@ -1133,7 +1224,12 @@
       },
     });
 
-    const floodRecurrenceController = createFloodRecurrenceController(map);
+    const floodRasterSetting = new URLSearchParams(window.location.search)
+      .get("floodRaster");
+    const useFloodRaster = floodRasterSetting !== "0";
+    const floodRecurrenceController = useFloodRaster
+      ? createFloodRasterPreviewController(map)
+      : createFloodRecurrenceController(map);
     floodRecurrenceController.layer.options.hazardLayerKey = HAZARD_LAYER_KEYS.flood;
     lazyLayerControllers.set(floodRecurrenceController.layer, floodRecurrenceController);
 
@@ -1156,6 +1252,7 @@
       floodRecurrenceLayer: floodRecurrenceController.layer,
       droughtRecurrenceLayer: droughtRecurrenceController.layer,
       prefetchFloodRecurrenceLayer: floodRecurrenceController.prefetch,
+      showFloodRasterPointDetail: floodRecurrenceController.showPointDetail || null,
       lazyLayerControllers,
     };
   }

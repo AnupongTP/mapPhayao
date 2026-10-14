@@ -86,6 +86,7 @@ router.use((req, res, next) => {
   }
   next();
 });
+router.get("/dev-auth", requireLineAuth.localDevStatus);
 router.use(requireLineAuth);
 router.use((req, res, next) => {
   req.googleIntegration = googleIntegration;

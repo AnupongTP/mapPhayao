@@ -13,6 +13,7 @@
   let hasLineSummarySent = false;
   let isPointAnalysisLoading = false;
   let appMap = null;
+  let showFloodRasterPointDetail = null;
   let parcelDrawHandler = null;
   let isParcelDrawingActive = false;
   let drawingCancelPending = false;
@@ -197,6 +198,7 @@
   }
 
   function hasUsableLineSummaryPoint() {
+    if (window.MapLiffMode?.isLocalDevAuth?.()) return false;
     return Boolean(
       lastConfirmedPoint &&
         window.MapPointState.isValidPoint(lastConfirmedPoint) &&
@@ -2391,6 +2393,9 @@
     const overlayLayers = window.MapLayers.createOverlayLayers(map);
 
     appMap = map;
+    showFloodRasterPointDetail = typeof overlayLayers.showFloodRasterPointDetail === "function"
+      ? overlayLayers.showFloodRasterPointDetail
+      : null;
     baseLayers.googleSatellite.addTo(map);
     window.MapUi.addLayerControl(map, baseLayers, overlayLayers);
     window.MapUi.setupLocationPanel({
@@ -2400,7 +2405,7 @@
     window.MapUi.setLineSummaryHandler(sendConfirmedPointSummaryToLine);
     syncLineSummaryButtonState();
     initSavedParcels(map);
-    if (isLiffModeEnabled()) {
+    if (isLiffModeEnabled() || window.MapLiffMode?.isLocalDevCandidate?.()) {
       window.MapLiffMode.initialize()
         .then(() => {
           const liffReady = window.MapLiffMode && window.MapLiffMode.isReady();
@@ -2701,6 +2706,14 @@
         closeResultPopup();
       }
       markLineSummaryPointConfirmed(requestLocation);
+      if (showFloodRasterPointDetail) {
+        void showFloodRasterPointDetail(requestLocation, {
+          shouldDisplay: () => (
+            selectedPointRevision === requestPointRevision
+            && createPointKey(selectedLocation) === requestPointKey
+          ),
+        });
+      }
     } catch (error) {
       if (error.name === "AbortError") {
         return;

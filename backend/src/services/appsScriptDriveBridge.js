@@ -45,20 +45,29 @@ function createAppsScriptDriveBridge({ url, secret, fetchImpl = fetch, now = Dat
     if (contentBase64 !== undefined) payload.contentBase64 = contentBase64;
 
     let response;
+    const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     const fetchStarted = performance.now();
     try {
       response = await fetchImpl(endpoint.href, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        body: JSON.stringify(payload), signal,
       });
     } catch (error) {
-      throw bridgeError(`apps-script-${op}`, error?.name === "TimeoutError" ? "timeout" : "network");
+      const timedOut = error?.name === "TimeoutError" || signal.reason?.name === "TimeoutError";
+      throw bridgeError(`apps-script-${op}`, timedOut ? "timeout"
+        : op === "read" && error?.name === "AbortError" ? "aborted" : "network");
     } finally {
       try { onFetchTiming?.(performance.now() - fetchStarted); } catch { /* Diagnostics cannot change upload outcome. */ }
     }
     if (!response.ok) throw bridgeError("apps-script-http", "http", response.status);
     let data;
-    try { data = await response.json(); } catch {
+    try { data = await response.json(); } catch (error) {
+      if (op === "read" && signal.reason?.name === "TimeoutError") {
+        throw bridgeError("apps-script-read", "timeout");
+      }
+      if (op === "read" && error?.name === "AbortError") {
+        throw bridgeError("apps-script-read", "aborted");
+      }
       throw bridgeError("apps-script-invalid-response", "invalid-json");
     }
     if (!data || data.success !== true) {

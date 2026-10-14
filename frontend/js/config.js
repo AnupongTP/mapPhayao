@@ -13,11 +13,18 @@
     && /^http:\/\/127\.0\.0\.1:\d+\/api$/.test(e2eApiBaseUrl)
     ? e2eApiBaseUrl
     : null;
+  const floodRasterTileUrl = isLocal
+    ? `http://${hostname}/flood-tiles-lab/tiles_v1/{z}/{x}/{y}.png`
+    : "https://hjpahmeirvyrmvkstxqr.supabase.co/storage/v1/object/public/flood-raster-tiles/v1/{z}/{x}/{y}.png";
 
   window.AppConfig = {
     apiBaseUrl: isLocal
       ? (safeE2eApiBaseUrl || localApiBaseUrl)
       : renderApiBaseUrl,
+
+    features: {
+      enableFloodRasterPopup: false,
+    },
 
     map: {
       center: [19.0290389, 99.8906438],
@@ -26,6 +33,7 @@
     },
 
     data: {
+      floodRasterTileUrl,
       thailandProvinceGeoJson: "data/thailand_province.geojson",
 
       layers: {

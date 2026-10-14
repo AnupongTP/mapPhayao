@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>กรอบการพัฒนาระบบ Map Phayao — ฉบับวิชาการ</title>
+<style>html,body{margin:0;background:#f6f8f5;color:#1d2822;font-family:"TH Sarabun New",Tahoma,sans-serif}main{max-width:940px;margin:0 auto;padding:18px 12px 28px}h1{margin:0 0 3px;font-size:30px;line-height:1.12;text-align:center;color:#193d2c}p{margin:0 0 16px;text-align:center;font-size:18px;color:#3e5948}.wrap{overflow-x:auto;background:white;border:1px solid #d4e3d1}svg{display:block;width:100%;min-width:900px;height:auto}svg text{font-family:"TH Sarabun New",Tahoma,sans-serif}.phase{fill:#eef6e9;stroke:#87bd79;stroke-width:2}.phase-title{font-size:25px;font-weight:700;fill:#1e2921;text-anchor:middle}.card-title{font-size:19px;font-weight:700;fill:#1e2921;text-anchor:middle}.card-sub{font-size:18px;fill:#344b3a;text-anchor:middle}.body{font-size:20px;fill:#25342a}.small{font-size:16px;fill:#3e5546}.hint{font-size:16px;font-style:italic;fill:#3e5546;text-anchor:middle}.green{fill:#dcefd4;stroke:#91c47f;stroke-width:1.8}.blue{fill:#dcecf9;stroke:#81b6de;stroke-width:1.8}.orange{fill:#f8decf;stroke:#e69c72;stroke-width:1.8}.gray{fill:#eeefeb;stroke:#b9bbb4;stroke-width:1.8}.purple{fill:#e9ddf2;stroke:#bd8ddd;stroke-width:1.8}.deepgreen{fill:#64a36b;stroke:#4b9159;stroke-width:1.8}.lime{fill:#c8e3ab;stroke:#a6cb88;stroke-width:1.8}.amber{fill:#f3b46f;stroke:#da975a;stroke-width:1.8}.coral{fill:#e38172;stroke:#cb695d;stroke-width:1.8}.red{fill:#c9363f;stroke:#a52d35;stroke-width:1.8}.white-title{font-size:19px;font-weight:700;fill:#fff;text-anchor:middle}@page{size:A4 portrait;margin:8mm}@media print{html,body{background:#fff}main{width:194mm;max-width:none;margin:3mm auto 0;padding:0}h1,p{display:none}.wrap{border:0;overflow:visible}svg{width:194mm;min-width:0;height:auto}}</style></head><body><main><h1>กรอบการพัฒนาและกระบวนการทำงานของระบบ</h1><p>กรอบระบบ Map Phayao ฉบับปรับปรุงสำหรับเอกสารวิชาการ</p><div class="wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 1272" role="img" aria-labelledby="framework-academic-title framework-academic-desc">
+<title id="framework-academic-title">กรอบการพัฒนาและกระบวนการทำงานของระบบ Map Phayao</title><desc id="framework-academic-desc">แผนภาพแนวตั้งห้าระยะที่คงโครงสร้างภาพอ้างอิงเดิม พร้อมแยกคุณสมบัติที่ขึ้นกับข้อมูลภายนอกและส่วน FarmerAI ที่เป็นข้อมูลจากภาพเดิม</desc>
+<rect width="900" height="1272" fill="#fff"/>
+<!-- phase 1 -->
+<rect class="phase" x="10" y="14" width="880" height="220" rx="10"/>
+<text class="phase-title" x="450" y="48">ระยะที่ 1 — ช่องทางเข้าใช้งานและฐานระบบ</text>
+<rect class="green" x="36" y="72" width="214" height="60" rx="7"/><rect class="green" x="264" y="72" width="214" height="60" rx="7"/><rect class="green" x="36" y="144" width="214" height="60" rx="7"/><rect class="green" x="264" y="144" width="214" height="60" rx="7"/>
+<rect class="gray" x="492" y="72" width="370" height="132" rx="7"/>
+<text class="card-title" x="143" y="96">LINE OA / LIFF</text><text class="card-sub" x="143" y="119">ช่องทางเข้าใช้และยืนยันตัวตน</text>
+<text class="card-title" x="371" y="96">GitHub</text><text class="card-sub" x="371" y="119">เก็บซอร์สโค้ดของระบบ</text>
+<text class="card-title" x="143" y="168">Netlify</text><text class="card-sub" x="143" y="191">ส่วนหน้า Web GIS / Dashboard</text>
+<text class="card-title" x="371" y="168">Render</text><text class="card-sub" x="371" y="191">Node / Express API</text>
+<text class="card-title" x="677" y="113">Supabase / PostGIS</text><text class="card-sub" x="677" y="143">ข้อมูลผู้ใช้ · เจ้าของแปลง · ข้อมูลแปลง</text><text class="card-sub" x="677" y="169">geometry แบบ MultiPolygon · EPSG:32647</text><text class="card-sub" x="677" y="191">ฐานข้อมูลหลักของแอปพลิเคชัน</text>
+<!-- phase 2 -->
+<rect class="phase" x="10" y="250" width="880" height="300" rx="10"/>
+<text class="phase-title" x="450" y="282">ระยะที่ 2 — แผนที่ Web GIS และการวิเคราะห์เชิงพื้นที่</text>
+<g><rect class="green" x="36" y="300" width="194" height="44" rx="6"/><rect class="blue" x="246" y="300" width="194" height="44" rx="6"/><rect class="orange" x="456" y="300" width="194" height="44" rx="6"/><rect class="gray" x="666" y="300" width="194" height="44" rx="6"/>
+<rect class="green" x="36" y="350" width="194" height="44" rx="6"/><rect class="blue" x="246" y="350" width="194" height="44" rx="6"/><rect class="orange" x="456" y="350" width="194" height="44" rx="6"/><rect class="gray" x="666" y="350" width="194" height="44" rx="6"/>
+<rect class="green" x="36" y="400" width="194" height="44" rx="6"/><rect class="blue" x="246" y="400" width="194" height="44" rx="6"/><rect class="orange" x="456" y="400" width="194" height="44" rx="6"/><rect class="gray" x="666" y="400" width="194" height="44" rx="6"/>
+<rect class="green" x="36" y="450" width="194" height="44" rx="6"/><rect class="blue" x="246" y="450" width="194" height="44" rx="6"/><rect class="orange" x="456" y="450" width="194" height="44" rx="6"/><rect class="gray" x="666" y="450" width="194" height="44" rx="6"/></g>
+<g class="card-title"><text x="133" y="328">หน้าจอแผนที่</text><text x="343" y="328">ชั้นข้อมูลแสดงผล</text><text x="553" y="328">ข้อมูลวิเคราะห์จริง</text><text x="763" y="328">บริการสรุปผล</text>
+<text x="133" y="378">LINE LIFF</text><text x="343" y="378">ขอบเขตการปกครอง</text><text x="553" y="378">ข้อมูลดิน / เกณฑ์ประเมิน*</text><text x="763" y="378">วิเคราะห์รายตำแหน่ง</text>
+<text x="133" y="428">แผนที่ Leaflet</text><text x="343" y="428">ลุ่มน้ำ · ลำห้วย</text><text x="553" y="428">ประวัติน้ำท่วม / ภัยแล้ง*</text><text x="763" y="428">วิเคราะห์รายแปลง</text>
+<text x="133" y="473">GPS / หมุด / วาดแปลง</text><text x="343" y="474" font-size="17">ศักยภาพข้าว / ข้าวโพด*</text><text x="553" y="478">ข้อมูลสภาพอากาศ*</text><text x="763" y="478">รายงานตำแหน่ง</text></g>
+<rect x="36" y="498" width="824" height="46" rx="5" fill="#fff" stroke="#c3d9bf"/><text class="small" x="48" y="516">Google Sheets: สำเนาข้อมูลแปลงและแหล่ง Dashboard · Google Drive: ภาพส่วนตัว</text><text class="small" x="48" y="537">อ่านภาพ: Service Account / Drive API · อัปโหลด/ลบ: Apps Script · GeoJSON: EPSG:4326</text>
+<!-- phase 3 -->
+<rect class="phase" x="10" y="566" width="880" height="236" rx="10"/>
+<text class="phase-title" x="450" y="600">ระยะที่ 3 — ขั้นตอนข้อความและรูปภาพของ FarmerAI</text>
+<rect class="purple" x="36" y="614" width="824" height="42" rx="6"/><text class="card-title" x="448" y="642">LINE Messaging → FarmerAI† (ระบบย่อยแยกจาก Web GIS / Dashboard)</text>
+<rect class="gray" x="36" y="666" width="824" height="38" rx="6"/><text class="card-sub" x="448" y="691">Hermes Gateway · FarmerAI Guard · Session · Skills†</text>
+<rect class="deepgreen" x="36" y="714" width="152" height="57" rx="5"/><rect class="lime" x="204" y="714" width="152" height="57" rx="5"/><rect class="amber" x="372" y="714" width="152" height="57" rx="5"/><rect class="coral" x="540" y="714" width="152" height="57" rx="5"/><rect class="red" x="708" y="714" width="152" height="57" rx="5"/>
+<text class="white-title" x="112" y="749">คำถามข้อความ</text><text class="card-title" x="280" y="749">รูปภาพพืช</text><text class="card-title" x="448" y="749">รูป + คำถาม</text><text class="card-title" x="616" y="749">โมเดล AI†</text><text class="white-title" x="784" y="749">วิเคราะห์ภาพ†</text>
+<text class="small" x="36" y="791">† ส่วน FarmerAI อ้างอิงภาพเดิม; รายละเอียดและสถานะปัจจุบันอยู่ในหมายเหตุประกอบ</text>
+<!-- phase 4 -->
+<rect class="phase" x="10" y="818" width="880" height="205" rx="10"/>
+<text class="phase-title" x="450" y="851">ระยะที่ 4 — สนับสนุนการตัดสินใจและสร้างคำตอบ</text>
+<text class="hint" x="450" y="877">Web GIS, Dashboard และ FarmerAI แสดงผลตามสาขาบริการของตน</text>
+<g class="body"><text x="80" y="913">1. ความเหมาะสมข้าว / ข้าวโพด*</text><text x="80" y="949">2. ข้อมูลตำแหน่งและแปลงเกษตร</text><text x="80" y="985">3. น้ำท่วมซ้ำซาก / ภัยแล้ง*</text>
+<text x="474" y="913">4. สถิติ Dashboard สาธารณะ*</text><text x="474" y="949">5. คำตอบเกษตรจาก FarmerAI†</text><text x="474" y="985">6. ส่งผล Web GIS / LINE†</text></g>
+<text class="small" x="80" y="1010">* ผลขึ้นกับข้อมูล GIS, Google Sheets หรือบริการภายนอก; ดูหมายเหตุประกอบ</text>
+<!-- phase 5 -->
+<rect class="phase" x="10" y="1039" width="880" height="217" rx="10"/>
+<text class="phase-title" x="450" y="1073">ระยะที่ 5 — ผลลัพธ์การใช้งานและการส่งกลับ</text>
+<rect class="purple" x="40" y="1091" width="260" height="125" rx="7"/><rect class="purple" x="320" y="1091" width="260" height="125" rx="7"/><rect class="purple" x="600" y="1091" width="260" height="125" rx="7"/>
+<text class="card-title" x="170" y="1133">แผนที่โต้ตอบได้</text><text class="card-sub" x="170" y="1162">ชั้นข้อมูล · แปลง · หน้าต่างข้อมูล</text><text class="card-sub" x="170" y="1186">Web GIS ผ่าน LINE LIFF</text>
+<text class="card-title" x="450" y="1133">ผลวิเคราะห์ / Dashboard</text><text class="card-sub" x="450" y="1162">ตำแหน่ง · แปลง · ความเหมาะสม</text><text class="card-sub" x="450" y="1186">สถิติสาธารณะแบบอ่านอย่างเดียว</text>
+<text class="card-title" x="730" y="1133">คำตอบผ่าน LINE†</text><text class="card-sub" x="730" y="1162">ข้อความ / ภาพจาก FarmerAI</text><text class="card-sub" x="730" y="1186">ระบบย่อยตามภาพอ้างอิงเดิม</text>
+<text class="small" x="40" y="1242">อ้างอิง: ภาพ Framework.png และโค้ดที่ commit แล้ว · แผนภาพไม่ยืนยันสถานะการใช้งานจริง</text>
+</svg></div></main></body></html>

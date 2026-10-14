@@ -300,6 +300,7 @@ function createMapHarness(options = {}) {
     drawerCloseCalls: 0,
     confirmMessages: [],
     warnings: [],
+    rasterPointCalls: [],
   };
 
   const text = {
@@ -467,7 +468,11 @@ function createMapHarness(options = {}) {
         };
       },
       createOverlayLayers() {
-        return {};
+        return {
+          async showFloodRasterPointDetail(location, requestOptions) {
+            uiState.rasterPointCalls.push({ location, requestOptions });
+          },
+        };
       },
     },
     MapLiffMode,
@@ -596,6 +601,7 @@ test("map click enables confirmation and marker drag invalidates the previous re
   harness.map.fire("click", { latlng: { lat: 19.12, lng: 99.72 } });
   assert.equal(harness.uiState.mapReady.length, 1);
   assert.equal(last(harness.uiState.mobileStates).hasSelectedPoint, true);
+  assert.equal(harness.uiState.rasterPointCalls.length, 0);
 
   const confirm = harness.uiState.confirmHandlers[0]();
   assert.equal(harness.apiCalls.length, 1);
@@ -603,6 +609,11 @@ test("map click enables confirmation and marker drag invalidates the previous re
   await confirm;
   assert.equal(harness.uiState.renderedResults.length, 1);
   assert.equal(last(harness.uiState.lineSummaryStates).visible, true);
+  assert.equal(harness.uiState.rasterPointCalls.length, 1);
+  assert.deepEqual(harness.uiState.rasterPointCalls[0].location, {
+    lat: 19.12,
+    lng: 99.72,
+  });
 
   harness.marker.setLatLng([19.25, 99.75]);
   harness.marker.trigger("dragstart");

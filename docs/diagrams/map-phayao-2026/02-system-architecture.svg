@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 792" role="img" aria-labelledby="system-architecture-title system-architecture-desc" id="d-02-system-architecture-root">
+<title id="system-architecture-title">สถาปัตยกรรมระบบและการไหลของข้อมูล</title><desc id="system-architecture-desc">เส้นทาง Web GIS ที่ยืนยันตัวตนและเก็บข้อมูลใน PostGIS พร้อมข้อมูลสำเนาใน Google Sheets ภาพส่วนตัวใน Google Drive และ Dashboard สาธารณะแบบอ่านอย่างเดียว; FarmerAI เป็นระบบย่อยที่ยังไม่ยืนยันการเชื่อมต่อ</desc>
+<defs>
+      <style>#d-02-system-architecture-root { color: #173528; font-family: "TH Sarabun New",Tahoma,sans-serif; }
+      #d-02-system-architecture-root .wrap { overflow-x:auto;border:1px solid #d4dfd5;background:#fff }
+      #d-02-system-architecture-root text { font-family:"TH Sarabun New",Tahoma,sans-serif }
+      #d-02-system-architecture-root .zone { font-size:15px;font-weight:700;fill:#397255 }
+      #d-02-system-architecture-root .node { font-size:19px;font-weight:700;fill:#173528 }
+      #d-02-system-architecture-root .detail { font-size:14px;fill:#52665c }
+      #d-02-system-architecture-root .note { font-size:13px;fill:#5a6d61 }
+      #d-02-system-architecture-root .edge { fill:none;stroke:#397255;stroke-width:2;marker-end:url(#d-02-system-architecture-architecture-arrow) }
+      #d-02-system-architecture-root .secondary { stroke:#819b87;stroke-dasharray:5 4 }
+      #d-02-system-architecture-root .box { fill:#fff;stroke:#b7d0bb;stroke-width:1.4 }
+      #d-02-system-architecture-root .focus { fill:#eaf4e8;stroke:#397255;stroke-width:1.8 }</style><marker id="d-02-system-architecture-architecture-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#397255"/></marker></defs>
+<rect width="1120" height="792" fill="#fff"/><text x="44" y="40" font-size="13" font-weight="700" fill="#397255" letter-spacing="1">MAP PHAYAO / CURRENT COMMITTED ARCHITECTURE</text><line x1="44" y1="56" x2="1076" y2="56" stroke="#bdd2bf"/>
+<!-- zones -->
+<rect x="44" y="80" width="1032" height="142" rx="8" fill="#f5f9f3" stroke="#d0dfd1"/><text class="zone" x="60" y="102">A · Web GIS ส่วนบุคคล / ยืนยันตัวตน</text>
+<rect x="44" y="250" width="1032" height="174" rx="8" fill="#f8faf6" stroke="#d0dfd1"/><text class="zone" x="60" y="272">B · การจัดเก็บและเชื่อมต่อ Google</text>
+<rect x="44" y="452" width="1032" height="140" rx="8" fill="#f5f9f3" stroke="#d0dfd1"/><text class="zone" x="60" y="474">C · FarmTeach Dashboard / สาธารณะ / อ่านอย่างเดียว</text>
+<!-- arrows before nodes -->
+<path class="edge" d="M238 164H282"/><path class="edge" d="M490 164H538"/><path class="edge" d="M762 164H810"/>
+<path class="edge secondary" d="M650 202V306"/><path class="edge secondary" d="M724 202V244Q724 252 732 252H894Q902 252 902 260V306"/>
+<path class="edge" d="M902 366V382"/><path class="edge secondary" d="M1010 492V424"/>
+<path class="edge" d="M254 532H298"/><path class="edge" d="M502 532H546"/>
+<path class="edge secondary" d="M650 366V480"/>
+<path class="edge secondary" d="M766 532H810"/>
+<!-- main path -->
+<rect class="box" x="60" y="124" width="178" height="80" rx="6"/><text class="node" x="76" y="154">LINE OA / LIFF</text><text class="detail" x="76" y="181">ผู้ใช้และ LINE idToken</text>
+<rect class="box" x="282" y="124" width="208" height="80" rx="6"/><text class="node" x="298" y="154">Netlify frontend</text><text class="detail" x="298" y="181">Leaflet · GeoJSON 4326</text>
+<rect class="focus" x="538" y="124" width="224" height="80" rx="6"/><text class="node" x="554" y="154">Render API</text><text class="detail" x="554" y="179">ตรวจ LINE · สิทธิ์เจ้าของแปลง</text><text class="detail" x="554" y="195">วิเคราะห์จุดและแปลง</text>
+<rect class="box" x="810" y="124" width="250" height="80" rx="6"/><text class="node" x="826" y="154">Supabase / PostGIS</text><text class="detail" x="826" y="179">ผู้ใช้ · แปลง · เจ้าของ · geometry</text><text class="detail" x="826" y="195">MultiPolygon / EPSG:32647</text>
+<!-- google -->
+<rect class="box" x="538" y="306" width="224" height="60" rx="6"/><text class="node" x="554" y="332">Google Sheets</text><text class="detail" x="554" y="351">สำเนาแปลง · Sheets API</text>
+<rect class="box" x="810" y="306" width="250" height="60" rx="6"/><text class="node" x="826" y="332">Apps Script bridge</text><text class="detail" x="826" y="351">อัปโหลด / ลบภาพ · ลงนามคำขอ</text>
+<rect class="box" x="810" y="382" width="250" height="42" rx="6"/><text class="node" x="826" y="409">Google Drive · ภาพส่วนตัว</text>
+<text class="note" x="60" y="318">PostGIS เป็นฐานข้อมูลหลัก</text><text class="note" x="60" y="340">Sheets เป็นข้อมูลสำเนา</text><text class="note" x="60" y="362">Drive เก็บไฟล์ภาพต้นฉบับแบบส่วนตัว</text><text class="note" x="60" y="391">ภาพอ่านผ่าน Drive API / Service Account*</text>
+<!-- dashboard -->
+<rect class="box" x="60" y="492" width="194" height="80" rx="6"/><text class="node" x="76" y="522">Public browser</text><text class="detail" x="76" y="549">ผู้ชมทั่วไป</text>
+<rect class="box" x="298" y="492" width="204" height="80" rx="6"/><text class="node" x="314" y="522">Netlify Dashboard</text><text class="detail" x="314" y="549">แผนที่ · สถิติ · ภาพ</text>
+<rect class="focus" x="546" y="492" width="220" height="80" rx="6"/><text class="node" x="562" y="522">Render public API</text><text class="detail" x="562" y="546">normalized Sheet snapshot</text><text class="detail" x="562" y="562">ตรวจรหัสแปลง / ดัชนีภาพ</text>
+<rect class="box" x="810" y="492" width="250" height="80" rx="6"/><text class="node" x="826" y="522">Drive read provider*</text><text class="detail" x="826" y="546">Service Account · Drive API</text><text class="detail" x="826" y="562">ส่งภาพผ่าน backend</text>
+<!-- documented separate system -->
+<rect x="44" y="620" width="1032" height="94" rx="8" fill="#fff" stroke="#aebdaf" stroke-dasharray="6 5"/><text class="zone" x="60" y="645">D · FarmerAI / LINE Messaging — ระบบย่อยที่แยกต่างหาก</text><text class="node" x="60" y="675">LINE Messaging → FarmerAI → คำตอบด้านการเกษตร</text><text class="detail" x="60" y="698">Cloudflare Tunnel, Azure VM, Hermes Gateway และโมเดล AI ปรากฏในภาพเดิม; ยังไม่ยืนยันสถานะปัจจุบัน</text>
+<line x1="44" y1="738" x2="1076" y2="738" stroke="#bdd2bf"/><text class="note" x="44" y="757">* โค้ดรองรับตัวเลือกผู้ให้บริการอ่านภาพ; แผนภาพแสดงเส้นทาง Service Account ที่ระบุในโจทย์ ไม่ยืนยันค่าคอนฟิกที่ deploy</text><text class="note" x="44" y="775">Public API ไม่ส่ง Drive file ID หรือ LinkImage ในข้อมูล Dashboard · GeoJSON ไปยัง browser ใช้ EPSG:4326</text>
+</svg>

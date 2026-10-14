@@ -134,7 +134,7 @@ test("mobile LIFF parcel controls and sheets use stable IDs and active script or
   assert.match(indexSource, /js\/ui-icons\.js\?v=20260823-tailwind-ui/);
   assert.match(indexSource, /js\/parcel-state\.js\?v=20260716-liff-my-parcels/);
   assert.match(indexSource, /js\/formatters\.js\?v=20260716-my-parcels-display-fix/);
-  assert.match(indexSource, /js\/api\.js\?v=20260716-saved-parcel-interaction-menu/);
+  assert.match(indexSource, /js\/api\.js\?v=20261013-flood-raster-point/);
   assert.match(indexSource, /js\/ui\.js\?v=20260823-tailwind-ui/);
   assert.match(indexSource, /js\/parcel-management\.js\?v=20260823-tailwind-ui/);
   assert.match(indexSource, /js\/map\.js\?v=20260823-mobile-side-drawer-v2/);
