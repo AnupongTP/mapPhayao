@@ -15,7 +15,7 @@
     : null;
   const floodRasterTileUrl = isLocal
     ? `http://${hostname}/flood-tiles-lab/tiles_v1/{z}/{x}/{y}.png`
-    : "https://phayao-flood-tiles-anupong.netlify.app/flood-tiles/v1/{z}/{x}/{y}.png";
+    : "https://hjpahmeirvyrmvkstxqr.supabase.co/storage/v1/object/public/flood-raster-tiles/v1/{z}/{x}/{y}.png";
 
   window.AppConfig = {
     apiBaseUrl: isLocal
